@@ -140,6 +140,10 @@ public final class Company {
         return createdAt;
     }
 
+    public Company withTotalShares(long totalShares) {
+        return rehydrate(id, displayName, normalizedName, founderId, treasury, totalShares, dividendRate, status, createdAt);
+    }
+
     public static String normalizeName(String name) {
         return normalizeDisplayName(name).toLowerCase(Locale.ROOT);
     }

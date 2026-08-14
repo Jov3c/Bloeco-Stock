@@ -1,6 +1,7 @@
 package cn.blockeco.exchange.infrastructure.sql;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -82,6 +83,41 @@ class MigrationTest {
         }
     }
 
+    @Test
+    void v003_creates_finance_tables_with_one_cash_account_and_holding_per_owner() throws Exception {
+        Path databaseFile = Files.createTempFile("blockeco-v003-migration-", ".db");
+        try (Database database = new Database("jdbc:sqlite:" + databaseFile)) {
+            database.migrate();
+
+            try (Connection connection = database.dataSource().getConnection()) {
+                assertThat(tableExists(connection, "company_cash_accounts")).isTrue();
+                assertThat(tableExists(connection, "share_holdings")).isTrue();
+                assertThat(tableExists(connection, "asset_bindings")).isTrue();
+                assertThat(tableExists(connection, "treasury_operations")).isTrue();
+                assertThat(tableExists(connection, "company_announcements")).isTrue();
+                assertThat(tableExists(connection, "primary_offerings")).isTrue();
+                assertThat(tableExists(connection, "primary_subscriptions")).isTrue();
+                assertThat(historyRows(connection, "V003")).isEqualTo(1);
+
+                insertCompany(connection, "company-1");
+                try (PreparedStatement cash = connection.prepareStatement("INSERT INTO company_cash_accounts VALUES (?, ?, ?, ?, ?)")) {
+                    cash.setString(1, "company-1"); cash.setLong(2, 10); cash.setLong(3, 10); cash.setLong(4, 0); cash.setLong(5, 0); cash.executeUpdate();
+                    assertThatThrownBy(cash::executeUpdate).isInstanceOf(Exception.class);
+                }
+                try (PreparedStatement holding = connection.prepareStatement("INSERT INTO share_holdings VALUES (?, ?, ?, ?)")) {
+                    holding.setString(1, "company-1"); holding.setString(2, "holder-1"); holding.setLong(3, 1000); holding.setLong(4, 0); holding.executeUpdate();
+                    assertThatThrownBy(holding::executeUpdate).isInstanceOf(Exception.class);
+                }
+                try (PreparedStatement binding = connection.prepareStatement("INSERT INTO asset_bindings VALUES (?, ?, ?, ?, ?, ?, ?)")) {
+                    binding.setString(1, "binding-1"); binding.setString(2, "company-1"); binding.setString(3, "lands"); binding.setString(4, "plot-a"); binding.setString(5, "owner-1"); binding.setString(6, "ACTIVE"); binding.setString(7, "2026-08-14T12:00:00Z"); binding.executeUpdate();
+                    binding.setString(1, "binding-2"); assertThatThrownBy(binding::executeUpdate).isInstanceOf(Exception.class);
+                }
+            }
+        } finally {
+            Files.deleteIfExists(databaseFile);
+        }
+    }
+
     private boolean tableExists(Connection connection, String tableName) throws Exception {
         try (PreparedStatement statement = connection.prepareStatement(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")) {
@@ -105,6 +141,12 @@ class MigrationTest {
 
     private int sagaRows(Connection connection) throws Exception {
         try (PreparedStatement statement = connection.prepareStatement("SELECT COUNT(*) FROM registration_sagas"); ResultSet rows = statement.executeQuery()) { rows.next(); return rows.getInt(1); }
+    }
+
+    private void insertCompany(Connection connection, String id) throws Exception {
+        try (PreparedStatement company = connection.prepareStatement("INSERT INTO companies VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+            company.setString(1, id); company.setString(2, id); company.setString(3, "Test Company"); company.setString(4, "founder-1"); company.setString(5, "PENDING_ASSET_BINDING"); company.setLong(6, 0); company.setLong(7, 1000); company.setInt(8, 5000); company.setString(9, "2026-08-14T12:00:00Z"); company.setInt(10, 0); company.executeUpdate();
+        }
     }
 
     private void applyOldV001(Database database) throws Exception {
