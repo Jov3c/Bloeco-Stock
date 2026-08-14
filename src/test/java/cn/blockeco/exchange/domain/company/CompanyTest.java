@@ -10,6 +10,16 @@ import org.junit.jupiter.api.Test;
 
 class CompanyTest {
 
+    @Test
+    void normalizes_names_at_unicode_boundaries() {
+        assertThat(Company.normalizeName("\u2003AB\u00a0")).isEqualTo("ab");
+        assertThat(Company.normalizeName("A".repeat(24))).isEqualTo("a".repeat(24));
+        assertThatThrownBy(() -> Company.normalizeName("A"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> Company.normalizeName("A".repeat(25)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     private static final UUID FOUNDER = UUID.fromString("9fbb8514-5773-41c4-aa72-6e6a1e47f5c2");
     private static final Instant NOW = Instant.parse("2026-08-14T12:00:00Z");
 

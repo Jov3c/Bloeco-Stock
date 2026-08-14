@@ -49,6 +49,102 @@ class CompanyRegistrationServiceTest {
     }
 
     @Test
+    void registration_audits_each_successful_saga_transition_in_order() throws Exception {
+        Path file = Files.createTempFile("blockeco-registration-audit-", ".db");
+        try (Database database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate();
+            Instant now = Instant.parse("2026-08-14T12:00:00Z");
+            CompanyRegistrationService service = new CompanyRegistrationService(
+                    new SqlCompanyRepository(database.dataSource()), new SqlRegistrationSagaRepository(database.dataSource(), () -> now),
+                    new SqlAuditLog(), database, new ProgrammableEconomy(), directMain(), Runnable::run, () -> now, Money.ofMinor(1), Money.ofMinor(2));
+            assertThat(service.register(new RegistrationRequest(UUID.randomUUID(), "Audit Guild", 50)).toCompletableFuture().join().status())
+                    .isEqualTo(RegistrationResult.Status.SUCCESS);
+            try (Connection connection = database.dataSource().getConnection(); var statement = connection.prepareStatement("SELECT event_type, payload_json FROM audit_events ORDER BY sequence"); var rows = statement.executeQuery()) {
+                java.util.List<String> types = new java.util.ArrayList<>();
+                while (rows.next()) { types.add(rows.getString(1)); if (!"COMPANY_REGISTERED".equals(rows.getString(1))) assertThat(rows.getString(2)).contains("sagaId", "fromState", "toState", "totalWithdrawalMinor", "reason"); }
+                assertThat(types).containsExactly("COMPANY_REGISTRATION_PREPARED", "COMPANY_REGISTRATION_WITHDRAWN", "COMPANY_REGISTERED", "COMPANY_REGISTRATION_COMPLETED");
+            }
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
+    void startup_recovery_audits_ambiguous_and_refund_required_transitions_with_real_sqlite() throws Exception {
+        Path file = Files.createTempFile("blockeco-registration-recovery-audit-", ".db");
+        Instant then = Instant.parse("2026-08-14T12:00:00Z");
+        try (Database database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate();
+            SqlRegistrationSagaRepository sagas = new SqlRegistrationSagaRepository(database.dataSource(), () -> then);
+            RegistrationSaga prepared = new RegistrationSaga(UUID.randomUUID(), UUID.randomUUID(), "prepared", Money.ofMinor(3), RegistrationSagaState.PREPARED, null, then.minusSeconds(10), then.minusSeconds(10));
+            RegistrationSaga withdrawn = new RegistrationSaga(UUID.randomUUID(), UUID.randomUUID(), "withdrawn", Money.ofMinor(4), RegistrationSagaState.WITHDRAWN, null, then.minusSeconds(10), then.minusSeconds(10));
+            database.inTransaction(c -> { sagas.save(c, prepared); sagas.save(c, withdrawn); return null; });
+            CompanyRegistrationService service = new CompanyRegistrationService(new SqlCompanyRepository(database.dataSource()), sagas, new SqlAuditLog(), database, new ProgrammableEconomy(), directMain(), Runnable::run, () -> then, Money.ofMinor(1), Money.ofMinor(2));
+            assertThat(service.recoverStaleRegistrations(then).toCompletableFuture().join()).isEqualTo(2);
+            try (Connection connection = database.dataSource().getConnection(); var statement = connection.prepareStatement("SELECT event_type, payload_json FROM audit_events ORDER BY sequence"); var rows = statement.executeQuery()) {
+                java.util.List<String> types = new java.util.ArrayList<>(); while (rows.next()) { types.add(rows.getString(1)); assertThat(rows.getString(2)).contains("fromState", "toState", "reason"); }
+                assertThat(types).containsExactly("COMPANY_REGISTRATION_AMBIGUOUS", "COMPANY_REGISTRATION_REFUND_REQUIRED");
+            }
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
+    void sql_completion_failure_and_refund_outcomes_are_audited_with_real_sqlite() throws Exception {
+        Path file = Files.createTempFile("blockeco-registration-refund-audit-", ".db");
+        Instant now = Instant.parse("2026-08-14T12:00:00Z");
+        try (Database database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate();
+            SqlRegistrationSagaRepository sagas = new SqlRegistrationSagaRepository(database.dataSource(), () -> now);
+            CompanyRepository failingCompanies = new CompanyRepository() {
+                @Override public void insert(Connection c, Company company) { throw new IllegalStateException("completion failure"); }
+                @Override public Optional<Company> findById(CompanyId id) { return Optional.empty(); }
+                @Override public Optional<Company> findByNormalizedName(String name) { return Optional.empty(); }
+            };
+            ProgrammableEconomy economy = new ProgrammableEconomy();
+            CompanyRegistrationService service = new CompanyRegistrationService(failingCompanies, sagas, new SqlAuditLog(), database, economy, directMain(), Runnable::run, () -> now, Money.ofMinor(1), Money.ofMinor(2));
+            assertThat(service.register(new RegistrationRequest(UUID.randomUUID(), "Refund Guild", 50)).toCompletableFuture().join().status()).isEqualTo(RegistrationResult.Status.REFUNDED_AFTER_FAILURE);
+            try (Connection connection = database.dataSource().getConnection(); var statement = connection.prepareStatement("SELECT event_type FROM audit_events ORDER BY sequence"); var rows = statement.executeQuery()) {
+                java.util.List<String> types = new java.util.ArrayList<>(); while (rows.next()) types.add(rows.getString(1));
+                assertThat(types).containsExactly("COMPANY_REGISTRATION_PREPARED", "COMPANY_REGISTRATION_WITHDRAWN", "COMPANY_REGISTRATION_REFUND_REQUIRED", "COMPANY_REGISTRATION_REFUNDED");
+            }
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
+    void audit_failure_rolls_back_the_paired_prepared_saga_state() throws Exception {
+        Path file = Files.createTempFile("blockeco-registration-audit-rollback-", ".db");
+        Instant now = Instant.parse("2026-08-14T12:00:00Z");
+        try (Database database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate();
+            CompanyRegistrationService service = new CompanyRegistrationService(
+                    new SqlCompanyRepository(database.dataSource()), new SqlRegistrationSagaRepository(database.dataSource(), () -> now),
+                    (connection, event) -> { throw new java.sql.SQLException("audit unavailable"); }, database,
+                    new ProgrammableEconomy(), directMain(), Runnable::run, () -> now, Money.ofMinor(1), Money.ofMinor(2));
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.register(new RegistrationRequest(UUID.randomUUID(), "Atomic Guild", 50)).toCompletableFuture().join())
+                    .hasCauseInstanceOf(IllegalStateException.class);
+            try (Connection connection = database.dataSource().getConnection(); var statement = connection.prepareStatement("SELECT COUNT(*) FROM registration_sagas"); var rows = statement.executeQuery()) { rows.next(); assertThat(rows.getInt(1)).isZero(); }
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    private static MainThreadExecutor directMain() { return new MainThreadExecutor() { @Override public <T> CompletionStage<T> submit(Supplier<T> work) { return CompletableFuture.completedFuture(work.get()); } }; }
+
+    @Test
+    void company_query_uses_the_same_unicode_name_normalization_as_registration() {
+        Company stored = Company.register(new CompanyId(UUID.randomUUID()), "Red Stone", UUID.randomUUID(), Money.zero(), cn.blockeco.exchange.domain.company.DividendRate.FIFTY, Instant.parse("2026-08-14T12:00:00Z"));
+        CompanyRepository companies = new CompanyRepository() {
+            @Override public void insert(Connection c, Company company) { }
+            @Override public Optional<Company> findById(CompanyId id) { return Optional.empty(); }
+            @Override public Optional<Company> findByNormalizedName(String name) { return stored.normalizedName().equals(name) ? Optional.of(stored) : Optional.empty(); }
+        };
+        CompanyQueryService queries = new CompanyQueryService(companies, new RegistrationSagaRepository() {
+            @Override public void save(Connection c, RegistrationSaga saga) { }
+            @Override public java.util.List<RegistrationSaga> findPreparedBefore(Instant cutoff) { return java.util.List.of(); }
+            @Override public java.util.List<RegistrationSaga> findWithdrawnBefore(Instant cutoff) { return java.util.List.of(); }
+            @Override public void transition(Connection c, UUID id, RegistrationSagaState state, String error) { }
+        }, Runnable::run);
+
+        assertThat(queries.findByName("\u2003Red   Stone\u00a0").toCompletableFuture().join()).contains(stored);
+    }
+
+    @Test
     void configured_fee_and_capital_determine_withdrawal_and_treasury() {
         RegistrationFixture fixture = RegistrationFixture.withAmounts(Money.ofMinor(321), Money.ofMinor(4_567));
 
@@ -133,7 +229,7 @@ class CompanyRegistrationServiceTest {
                 }
             };
             CompanyRegistrationService service = new CompanyRegistrationService(
-                    new SqlCompanyRepository(database.dataSource()), new SqlRegistrationSagaRepository(database.dataSource()),
+                    new SqlCompanyRepository(database.dataSource()), new SqlRegistrationSagaRepository(database.dataSource(), () -> Instant.parse("2026-08-14T12:00:00Z")),
                     new SqlAuditLog(), database, economy, main, Runnable::run, () -> Instant.parse("2026-08-14T12:00:00Z"), Money.ofMinor(100_000), Money.ofMinor(1_000_000));
             RegistrationRequest request = new RegistrationRequest(UUID.randomUUID(), "Reserved Name", 50);
 

@@ -12,6 +12,8 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
 
 public final class Database implements AutoCloseable, TransactionRunner {
 
@@ -148,13 +150,43 @@ public final class Database implements AutoCloseable, TransactionRunner {
     }
 
     private static void executeStatements(Connection connection, String script) throws SQLException {
-        for (String statementSql : script.split(";")) {
+        for (String statementSql : splitStatements(script)) {
             if (!statementSql.isBlank()) {
                 try (PreparedStatement statement = connection.prepareStatement(statementSql)) {
                     statement.execute();
                 }
             }
         }
+    }
+
+    static List<String> splitStatements(String script) {
+        List<String> statements = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        boolean single = false, doubleQuoted = false, lineComment = false, blockComment = false;
+        int triggerDepth = 0;
+        StringBuilder word = new StringBuilder();
+        for (int i = 0; i < script.length(); i++) {
+            char c = script.charAt(i), next = i + 1 < script.length() ? script.charAt(i + 1) : '\0';
+            current.append(c);
+            if (lineComment) { if (c == '\n') lineComment = false; continue; }
+            if (blockComment) { if (c == '*' && next == '/') { current.append(next); i++; blockComment = false; } continue; }
+            if (!single && !doubleQuoted && c == '-' && next == '-') { current.append(next); i++; lineComment = true; continue; }
+            if (!single && !doubleQuoted && c == '/' && next == '*') { current.append(next); i++; blockComment = true; continue; }
+            if (!doubleQuoted && c == '\'') { if (single && next == '\'') { current.append(next); i++; } else single = !single; continue; }
+            if (!single && c == '"') { if (doubleQuoted && next == '"') { current.append(next); i++; } else doubleQuoted = !doubleQuoted; continue; }
+            if (single || doubleQuoted) continue;
+            if (Character.isLetter(c)) { word.append(Character.toUpperCase(c)); continue; }
+            if (!word.isEmpty()) {
+                String token = word.toString(); word.setLength(0);
+                if ("CREATE".equals(token)) { /* trigger determined by following token */ }
+                else if ("TRIGGER".equals(token) && current.toString().toUpperCase().contains("CREATE")) triggerDepth = 1;
+                else if ("BEGIN".equals(token) && triggerDepth > 0) triggerDepth++;
+                else if ("END".equals(token) && triggerDepth > 1) triggerDepth--;
+            }
+            if (c == ';' && triggerDepth <= 1) { current.setLength(current.length() - 1); if (!current.toString().isBlank()) statements.add(current.toString()); current.setLength(0); triggerDepth = 0; }
+        }
+        if (!current.toString().isBlank()) statements.add(current.toString());
+        return statements;
     }
 
     private static void rollback(Connection connection, Exception original) {

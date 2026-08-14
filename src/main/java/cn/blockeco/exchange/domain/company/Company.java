@@ -48,7 +48,7 @@ public final class Company {
             Money capital,
             DividendRate dividendRate,
             Instant createdAt) {
-        String displayName = validateDisplayName(name);
+        String displayName = normalizeDisplayName(name);
         return rehydrate(
                 id,
                 displayName,
@@ -84,7 +84,7 @@ public final class Company {
         Objects.requireNonNull(status, "status");
         Objects.requireNonNull(createdAt, "createdAt");
 
-        String canonicalDisplayName = validateDisplayName(displayName);
+        String canonicalDisplayName = normalizeDisplayName(displayName);
         if (!canonicalDisplayName.equals(displayName)) {
             throw new IllegalArgumentException("displayName must be normalized");
         }
@@ -140,6 +140,10 @@ public final class Company {
         return createdAt;
     }
 
+    public static String normalizeName(String name) {
+        return normalizeDisplayName(name).toLowerCase(Locale.ROOT);
+    }
+
     private static String normalizeWhitespace(String name) {
         Objects.requireNonNull(name, "name");
         StringBuilder normalized = new StringBuilder();
@@ -162,7 +166,7 @@ public final class Company {
         return normalized.toString();
     }
 
-    private static String validateDisplayName(String name) {
+    private static String normalizeDisplayName(String name) {
         String displayName = normalizeWhitespace(name);
         int codePointCount = displayName.codePointCount(0, displayName.length());
         if (codePointCount < 2 || codePointCount > 24) {

@@ -14,6 +14,25 @@ import org.junit.jupiter.api.Test;
 class MigrationTest {
 
     @Test
+    void published_v001_fixture_is_byte_identical_to_the_current_v001_migration() throws Exception {
+        assertThat(MigrationTest.class.getResourceAsStream("/legacy/V001-published.sql").readAllBytes())
+                .isEqualTo(MigrationTest.class.getResourceAsStream("/db/migration/V001.sql").readAllBytes());
+    }
+
+    @Test
+    void splits_sqlite_scripts_without_breaking_literals_comments_or_triggers() {
+        String script = "-- ; comment\nCREATE TABLE t(v TEXT); /* ; block */ "
+                + "INSERT INTO t VALUES ('a;''b'); INSERT INTO t VALUES (\"c;\"\"d\"); "
+                + "CREATE TRIGGER tr AFTER INSERT ON t BEGIN INSERT INTO t VALUES ('trigger;'); UPDATE t SET v='x'; END;";
+
+        assertThat(Database.splitStatements(script)).containsExactly(
+                "-- ; comment\nCREATE TABLE t(v TEXT)",
+                " /* ; block */ INSERT INTO t VALUES ('a;''b')",
+                " INSERT INTO t VALUES (\"c;\"\"d\")",
+                " CREATE TRIGGER tr AFTER INSERT ON t BEGIN INSERT INTO t VALUES ('trigger;'); UPDATE t SET v='x'; END");
+    }
+
+    @Test
     void upgrades_old_v001_without_changing_its_checksum_and_preserves_saga_data() throws Exception {
         Path file = Files.createTempFile("blockeco-v001-upgrade-", ".db");
         try (Database database = new Database("jdbc:sqlite:" + file)) {
@@ -89,10 +108,10 @@ class MigrationTest {
     }
 
     private void applyOldV001(Database database) throws Exception {
-        byte[] script = MigrationTest.class.getResourceAsStream("/db/migration/V001.sql").readAllBytes();
+        byte[] script = MigrationTest.class.getResourceAsStream("/legacy/V001-published.sql").readAllBytes();
         try (Connection connection = database.dataSource().getConnection()) {
             try (PreparedStatement history = connection.prepareStatement("CREATE TABLE schema_history (version TEXT PRIMARY KEY, checksum TEXT NOT NULL)")) { history.execute(); }
-            for (String sql : new String(script, StandardCharsets.UTF_8).split(";")) if (!sql.isBlank()) try (PreparedStatement statement = connection.prepareStatement(sql)) { statement.execute(); }
+            for (String sql : Database.splitStatements(new String(script, StandardCharsets.UTF_8))) if (!sql.isBlank()) try (PreparedStatement statement = connection.prepareStatement(sql)) { statement.execute(); }
             try (PreparedStatement statement = connection.prepareStatement("INSERT INTO schema_history(version, checksum) VALUES ('V001', ?)")) { statement.setString(1, sha256(script)); statement.executeUpdate(); }
         }
     }

@@ -4,6 +4,7 @@ import cn.blockeco.exchange.domain.registration.RegistrationSagaState;
 import cn.blockeco.exchange.domain.registration.RegistrationSaga;
 import cn.blockeco.exchange.ports.RegistrationSagaRepository;
 import cn.blockeco.exchange.ports.DuplicateCompanyNameException;
+import cn.blockeco.exchange.ports.AppClock;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
@@ -17,7 +18,8 @@ import org.sqlite.SQLiteException;
 
 public final class SqlRegistrationSagaRepository implements RegistrationSagaRepository {
     private final DataSource dataSource;
-    public SqlRegistrationSagaRepository(DataSource dataSource) { this.dataSource = dataSource; }
+    private final AppClock clock;
+    public SqlRegistrationSagaRepository(DataSource dataSource, AppClock clock) { this.dataSource = dataSource; this.clock = clock; }
     @Override public List<RegistrationSaga> findPreparedBefore(Instant cutoff) {
         return findBefore("PREPARED", cutoff);
     }
@@ -90,9 +92,11 @@ public final class SqlRegistrationSagaRepository implements RegistrationSagaRepo
         try (PreparedStatement statement = connection.prepareStatement(TRANSITION)) {
             statement.setString(1, state.name());
             statement.setString(2, errorMessage);
-            statement.setString(3, Instant.now().toString());
+            statement.setString(3, clock.now().toString());
             statement.setString(4, id.toString());
-            statement.executeUpdate();
+            if (statement.executeUpdate() != 1) {
+                throw new SQLException("registration saga not found: " + id);
+            }
         }
     }
 }

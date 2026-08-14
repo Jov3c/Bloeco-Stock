@@ -36,11 +36,11 @@ public final class CompanyRegistrationService {
         return CompletableFuture.supplyAsync(() -> {
             int count = 0;
             for (RegistrationSaga saga : sagas.findPreparedBefore(cutoff)) {
-                transactions.inTransaction(connection -> { sagas.transition(connection, saga.id(), RegistrationSagaState.AMBIGUOUS, "crash window before withdrawal persistence"); return null; });
+                transactions.inTransaction(connection -> { transitionAndAudit(connection, saga, RegistrationSagaState.PREPARED, RegistrationSagaState.AMBIGUOUS, "crash window before withdrawal persistence"); return null; });
                 count++;
             }
             for (RegistrationSaga saga : sagas.findWithdrawnBefore(cutoff)) {
-                transactions.inTransaction(connection -> { sagas.transition(connection, saga.id(), RegistrationSagaState.REFUND_REQUIRED, "stale withdrawal requires compensation review"); return null; });
+                transactions.inTransaction(connection -> { transitionAndAudit(connection, saga, RegistrationSagaState.WITHDRAWN, RegistrationSagaState.REFUND_REQUIRED, "stale withdrawal requires compensation review"); return null; });
                 count++;
             }
             return count;
@@ -52,7 +52,7 @@ public final class CompanyRegistrationService {
         if (companies.findByNormalizedName(candidate.normalizedName()).isPresent()) return new Prepared(null, RegistrationResult.of(RegistrationResult.Status.DUPLICATE_NAME, "company name already exists"));
         RegistrationSaga saga = new RegistrationSaga(UUID.randomUUID(), request.founderId(), candidate.normalizedName(), registrationFee.plus(minimumCapital), RegistrationSagaState.PREPARED, null, clock.now(), clock.now());
         try {
-            transactions.inTransaction(connection -> { sagas.save(connection, saga); audits.append(connection, event(saga, "COMPANY_REGISTRATION_PREPARED")); return null; });
+            transactions.inTransaction(connection -> { sagas.save(connection, saga); audits.append(connection, event(saga, "NONE", RegistrationSagaState.PREPARED, null)); return null; });
             return new Prepared(saga, null);
         } catch (DuplicateCompanyNameException duplicate) {
             return new Prepared(null, RegistrationResult.of(RegistrationResult.Status.DUPLICATE_NAME, duplicate.getMessage()));
@@ -67,34 +67,45 @@ public final class CompanyRegistrationService {
         return CompletableFuture.supplyAsync(() -> persistCompleted(request, saga), sqlExecutor).handle((result, failure) -> failure == null ? CompletableFuture.completedFuture(result) : refund(saga, failure)).thenCompose(stage -> stage);
     }
     private RegistrationResult reject(RegistrationSaga saga, String message, RegistrationResult.Status status) {
-        transactions.inTransaction(connection -> { sagas.transition(connection, saga.id(), RegistrationSagaState.REJECTED, message); audits.append(connection, event(saga, "COMPANY_REGISTRATION_REJECTED")); return null; });
+        transactions.inTransaction(connection -> { transitionAndAudit(connection, saga, RegistrationSagaState.PREPARED, RegistrationSagaState.REJECTED, message); return null; });
         return RegistrationResult.of(status, message);
     }
     private RegistrationResult persistCompleted(RegistrationRequest request, RegistrationSaga saga) {
         Company company = Company.register(new CompanyId(UUID.randomUUID()), request.companyName(), request.founderId(), minimumCapital, DividendRate.fromPercent(request.dividendPercent()), clock.now());
-        transactions.inTransaction(connection -> { sagas.transition(connection, saga.id(), RegistrationSagaState.WITHDRAWN, null); return null; });
-        transactions.inTransaction(connection -> { companies.insert(connection, company); audits.append(connection, new AuditEvent(UUID.randomUUID(), Optional.of(company.id()), Optional.of(request.founderId()), "COMPANY_REGISTERED", Map.of("capitalMinor", minimumCapital.minorUnits()), clock.now())); sagas.transition(connection, saga.id(), RegistrationSagaState.COMPLETED, null); return null; });
+        transactions.inTransaction(connection -> { transitionAndAudit(connection, saga, RegistrationSagaState.PREPARED, RegistrationSagaState.WITHDRAWN, null); return null; });
+        transactions.inTransaction(connection -> { companies.insert(connection, company); audits.append(connection, new AuditEvent(UUID.randomUUID(), Optional.of(company.id()), Optional.of(request.founderId()), "COMPANY_REGISTERED", Map.of("capitalMinor", minimumCapital.minorUnits()), clock.now())); transitionAndAudit(connection, saga, RegistrationSagaState.WITHDRAWN, RegistrationSagaState.COMPLETED, null); return null; });
         return RegistrationResult.of(RegistrationResult.Status.SUCCESS, "");
     }
     private CompletionStage<RegistrationResult> refund(RegistrationSaga saga, Throwable failure) {
         String sqlError = "SQL completion failure: " + failure.getMessage();
-        return CompletableFuture.runAsync(() -> transactions.inTransaction(connection -> { sagas.transition(connection, saga.id(), RegistrationSagaState.REFUND_REQUIRED, sqlError); return null; }), sqlExecutor)
+        return CompletableFuture.runAsync(() -> transactions.inTransaction(connection -> { transitionAndAudit(connection, saga, RegistrationSagaState.WITHDRAWN, RegistrationSagaState.REFUND_REQUIRED, sqlError); return null; }), sqlExecutor)
                 .handle((ignored, updateFailure) -> null)
                 .thenCompose(ignored -> mainThread.submit(() -> economy.deposit(saga.founderId(), saga.totalWithdrawal())))
                 .thenApplyAsync(refund -> {
                     String diagnostic = sqlError + "; refund: " + refund.message();
                     if (refund.outcome() != EconomyGateway.Outcome.SUCCESS) {
-                        try { transactions.inTransaction(connection -> { sagas.transition(connection, saga.id(), RegistrationSagaState.REFUND_REQUIRED, diagnostic); return null; }); } catch (RuntimeException ignored) { }
+                        try { transactions.inTransaction(connection -> { transitionAndAudit(connection, saga, RegistrationSagaState.REFUND_REQUIRED, RegistrationSagaState.REFUND_REQUIRED, diagnostic); return null; }); } catch (RuntimeException ignored) { }
                         return RegistrationResult.of(RegistrationResult.Status.RECOVERY_REQUIRED, diagnostic);
                     }
                     try {
-                        transactions.inTransaction(connection -> { sagas.transition(connection, saga.id(), RegistrationSagaState.REFUNDED, sqlError); return null; });
+                        transactions.inTransaction(connection -> { transitionAndAudit(connection, saga, RegistrationSagaState.REFUND_REQUIRED, RegistrationSagaState.REFUNDED, sqlError); return null; });
                         return RegistrationResult.of(RegistrationResult.Status.REFUNDED_AFTER_FAILURE, sqlError);
                     } catch (RuntimeException updateFailure) {
                         return RegistrationResult.of(RegistrationResult.Status.RECOVERY_REQUIRED, diagnostic + "; state update failed: " + updateFailure.getMessage());
                     }
                 }, sqlExecutor);
     }
-    private AuditEvent event(RegistrationSaga saga, String type) { return new AuditEvent(UUID.randomUUID(), Optional.empty(), Optional.of(saga.founderId()), type, Map.of("sagaId", saga.id().toString()), clock.now()); }
+    private void transitionAndAudit(java.sql.Connection connection, RegistrationSaga saga, RegistrationSagaState from, RegistrationSagaState to, String diagnostic) throws java.sql.SQLException {
+        sagas.transition(connection, saga.id(), to, diagnostic);
+        audits.append(connection, event(saga, from, to, diagnostic));
+    }
+    private AuditEvent event(RegistrationSaga saga, RegistrationSagaState from, RegistrationSagaState to, String diagnostic) {
+        return event(saga, from.name(), to, diagnostic);
+    }
+    private AuditEvent event(RegistrationSaga saga, String from, RegistrationSagaState to, String diagnostic) {
+        return new AuditEvent(UUID.randomUUID(), Optional.empty(), Optional.of(saga.founderId()), "COMPANY_REGISTRATION_" + to.name(), Map.of(
+                "sagaId", saga.id().toString(), "fromState", from, "toState", to.name(),
+                "totalWithdrawalMinor", saga.totalWithdrawal().minorUnits(), "reason", diagnostic == null ? "" : diagnostic), clock.now());
+    }
     private record Prepared(RegistrationSaga saga, RegistrationResult result) { }
 }
