@@ -1,0 +1,10 @@
+.gradle/
+build/
+run/
+.idea/
+*.iml
+.worktrees/
+.superpowers/
+*.db
+*.db-shm
+*.db-wal
