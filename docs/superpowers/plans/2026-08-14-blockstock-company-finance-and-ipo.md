@@ -102,10 +102,9 @@ git commit -m "feat: add company finance schema"
 - Create: `src/main/java/cn/blockeco/exchange/application/CompanyCapitalizationService.java`
 - Create: `src/test/java/cn/blockeco/exchange/application/CompanyCapitalizationServiceTest.java`
 - Create: `src/test/java/cn/blockeco/exchange/infrastructure/sql/SqlCompanyFinanceRepositoryTest.java`
-- Modify: `src/main/java/cn/blockeco/exchange/BlockecoPlugin.java`
 
 **Interfaces:**
-- Produces `TreasuryEscrowGateway.transferFromPlayer(UUID playerId, Money amount, UUID operationId)` and `refundToPlayer(UUID playerId, Money amount, UUID operationId)`, both returning existing `EconomyGateway.Result`; production executes on `MainThreadExecutor`.
+- Produces `TreasuryEscrowGateway.withdrawPlayer(UUID playerId, Money amount, UUID operationId)`, `depositEscrow(Money amount, UUID operationId)`, `withdrawEscrow(Money amount, UUID operationId)`, and `refundToPlayer(UUID playerId, Money amount, UUID operationId)`, each returning existing `EconomyGateway.Result`; production executes each external action on `MainThreadExecutor`.
 - Produces `CompanyCapitalizationService.capitalize(Company company, UUID founder, Money capital, UUID registrationSagaId)` and `recoverPendingCapitalizations()`.
 - Produces `CompanyFinanceRepository.createCapitalization(Connection, CompanyCashAccount, ShareHolding, TreasuryOperation, AuditEvent)` and `findUnsettledOperations()`.
 
@@ -125,7 +124,7 @@ Expected: FAIL because the treasury port, repository and service do not exist.
 
 - [ ] **Step 3: Implement an escrow-backed settlement state machine**
 
-Use a reserved BlockStock escrow identity configured under `treasury.escrow-account`; reject a missing/invalid identity at startup and never grant it player permissions. `VaultTreasuryEscrowGateway` withdraws a player then deposits the identical exact `Money` amount into that identity, compensating the player if the deposit fails. Persist `PREPARED`, `PLAYER_WITHDRAWN`, `ESCROW_DEPOSITED`, `COMPLETED`, `REFUND_REQUIRED`, `REFUNDED`, and `AMBIGUOUS` treasury operation states with expected-from-state SQL updates and an audit event for every transition. `CompanyCapitalizationService` creates the company cash account, credits paid-in capital, creates the founder's 1,000-share holding and records the operation in one SQLite transaction only after escrow funding succeeds. At enable, recover legacy companies that have no finance row with a one-time operation keyed by company ID; do not alter their historical V001/V002 company rows.
+Use a reserved BlockStock escrow identity configured under `treasury.escrow-account`; Task 2 validates it only in the gateway tests, while Task 5 performs runtime provider preflight and refuses accepting commands if it is missing, non-existent or unsafe. `VaultTreasuryEscrowGateway` exposes player withdrawal, escrow deposit, escrow withdrawal and player refund as separate exact-Money actions. Persist `PREPARED`, `PLAYER_WITHDRAWN`, `ESCROW_DEPOSITED`, `COMPLETED`, `REFUND_REQUIRED`, `REFUNDED`, and `AMBIGUOUS` with expected-from-state SQL updates and an audit event after every confirmed external action. If the JVM can stop between an external Vault call and its following state write, startup marks the prior state `AMBIGUOUS` and exposes the operation to administrator recovery; it never repeats that external call automatically. `CompanyCapitalizationService` creates the company cash account, credits paid-in capital, creates the founder's 1,000-share holding and records the operation in one SQLite transaction only after escrow funding succeeds. Do not wire startup recovery or legacy-company creation in Task 2: Task 3 must first make every new registration create the same finance operation; Task 5 then enables one-time legacy recovery keyed by company ID without altering V001/V002 rows.
 
 - [ ] **Step 4: Run focused tests to verify GREEN**
 
@@ -136,7 +135,7 @@ Expected: PASS, including failure/refund/ambiguous and duplicate-recovery cases.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/main/java/cn/blockeco/exchange/ports/TreasuryEscrowGateway.java src/main/java/cn/blockeco/exchange/ports/CompanyFinanceRepository.java src/main/java/cn/blockeco/exchange/infrastructure/sql/SqlCompanyFinanceRepository.java src/main/java/cn/blockeco/exchange/infrastructure/vault/VaultTreasuryEscrowGateway.java src/main/java/cn/blockeco/exchange/application/CompanyCapitalizationService.java src/main/java/cn/blockeco/exchange/BlockecoPlugin.java src/test/java/cn/blockeco/exchange/application/CompanyCapitalizationServiceTest.java src/test/java/cn/blockeco/exchange/infrastructure/sql/SqlCompanyFinanceRepositoryTest.java
+git add src/main/java/cn/blockeco/exchange/ports/TreasuryEscrowGateway.java src/main/java/cn/blockeco/exchange/ports/CompanyFinanceRepository.java src/main/java/cn/blockeco/exchange/infrastructure/sql/SqlCompanyFinanceRepository.java src/main/java/cn/blockeco/exchange/infrastructure/vault/VaultTreasuryEscrowGateway.java src/main/java/cn/blockeco/exchange/application/CompanyCapitalizationService.java src/test/java/cn/blockeco/exchange/application/CompanyCapitalizationServiceTest.java src/test/java/cn/blockeco/exchange/infrastructure/sql/SqlCompanyFinanceRepositoryTest.java
 git commit -m "feat: back company capital with escrow"
 ```
 
