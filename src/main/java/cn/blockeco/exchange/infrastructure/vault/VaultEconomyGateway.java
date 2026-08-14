@@ -24,10 +24,14 @@ public final class VaultEconomyGateway implements EconomyGateway {
             RegisteredServiceProvider<Economy> registration = server.getServicesManager().getRegistration(Economy.class);
             if (registration == null || registration.getProvider() == null) return Result.providerFailure("no Vault economy provider registered");
             OfflinePlayer player = server.getOfflinePlayer(playerId);
-            EconomyResponse response = withdrawal ? registration.getProvider().withdrawPlayer(player, value) : registration.getProvider().depositPlayer(player, value);
+            Economy provider = registration.getProvider();
+            if (withdrawal && !provider.has(player, value)) {
+                return Result.insufficientFunds("provider reports insufficient funds");
+            }
+            EconomyResponse response = withdrawal ? provider.withdrawPlayer(player, value) : provider.depositPlayer(player, value);
             if (response != null && response.transactionSuccess()) return Result.success(response.errorMessage);
             String message = response == null ? "Vault economy returned no response" : response.errorMessage;
-            return withdrawal ? Result.insufficientFunds(message) : Result.providerFailure(message);
+            return Result.providerFailure(message);
         } catch (RuntimeException exception) { return Result.providerFailure(exception.getMessage()); }
     }
 }

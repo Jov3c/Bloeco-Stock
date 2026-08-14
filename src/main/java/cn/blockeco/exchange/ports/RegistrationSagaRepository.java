@@ -14,5 +14,7 @@ public interface RegistrationSagaRepository {
 
     List<RegistrationSaga> findPreparedBefore(Instant cutoff);
 
+    List<RegistrationSaga> findWithdrawnBefore(Instant cutoff);
+
     void transition(Connection connection, UUID id, RegistrationSagaState state, String errorMessage) throws SQLException;
 }

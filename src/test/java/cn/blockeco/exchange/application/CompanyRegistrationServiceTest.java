@@ -49,7 +49,7 @@ class CompanyRegistrationServiceTest {
 
         assertThat(result.status()).isEqualTo(RegistrationResult.Status.INSUFFICIENT_FUNDS);
         assertThat(fixture.company).isEmpty();
-        assertThat(fixture.savedSaga().state()).isEqualTo(RegistrationSagaState.PREPARED);
+        assertThat(fixture.savedSaga().state()).isEqualTo(RegistrationSagaState.REJECTED);
     }
 
     @Test
@@ -123,6 +123,7 @@ class CompanyRegistrationServiceTest {
             RegistrationSagaRepository sagaRepository = new RegistrationSagaRepository() {
                 @Override public void save(Connection ignored, RegistrationSaga saga) { sagas.put(saga.id(), saga); }
                 @Override public java.util.List<RegistrationSaga> findPreparedBefore(Instant cutoff) { return sagas.values().stream().filter(saga -> saga.state() == RegistrationSagaState.PREPARED && saga.updatedAt().isBefore(cutoff)).toList(); }
+                @Override public java.util.List<RegistrationSaga> findWithdrawnBefore(Instant cutoff) { return sagas.values().stream().filter(saga -> saga.state() == RegistrationSagaState.WITHDRAWN && saga.updatedAt().isBefore(cutoff)).toList(); }
                 @Override public void transition(Connection ignored, UUID id, RegistrationSagaState state, String error) {
                     RegistrationSaga prior = sagas.get(id);
                     sagas.put(id, new RegistrationSaga(id, prior.founderId(), prior.companyNormalizedName(), prior.totalWithdrawal(), state, error, prior.createdAt(), now));

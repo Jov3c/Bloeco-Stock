@@ -40,6 +40,10 @@ public final class CompanyRegistrationService {
                 transactions.inTransaction(connection -> { sagas.transition(connection, saga.id(), RegistrationSagaState.AMBIGUOUS, "crash window before withdrawal persistence"); return null; });
                 count++;
             }
+            for (RegistrationSaga saga : sagas.findWithdrawnBefore(cutoff)) {
+                transactions.inTransaction(connection -> { sagas.transition(connection, saga.id(), RegistrationSagaState.REFUND_REQUIRED, "stale withdrawal requires compensation review"); return null; });
+                count++;
+            }
             return count;
         }, sqlExecutor);
     }
@@ -52,9 +56,16 @@ public final class CompanyRegistrationService {
         return new Prepared(saga, null);
     }
     private CompletionStage<RegistrationResult> afterWithdrawal(RegistrationRequest request, RegistrationSaga saga, EconomyGateway.Result outcome) {
-        if (outcome.outcome() == EconomyGateway.Outcome.INSUFFICIENT_FUNDS) return CompletableFuture.completedFuture(RegistrationResult.of(RegistrationResult.Status.INSUFFICIENT_FUNDS, outcome.message()));
-        if (outcome.outcome() != EconomyGateway.Outcome.SUCCESS) return CompletableFuture.completedFuture(RegistrationResult.of(RegistrationResult.Status.PROVIDER_FAILURE, outcome.message()));
+        if (outcome.outcome() != EconomyGateway.Outcome.SUCCESS) {
+            RegistrationResult.Status status = outcome.outcome() == EconomyGateway.Outcome.INSUFFICIENT_FUNDS
+                    ? RegistrationResult.Status.INSUFFICIENT_FUNDS : RegistrationResult.Status.PROVIDER_FAILURE;
+            return CompletableFuture.supplyAsync(() -> reject(saga, outcome.message(), status), sqlExecutor);
+        }
         return CompletableFuture.supplyAsync(() -> persistCompleted(request, saga), sqlExecutor).handle((result, failure) -> failure == null ? CompletableFuture.completedFuture(result) : refund(saga, failure)).thenCompose(stage -> stage);
+    }
+    private RegistrationResult reject(RegistrationSaga saga, String message, RegistrationResult.Status status) {
+        transactions.inTransaction(connection -> { sagas.transition(connection, saga.id(), RegistrationSagaState.REJECTED, message); audits.append(connection, event(saga, "COMPANY_REGISTRATION_REJECTED")); return null; });
+        return RegistrationResult.of(status, message);
     }
     private RegistrationResult persistCompleted(RegistrationRequest request, RegistrationSaga saga) {
         Company company = Company.register(new CompanyId(UUID.randomUUID()), request.companyName(), request.founderId(), CAPITAL, DividendRate.fromPercent(request.dividendPercent()), clock.now());
@@ -63,11 +74,23 @@ public final class CompanyRegistrationService {
         return RegistrationResult.of(RegistrationResult.Status.SUCCESS, "");
     }
     private CompletionStage<RegistrationResult> refund(RegistrationSaga saga, Throwable failure) {
-        return mainThread.submit(() -> economy.deposit(saga.founderId(), saga.totalWithdrawal())).thenApply(refund -> {
-            RegistrationSagaState state = refund.outcome() == EconomyGateway.Outcome.SUCCESS ? RegistrationSagaState.REFUNDED : RegistrationSagaState.REFUND_REQUIRED;
-            CompletableFuture.runAsync(() -> transactions.inTransaction(connection -> { sagas.transition(connection, saga.id(), state, failure.getMessage()); return null; }), sqlExecutor).join();
-            return RegistrationResult.of(state == RegistrationSagaState.REFUNDED ? RegistrationResult.Status.REFUNDED_AFTER_FAILURE : RegistrationResult.Status.RECOVERY_REQUIRED, refund.message());
-        });
+        String sqlError = "SQL completion failure: " + failure.getMessage();
+        return CompletableFuture.runAsync(() -> transactions.inTransaction(connection -> { sagas.transition(connection, saga.id(), RegistrationSagaState.REFUND_REQUIRED, sqlError); return null; }), sqlExecutor)
+                .handle((ignored, updateFailure) -> null)
+                .thenCompose(ignored -> mainThread.submit(() -> economy.deposit(saga.founderId(), saga.totalWithdrawal())))
+                .thenApplyAsync(refund -> {
+                    String diagnostic = sqlError + "; refund: " + refund.message();
+                    if (refund.outcome() != EconomyGateway.Outcome.SUCCESS) {
+                        try { transactions.inTransaction(connection -> { sagas.transition(connection, saga.id(), RegistrationSagaState.REFUND_REQUIRED, diagnostic); return null; }); } catch (RuntimeException ignored) { }
+                        return RegistrationResult.of(RegistrationResult.Status.RECOVERY_REQUIRED, diagnostic);
+                    }
+                    try {
+                        transactions.inTransaction(connection -> { sagas.transition(connection, saga.id(), RegistrationSagaState.REFUNDED, sqlError); return null; });
+                        return RegistrationResult.of(RegistrationResult.Status.REFUNDED_AFTER_FAILURE, sqlError);
+                    } catch (RuntimeException updateFailure) {
+                        return RegistrationResult.of(RegistrationResult.Status.RECOVERY_REQUIRED, diagnostic + "; state update failed: " + updateFailure.getMessage());
+                    }
+                }, sqlExecutor);
     }
     private AuditEvent event(RegistrationSaga saga, String type) { return new AuditEvent(UUID.randomUUID(), Optional.empty(), Optional.of(saga.founderId()), type, Map.of("sagaId", saga.id().toString()), clock.now()); }
     private record Prepared(RegistrationSaga saga, RegistrationResult result) { }

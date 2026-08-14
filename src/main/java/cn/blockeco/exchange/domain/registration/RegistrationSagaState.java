@@ -6,5 +6,6 @@ public enum RegistrationSagaState {
     COMPLETED,
     REFUND_REQUIRED,
     REFUNDED,
-    AMBIGUOUS
+    AMBIGUOUS,
+    REJECTED
 }

@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 class VaultEconomyGatewayTest {
     @Test void maps_successful_withdrawal_and_deposit() {
         Fixture fixture = Fixture.withProvider();
+        when(fixture.economy.has(fixture.player, 11.0)).thenReturn(true);
         when(fixture.economy.withdrawPlayer(fixture.player, 11.0)).thenReturn(response(EconomyResponse.ResponseType.SUCCESS, ""));
         when(fixture.economy.depositPlayer(fixture.player, 11.0)).thenReturn(response(EconomyResponse.ResponseType.SUCCESS, ""));
         assertThat(fixture.gateway.withdraw(fixture.id, Money.ofMinor(1100)).outcome()).isEqualTo(EconomyGateway.Outcome.SUCCESS);
@@ -24,14 +25,31 @@ class VaultEconomyGatewayTest {
     }
     @Test void maps_non_success_response_to_insufficient_funds_for_withdrawal() {
         Fixture fixture = Fixture.withProvider();
+        when(fixture.economy.has(fixture.player, 11.0)).thenReturn(false);
         when(fixture.economy.withdrawPlayer(fixture.player, 11.0)).thenReturn(response(EconomyResponse.ResponseType.FAILURE, "not enough"));
         assertThat(fixture.gateway.withdraw(fixture.id, Money.ofMinor(1100)).outcome()).isEqualTo(EconomyGateway.Outcome.INSUFFICIENT_FUNDS);
+    }
+    @Test void maps_failed_withdrawal_despite_sufficient_balance_and_not_implemented_to_provider_failure() {
+        Fixture fixture = Fixture.withProvider();
+        when(fixture.economy.has(fixture.player, 11.0)).thenReturn(true);
+        when(fixture.economy.withdrawPlayer(fixture.player, 11.0)).thenReturn(response(EconomyResponse.ResponseType.FAILURE, "backend down"));
+        assertThat(fixture.gateway.withdraw(fixture.id, Money.ofMinor(1100)).outcome()).isEqualTo(EconomyGateway.Outcome.PROVIDER_FAILURE);
+        when(fixture.economy.withdrawPlayer(fixture.player, 11.0)).thenReturn(response(EconomyResponse.ResponseType.NOT_IMPLEMENTED, "unsupported"));
+        assertThat(fixture.gateway.withdraw(fixture.id, Money.ofMinor(1100)).outcome()).isEqualTo(EconomyGateway.Outcome.PROVIDER_FAILURE);
     }
     @Test void maps_missing_provider_and_non_finite_value_to_provider_failure() {
         Fixture missing = Fixture.withoutProvider();
         assertThat(missing.gateway.withdraw(missing.id, Money.ofMinor(1)).outcome()).isEqualTo(EconomyGateway.Outcome.PROVIDER_FAILURE);
         Fixture provider = Fixture.withProvider();
         assertThat(provider.gateway.deposit(provider.id, Money.ofMinor(Long.MAX_VALUE)).outcome()).isEqualTo(EconomyGateway.Outcome.PROVIDER_FAILURE);
+    }
+    @Test void maps_null_response_and_provider_exception_to_provider_failure() {
+        Fixture fixture = Fixture.withProvider();
+        when(fixture.economy.has(fixture.player, 11.0)).thenReturn(true);
+        when(fixture.economy.withdrawPlayer(fixture.player, 11.0)).thenReturn(null);
+        assertThat(fixture.gateway.withdraw(fixture.id, Money.ofMinor(1100)).outcome()).isEqualTo(EconomyGateway.Outcome.PROVIDER_FAILURE);
+        when(fixture.economy.withdrawPlayer(fixture.player, 11.0)).thenThrow(new IllegalStateException("offline"));
+        assertThat(fixture.gateway.withdraw(fixture.id, Money.ofMinor(1100)).outcome()).isEqualTo(EconomyGateway.Outcome.PROVIDER_FAILURE);
     }
     private static EconomyResponse response(EconomyResponse.ResponseType type, String message) { return new EconomyResponse(11.0, 0, type, message); }
     private static final class Fixture {

@@ -33,3 +33,11 @@ There is no dedicated state/result for a rejected debit before money moves. The 
 ## Remaining concern
 
 Vault's `EconomyResponse` only gives a generic failure outcome; a provider-returned withdrawal failure is conservatively mapped to `INSUFFICIENT_FUNDS`, while exceptions/missing provider/non-representable values are `PROVIDER_FAILURE`. Operators should treat unusual provider failure messages as provider diagnostics.
+
+## Fix round 1
+
+- Vault withdrawal now calls the provider's documented `has(OfflinePlayer, amount)` first. Only `has == false` is `INSUFFICIENT_FUNDS`; `FAILURE`, `NOT_IMPLEMENTED`, null responses, and exceptions after `has == true` are `PROVIDER_FAILURE`. Source: <https://github.com/MilkBowl/VaultAPI/blob/master/src/main/java/net/milkbowl/vault/economy/EconomyResponse.java> and <https://github.com/MilkBowl/VaultAPI/blob/master/src/main/java/net/milkbowl/vault/economy/AbstractEconomy.java>.
+- Added technical terminal `REJECTED`; known non-debits transition there asynchronously and are audited, so recovery cannot reclassify them as ambiguous. V001 includes this state and a partial unique name reservation index for active monetary sagas.
+- Compensation now durably attempts `REFUND_REQUIRED` before the refund and uses asynchronous continuations only; failed refund diagnostics include both SQL and provider details. Stale `WITHDRAWN` rows are recovered to `REFUND_REQUIRED`.
+- RED: the focused suite first failed after the changed rejection contract and mandatory Vault `has` precondition. GREEN: updated service/adapter and focused tests passed; then added null/exception response coverage and reran green.
+- Commands: `./gradlew.bat test --tests '*VaultEconomyGatewayTest' --tests '*CompanyRegistrationServiceTest'` and `./gradlew.bat test` — both passed.
