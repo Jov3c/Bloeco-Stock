@@ -151,6 +151,7 @@ class CompanyCapitalizationServiceTest {
         @Override public void transition(Connection connection, UUID id, cn.blockeco.exchange.domain.finance.TreasuryOperationState expected, cn.blockeco.exchange.domain.finance.TreasuryOperationState state, cn.blockeco.exchange.domain.audit.AuditEvent audit) throws java.sql.SQLException { delegate.transition(connection, id, expected, state, audit); }
         @Override public java.util.Optional<cn.blockeco.exchange.domain.finance.TreasuryOperation> findById(UUID id) { return delegate.findById(id); }
         @Override public java.util.List<cn.blockeco.exchange.domain.finance.TreasuryOperation> findUnsettledOperations() { return delegate.findUnsettledOperations(); }
+        @Override public java.util.List<CapitalizationRecoveryRecord> findAmbiguousCapitalizations() { return delegate.findAmbiguousCapitalizations(); }
         @Override public java.util.List<Company> findLegacyCompaniesWithoutFinance() { return delegate.findLegacyCompaniesWithoutFinance(); }
     }
 }

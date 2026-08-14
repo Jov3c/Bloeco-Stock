@@ -5,6 +5,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import cn.blockeco.exchange.application.RegistrationRequest;
 import cn.blockeco.exchange.application.CompanyQueryService;
 import cn.blockeco.exchange.application.CompanyRegistrationService;
+import cn.blockeco.exchange.application.CapitalizationRecoveryRecord;
+import cn.blockeco.exchange.domain.company.CompanyId;
+import cn.blockeco.exchange.domain.finance.TreasuryOperation;
+import cn.blockeco.exchange.domain.finance.TreasuryOperationState;
 import cn.blockeco.exchange.ports.MainThreadExecutor;
 import cn.blockeco.exchange.domain.money.Money;
 import java.math.BigDecimal;
@@ -140,6 +144,24 @@ class CompanyCommandTest {
         command.onCommand(player, mock(Command.class), "company", new String[] {"create", "North", "30"}); result.complete(cn.blockeco.exchange.application.RegistrationResult.of(cn.blockeco.exchange.application.RegistrationResult.Status.SUCCESS, ""));
         verify(player, times(1)).sendMessage(any(net.kyori.adventure.text.Component.class)); main.runAll();
         verify(player, times(2)).sendMessage(any(net.kyori.adventure.text.Component.class));
+    }
+
+    @Test
+    void recovery_list_includes_ambiguous_capitalization_without_invoking_any_write_service() {
+        CompanyQueryService queries = mock(CompanyQueryService.class); CompanyRegistrationService registration = mock(CompanyRegistrationService.class);
+        UUID operationId = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+        UUID companyId = UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+        UUID playerId = UUID.fromString("cccccccc-cccc-cccc-cccc-cccccccccccc");
+        TreasuryOperation operation = new TreasuryOperation(operationId, new CompanyId(companyId), playerId, Money.ofMinor(77), operationId.toString(), TreasuryOperationState.AMBIGUOUS, java.time.Instant.parse("2026-08-14T12:00:00Z"), java.time.Instant.parse("2026-08-14T12:01:00Z"));
+        when(queries.recoveryList()).thenReturn(CompletableFuture.completedFuture(List.of()));
+        when(queries.capitalizationRecoveryList()).thenReturn(CompletableFuture.completedFuture(List.of(new CapitalizationRecoveryRecord(operation, "Vault 超时"))));
+        CommandSender sender = mock(CommandSender.class); when(sender.hasPermission("blockeco.admin.recovery")).thenReturn(true);
+        CompanyCommand command = new CompanyCommand(registration, queries, new Messages(null), DIRECT_MAIN, rules);
+
+        assertThat(command.onCommand(sender, mock(Command.class), "company", new String[] {"recovery", "list"})).isTrue();
+
+        assertThat(allPlainMessages(sender)).anySatisfy(message -> assertThat(message).contains(operationId.toString(), companyId.toString(), playerId.toString(), "77", "待人工核对", "Vault 超时"));
+        verifyNoInteractions(registration);
     }
 
     private static final class QueuedMain implements MainThreadExecutor {

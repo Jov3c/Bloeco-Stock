@@ -2,6 +2,7 @@ package cn.blockeco.exchange.paper;
 
 import cn.blockeco.exchange.application.*;
 import cn.blockeco.exchange.domain.registration.RegistrationSaga;
+import cn.blockeco.exchange.application.CapitalizationRecoveryRecord;
 import cn.blockeco.exchange.ports.MainThreadExecutor;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -56,13 +57,15 @@ public final class CompanyCommand implements CommandExecutor {
     }
     private boolean recovery(CommandSender sender) {
         if (!sender.hasPermission("blockeco.admin.recovery")) { sender.sendMessage(messages.noPermission()); return true; }
-        queries.recoveryList().whenComplete((records, failure) -> mainThread.submit(() -> {
+        queries.recoveryList().thenCombine(queries.capitalizationRecoveryList(), RecoveryRecords::new).whenComplete((records, failure) -> mainThread.submit(() -> {
             if (failure != null) { sender.sendMessage(messages.recoveryLookupFailed()); return null; }
-            if (records.isEmpty()) sender.sendMessage(messages.noRecoveryRecords());
-            for (RegistrationSaga saga : records) sender.sendMessage(messages.recoveryRecord(saga.id(), saga.founderId(), saga.totalWithdrawal().minorUnits(), saga.state(), saga.updatedAt(), saga.errorMessage()==null ? "" : saga.errorMessage()));
+            if (records.registration().isEmpty() && records.capitalization().isEmpty()) sender.sendMessage(messages.noRecoveryRecords());
+            for (RegistrationSaga saga : records.registration()) sender.sendMessage(messages.recoveryRecord(saga.id(), saga.founderId(), saga.totalWithdrawal().minorUnits(), saga.state(), saga.updatedAt(), saga.errorMessage()==null ? "" : saga.errorMessage()));
+            for (CapitalizationRecoveryRecord record : records.capitalization()) { var operation = record.operation(); sender.sendMessage(messages.capitalizationRecoveryRecord(operation.id(), operation.companyId(), operation.playerId(), operation.amount().minorUnits(), operation.state(), record.reason())); }
             return null;
         }));
         return true;
     }
+    private record RecoveryRecords(List<RegistrationSaga> registration, List<CapitalizationRecoveryRecord> capitalization) { }
     private net.kyori.adventure.text.Component resultMessage(RegistrationResult result) { return switch (result.status()) { case SUCCESS -> messages.registrationSuccess(); case INSUFFICIENT_FUNDS -> messages.insufficientFunds(); case DUPLICATE_NAME -> messages.duplicateName(); case REFUNDED_AFTER_FAILURE -> messages.refunded(); case RECOVERY_REQUIRED, PROVIDER_FAILURE -> messages.recoveryRequired(); }; }
 }

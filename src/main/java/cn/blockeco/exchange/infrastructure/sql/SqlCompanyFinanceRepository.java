@@ -1,6 +1,7 @@
 package cn.blockeco.exchange.infrastructure.sql;
 
 import cn.blockeco.exchange.domain.audit.AuditEvent;
+import cn.blockeco.exchange.application.CapitalizationRecoveryRecord;
 import cn.blockeco.exchange.domain.company.Company;
 import cn.blockeco.exchange.domain.company.CompanyId;
 import cn.blockeco.exchange.domain.company.CompanyStatus;
@@ -50,6 +51,20 @@ public class SqlCompanyFinanceRepository implements CompanyFinanceRepository {
     }
     @Override public Optional<TreasuryOperation> findById(UUID id) { return find("SELECT * FROM treasury_operations WHERE id = ?", id.toString()).stream().findFirst(); }
     @Override public List<TreasuryOperation> findUnsettledOperations() { return find("SELECT * FROM treasury_operations WHERE state NOT IN ('COMPLETED','REFUNDED','AMBIGUOUS')", null); }
+    @Override public List<CapitalizationRecoveryRecord> findAmbiguousCapitalizations() {
+        String sql = """
+                SELECT t.*, COALESCE((SELECT payload_json FROM audit_events a
+                  WHERE a.event_type = 'COMPANY_CAPITALIZATION_AMBIGUOUS'
+                    AND a.payload_json LIKE '%\"operationId\":\"' || t.id || '\"%'
+                  ORDER BY a.sequence DESC LIMIT 1), '') AS ambiguity_payload
+                FROM treasury_operations t WHERE t.state = 'AMBIGUOUS' ORDER BY t.updated_at, t.id
+                """;
+        try (Connection c = dataSource.getConnection(); PreparedStatement s = c.prepareStatement(sql); ResultSet rows = s.executeQuery()) {
+            java.util.ArrayList<CapitalizationRecoveryRecord> results = new java.util.ArrayList<>();
+            while (rows.next()) results.add(new CapitalizationRecoveryRecord(operation(rows), reason(rows.getString("ambiguity_payload"))));
+            return results;
+        } catch (SQLException e) { throw new IllegalStateException("could not read ambiguous capitalizations", e); }
+    }
     @Override public List<Company> findLegacyCompaniesWithoutFinance() {
         String sql = "SELECT c.* FROM companies c LEFT JOIN company_cash_accounts f ON f.company_id = c.id WHERE f.company_id IS NULL";
         try (Connection c = dataSource.getConnection(); PreparedStatement s = c.prepareStatement(sql); ResultSet rows = s.executeQuery()) {
@@ -63,6 +78,7 @@ public class SqlCompanyFinanceRepository implements CompanyFinanceRepository {
         } catch (SQLException e) { throw new IllegalStateException("could not read treasury operations", e); }
     }
     private static TreasuryOperation operation(ResultSet r) throws SQLException { return new TreasuryOperation(UUID.fromString(r.getString("id")), new CompanyId(UUID.fromString(r.getString("company_id"))), UUID.fromString(r.getString("player_uuid")), Money.ofMinor(r.getLong("amount_minor")), r.getString("provider_correlation_key"), TreasuryOperationState.valueOf(r.getString("state")), Instant.parse(r.getString("created_at")), Instant.parse(r.getString("updated_at"))); }
+    private static String reason(String payload) { java.util.regex.Matcher match = java.util.regex.Pattern.compile("\\\"reason\\\":\\\"((?:\\\\.|[^\\\"])*)\\\"").matcher(payload); return match.find() ? match.group(1).replace("\\\\\"", "\"").replace("\\\\\\\\", "\\") : ""; }
     private static Company company(ResultSet r) throws SQLException { return Company.rehydrate(new CompanyId(UUID.fromString(r.getString("id"))), r.getString("display_name"), r.getString("normalized_name"), UUID.fromString(r.getString("founder_uuid")), Money.ofMinor(r.getLong("treasury_minor")), r.getLong("total_shares"), rate(r.getInt("dividend_basis_points")), CompanyStatus.valueOf(r.getString("status")), Instant.parse(r.getString("created_at"))); }
     private static DividendRate rate(int bps) { return switch (bps) { case 3000 -> DividendRate.THIRTY; case 5000 -> DividendRate.FIFTY; case 7000 -> DividendRate.SEVENTY; default -> throw new IllegalStateException("unknown dividend basis points: " + bps); }; }
 }

@@ -6,6 +6,7 @@ import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.infrastructure.sql.Database;
 import cn.blockeco.exchange.infrastructure.sql.SqlAuditLog;
 import cn.blockeco.exchange.infrastructure.sql.SqlCompanyRepository;
+import cn.blockeco.exchange.infrastructure.sql.SqlCompanyFinanceRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlRegistrationSagaRepository;
 import cn.blockeco.exchange.infrastructure.vault.VaultEconomyGateway;
 import cn.blockeco.exchange.paper.CompanyCommand;
@@ -64,7 +65,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         var mainThread = new PaperMainThread(this);
         int scale = getConfig().getInt("currency.scale");
         var registration = new CompanyRegistrationService(companies, sagas, new SqlAuditLog(), db, new VaultEconomyGateway(getServer(), scale), mainThread, sqlExecutor, clock, configuredMoney("company.registration-fee", scale), configuredMoney("company.minimum-capital", scale));
-        command = new CompanyCommand(registration, new CompanyQueryService(companies, sagas, sqlExecutor), new Messages(getConfig().getConfigurationSection("messages")), mainThread, creationRules);
+        command = new CompanyCommand(registration, new CompanyQueryService(companies, sagas, new SqlCompanyFinanceRepository(db.dataSource()), sqlExecutor), new Messages(getConfig().getConfigurationSection("messages")), mainThread, creationRules);
         var companyCommand = getCommand("company");
         if (companyCommand == null) throw new IllegalStateException("company command is missing from plugin.yml");
         companyCommand.setExecutor(command);
