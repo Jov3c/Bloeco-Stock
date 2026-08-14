@@ -9,7 +9,7 @@ public final class Messages {
     public Messages(ConfigurationSection config) { this.config = config; }
     private Component message(String key, String fallback) { return Component.text(config == null ? fallback : config.getString(key, fallback)); }
     public Component processing() { return message("processing", "公司注册正在处理中。"); }
-    public Component initializing() { return message("initializing", "Blockeco 正在初始化，请稍后再试。"); }
+    public Component initializing() { return message("initializing", "BlockStock 正在初始化，请稍后再试。"); }
     public Component noPermission() { return message("no-permission", "你没有权限。"); }
     public Component playersOnly() { return message("players-only", "此命令只能由玩家执行。"); }
     public Component usageCreate() { return message("usage-create", "用法：/company create <名称> <30|50|70>"); }

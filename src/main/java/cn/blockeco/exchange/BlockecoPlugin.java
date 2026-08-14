@@ -11,6 +11,8 @@ import cn.blockeco.exchange.infrastructure.vault.VaultEconomyGateway;
 import cn.blockeco.exchange.paper.CompanyCommand;
 import cn.blockeco.exchange.paper.Messages;
 import cn.blockeco.exchange.paper.PaperMainThread;
+import cn.blockeco.exchange.paper.MigrationResult;
+import cn.blockeco.exchange.paper.PluginDataDirectoryMigrator;
 import cn.blockeco.exchange.ports.AppClock;
 import java.math.BigDecimal;
 import java.nio.file.Path;
@@ -29,11 +31,20 @@ public final class BlockecoPlugin extends JavaPlugin {
     private final PluginRuntime runtime = new PluginRuntime();
 
     @Override public void onEnable() {
+        try {
+            MigrationResult migration = new PluginDataDirectoryMigrator(java.nio.file.Files::move)
+                .migrate(getDataFolder().toPath().getParent());
+            if (migration == MigrationResult.MIGRATED) getLogger().info("BlockStock data directory migrated from BlockecoExchange.");
+            if (migration == MigrationResult.SKIPPED_TARGET_EXISTS) getLogger().warning("BlockStock data directory migration skipped because the target already exists.");
+        } catch (java.io.IOException failure) {
+            failEnable("BlockStock 数据目录迁移失败: " + failure.getMessage());
+            return;
+        }
         saveDefaultConfig();
         if (!installInitializingCommand()) return;
         try { validateConfiguration(); if (!getDataFolder().exists() && !getDataFolder().mkdirs()) throw new IllegalStateException("cannot create plugin data folder"); }
-        catch (RuntimeException failure) { failEnable("Invalid Blockeco configuration: " + failure.getMessage()); return; }
-        sqlExecutor = Executors.newSingleThreadExecutor(r -> { Thread thread = new Thread(r, "Blockeco-SQL"); thread.setDaemon(true); return thread; });
+        catch (RuntimeException failure) { failEnable("Invalid BlockStock configuration: " + failure.getMessage()); return; }
+        sqlExecutor = Executors.newSingleThreadExecutor(r -> { Thread thread = new Thread(r, "BlockStock-SQL"); thread.setDaemon(true); return thread; });
         runtime.attachExecutor(sqlExecutor);
         Path file = getDataFolder().toPath().resolve(getConfig().getString("database.file", "blockeco.db"));
         bootstrap = new BootstrapCoordinator<>(new PaperMainThread(this), this::finishEnable, failure -> failEnable("Blockeco initialization failed: " + failure.getMessage()), runtime::closeDatabase);
@@ -55,7 +66,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         if (companyCommand == null) throw new IllegalStateException("company command is missing from plugin.yml");
         companyCommand.setExecutor(command);
         if (!runtime.attachReady(command, database)) return false;
-        registration.recoverStaleRegistrations(Instant.now().minus(Duration.ofMinutes(5))).whenComplete((count, recoveryFailure) -> getServer().getScheduler().runTask(this, () -> getLogger().info("Blockeco ready; stale registration records scanned=" + (recoveryFailure == null ? count : "failed"))));
+        registration.recoverStaleRegistrations(Instant.now().minus(Duration.ofMinutes(5))).whenComplete((count, recoveryFailure) -> getServer().getScheduler().runTask(this, () -> getLogger().info("BlockStock ready; stale registration records scanned=" + (recoveryFailure == null ? count : "failed"))));
         return true;
     }
 

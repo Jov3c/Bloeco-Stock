@@ -1,11 +1,11 @@
-name: BlockecoExchange
+name: BlockStock
 version: '${version}'
 main: cn.blockeco.exchange.BlockecoPlugin
 api-version: '1.21'
 softdepend: [Vault, VaultUnlocked]
 commands:
   company:
-    description: 管理 Blockeco 公司
+    description: 管理 BlockStock 公司
     usage: /company <创建|信息|恢复>
 permissions:
   blockeco.company.create:
