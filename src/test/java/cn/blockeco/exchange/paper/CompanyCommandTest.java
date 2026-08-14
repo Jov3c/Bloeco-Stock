@@ -7,12 +7,22 @@ import cn.blockeco.exchange.application.RegistrationRequest;
 import cn.blockeco.exchange.application.CompanyQueryService;
 import cn.blockeco.exchange.application.CompanyRegistrationService;
 import cn.blockeco.exchange.application.CapitalizationRecoveryRecord;
+import cn.blockeco.exchange.application.AssetBindingService;
 import cn.blockeco.exchange.domain.company.CompanyId;
+import cn.blockeco.exchange.domain.finance.AssetBindingState;
+import cn.blockeco.exchange.infrastructure.CompanyAssetAdapterRegistryImpl;
+import cn.blockeco.exchange.infrastructure.sql.Database;
+import cn.blockeco.exchange.infrastructure.sql.SqlAssetBindingRepository;
+import cn.blockeco.exchange.infrastructure.sql.SqlCompanyRepository;
+import cn.blockeco.exchange.ports.CompanyAssetAdapter;
 import cn.blockeco.exchange.domain.finance.TreasuryOperation;
 import cn.blockeco.exchange.domain.finance.TreasuryOperationState;
 import cn.blockeco.exchange.ports.MainThreadExecutor;
 import cn.blockeco.exchange.domain.money.Money;
 import java.math.BigDecimal;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
@@ -183,10 +193,79 @@ class CompanyCommandTest {
         verifyNoInteractions(registration);
     }
 
+    @Test
+    void asset_bind_command_persists_an_active_binding_from_a_registered_adapter_and_reports_success_on_main_thread() throws Exception {
+        Path file = Files.createTempFile("company-command-asset-", ".db");
+        try (Database database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate();
+            CompanyId company = cn.blockeco.exchange.application.Fixtures.company(database, 100_000);
+            UUID companyFounder = cn.blockeco.exchange.application.Fixtures.founder(database, company);
+            CompanyAssetAdapterRegistryImpl registry = new CompanyAssetAdapterRegistryImpl();
+            CompanyAssetAdapter adapter = ownedAdapter("fixture-land", companyFounder);
+            registry.register(adapter);
+            AssetBindingService assetBindings = new AssetBindingService(new SqlAssetBindingRepository(database.dataSource()), database, registry.snapshot(), () -> Instant.parse("2026-08-14T12:00:00Z"));
+            QueuedMain main = new QueuedMain();
+            CompanyCommand command = commandWithAssetBindings(database, assetBindings, main);
+            Player player = permittedPlayer("blockeco.company.asset.bind");
+            when(player.getUniqueId()).thenReturn(companyFounder);
+            command.setAccepting(true);
+
+            assertThat(command.onCommand(player, mock(Command.class), "company", new String[] {"asset", "bind", "fixture-land", "plot-42"})).isTrue();
+            main.awaitQueuedWork();
+            verify(player, never()).sendMessage(any(net.kyori.adventure.text.Component.class));
+            main.runAll();
+
+            assertThat(allPlainMessages(player)).containsExactly("资产绑定已完成。");
+            assertThat(new SqlAssetBindingRepository(database.dataSource()).findActive(company, "fixture-land", "plot-42"))
+                    .hasValueSatisfying(binding -> {
+                        assertThat(binding.state()).isEqualTo(AssetBindingState.ACTIVE);
+                        assertThat(binding.verifiedOwner()).isEqualTo(companyFounder);
+                    });
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
+    void asset_bind_command_reports_a_chinese_failure_when_the_adapter_is_not_registered() throws Exception {
+        Path file = Files.createTempFile("company-command-asset-", ".db");
+        try (Database database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate();
+            CompanyId company = cn.blockeco.exchange.application.Fixtures.company(database, 100_000);
+            UUID companyFounder = cn.blockeco.exchange.application.Fixtures.founder(database, company);
+            CompanyAssetAdapterRegistryImpl registry = new CompanyAssetAdapterRegistryImpl();
+            AssetBindingService assetBindings = new AssetBindingService(new SqlAssetBindingRepository(database.dataSource()), database, registry.snapshot(), () -> Instant.parse("2026-08-14T12:00:00Z"));
+            QueuedMain main = new QueuedMain();
+            CompanyCommand command = commandWithAssetBindings(database, assetBindings, main);
+            Player player = permittedPlayer("blockeco.company.asset.bind");
+            when(player.getUniqueId()).thenReturn(companyFounder);
+            command.setAccepting(true);
+
+            command.onCommand(player, mock(Command.class), "company", new String[] {"asset", "bind", "missing", "plot-42"});
+            main.awaitQueuedWork();
+            main.runAll();
+
+            assertThat(allPlainMessages(player)).containsExactly("资产绑定失败。请确认资产归属和适配器。");
+            assertThat(new SqlAssetBindingRepository(database.dataSource()).findActive(company, "missing", "plot-42")).isEmpty();
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    private CompanyCommand commandWithAssetBindings(Database database, AssetBindingService assetBindings, QueuedMain main) {
+        CompanyQueryService queries = new CompanyQueryService(new SqlCompanyRepository(database.dataSource()), null, Runnable::run);
+        return new CompanyCommand(mock(CompanyRegistrationService.class), queries, new Messages(null), main, rules, assetBindings, null);
+    }
+
+    private static CompanyAssetAdapter ownedAdapter(String id, UUID owner) {
+        return new CompanyAssetAdapter() {
+            @Override public String id() { return id; }
+            @Override public Verification verify(UUID requester, String externalKey) { return new Verification(owner.equals(requester), owner, "fixture ownership"); }
+        };
+    }
+
     private static final class QueuedMain implements MainThreadExecutor {
         private final java.util.List<java.util.function.Supplier<?>> queue = new java.util.ArrayList<>();
-        @Override public <T> java.util.concurrent.CompletionStage<T> submit(java.util.function.Supplier<T> work) { queue.add(work); return new CompletableFuture<>(); }
-        void runAll() { while (!queue.isEmpty()) queue.remove(0).get(); }
+        private final java.util.concurrent.CountDownLatch queued = new java.util.concurrent.CountDownLatch(1);
+        @Override public synchronized <T> java.util.concurrent.CompletionStage<T> submit(java.util.function.Supplier<T> work) { queue.add(work); queued.countDown(); return new CompletableFuture<>(); }
+        void awaitQueuedWork() throws InterruptedException { assertThat(queued.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue(); }
+        synchronized void runAll() { while (!queue.isEmpty()) queue.remove(0).get(); }
     }
 
     private static Player permittedPlayer(String... permissions) {
