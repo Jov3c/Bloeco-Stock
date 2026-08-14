@@ -25,6 +25,7 @@ public final class BlockecoPlugin extends JavaPlugin {
     private Database database;
     private CompanyCommand command;
     private BootstrapCoordinator<Database> bootstrap;
+    private PluginRuntime runtime;
 
     @Override public void onEnable() {
         saveDefaultConfig();
@@ -50,6 +51,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         if (companyCommand == null) throw new IllegalStateException("company command is missing from plugin.yml");
         companyCommand.setExecutor(command);
         command.setAccepting(true);
+        runtime = new PluginRuntime(command, bootstrap, sqlExecutor, database);
         registration.recoverStaleRegistrations(Instant.now().minus(Duration.ofMinutes(5))).whenComplete((count, recoveryFailure) -> getServer().getScheduler().runTask(this, () -> getLogger().info("Blockeco ready; stale registration records scanned=" + (recoveryFailure == null ? count : "failed"))));
         return true;
     }
@@ -64,10 +66,7 @@ public final class BlockecoPlugin extends JavaPlugin {
     }
 
     @Override public void onDisable() {
-        if (command != null) command.setAccepting(false);
-        if (bootstrap != null) bootstrap.stop();
-        if (sqlExecutor != null) { sqlExecutor.shutdown(); try { sqlExecutor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); } }
-        if (database != null) database.close();
+        if (runtime != null) runtime.stop();
     }
 
     private void validateConfiguration() {
