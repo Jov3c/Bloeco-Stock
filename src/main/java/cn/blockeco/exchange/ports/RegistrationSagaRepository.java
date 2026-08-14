@@ -19,5 +19,5 @@ public interface RegistrationSagaRepository {
     /** Administrative visibility only; no recovery action is implied. */
     default List<RegistrationSaga> findRecoveryRecords() { return List.of(); }
 
-    void transition(Connection connection, UUID id, RegistrationSagaState state, String errorMessage) throws SQLException;
+    void transition(Connection connection, UUID id, RegistrationSagaState expectedFromState, RegistrationSagaState state, String errorMessage) throws SQLException;
 }

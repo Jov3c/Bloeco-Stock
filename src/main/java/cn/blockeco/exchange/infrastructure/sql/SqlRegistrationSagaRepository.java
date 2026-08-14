@@ -83,19 +83,20 @@ public final class SqlRegistrationSagaRepository implements RegistrationSagaRepo
     private static final String TRANSITION = """
             UPDATE registration_sagas
             SET state = ?, error_message = ?, updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND state = ?
             """;
 
     @Override
-    public void transition(Connection connection, UUID id, RegistrationSagaState state, String errorMessage)
+    public void transition(Connection connection, UUID id, RegistrationSagaState expectedFromState, RegistrationSagaState state, String errorMessage)
             throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(TRANSITION)) {
             statement.setString(1, state.name());
             statement.setString(2, errorMessage);
             statement.setString(3, clock.now().toString());
             statement.setString(4, id.toString());
+            statement.setString(5, expectedFromState.name());
             if (statement.executeUpdate() != 1) {
-                throw new SQLException("registration saga not found: " + id);
+                throw new SQLException("registration saga state conflict: " + id + " expected " + expectedFromState);
             }
         }
     }

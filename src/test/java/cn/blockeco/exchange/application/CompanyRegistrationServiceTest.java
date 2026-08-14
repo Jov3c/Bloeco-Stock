@@ -124,6 +124,44 @@ class CompanyRegistrationServiceTest {
         } finally { Files.deleteIfExists(file); }
     }
 
+    @Test
+    void failed_refund_required_audit_does_not_attempt_deposit_or_fake_a_recovery_transition() throws Exception {
+        Path file = Files.createTempFile("blockeco-refund-audit-failure-", ".db");
+        Instant now = Instant.parse("2026-08-14T12:00:00Z");
+        try (Database database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate();
+            ProgrammableEconomy economy = new ProgrammableEconomy();
+            CompanyRepository failingCompanies = new CompanyRepository() {
+                @Override public void insert(Connection c, Company company) { throw new IllegalStateException("completion failure"); }
+                @Override public Optional<Company> findById(CompanyId id) { return Optional.empty(); }
+                @Override public Optional<Company> findByNormalizedName(String name) { return Optional.empty(); }
+            };
+            AuditLog audits = (connection, event) -> { if (event.eventType().equals("COMPANY_REGISTRATION_REFUND_REQUIRED")) throw new java.sql.SQLException("audit down"); new SqlAuditLog().append(connection, event); };
+            CompanyRegistrationService service = new CompanyRegistrationService(failingCompanies, new SqlRegistrationSagaRepository(database.dataSource(), () -> now), audits, database, economy, directMain(), Runnable::run, () -> now, Money.ofMinor(1), Money.ofMinor(2));
+            RegistrationResult result = service.register(new RegistrationRequest(UUID.randomUUID(), "Audit Fail", 50)).toCompletableFuture().join();
+            assertThat(result.status()).isEqualTo(RegistrationResult.Status.RECOVERY_REQUIRED);
+            assertThat(result.message()).contains("refund not attempted");
+            assertThat(economy.deposited()).isEqualTo(Money.zero());
+            try (Connection c = database.dataSource().getConnection(); var st = c.prepareStatement("SELECT state FROM registration_sagas"); var rows = st.executeQuery()) { assertThat(rows.next()).isTrue(); assertThat(rows.getString(1)).isEqualTo("WITHDRAWN"); }
+            try (Connection c = database.dataSource().getConnection(); var st = c.prepareStatement("SELECT event_type FROM audit_events WHERE event_type LIKE 'COMPANY_REGISTRATION_REFUND%'"); var rows = st.executeQuery()) { assertThat(rows.next()).isFalse(); }
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
+    void expected_state_conflict_rolls_back_without_writing_an_audit_event() throws Exception {
+        Path file = Files.createTempFile("blockeco-state-conflict-", ".db");
+        Instant now = Instant.parse("2026-08-14T12:00:00Z");
+        try (Database database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate();
+            SqlRegistrationSagaRepository sagas = new SqlRegistrationSagaRepository(database.dataSource(), () -> now);
+            RegistrationSaga saga = new RegistrationSaga(UUID.randomUUID(), UUID.randomUUID(), "conflict", Money.ofMinor(3), RegistrationSagaState.WITHDRAWN, null, now, now);
+            database.inTransaction(c -> { sagas.save(c, saga); return null; });
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> database.inTransaction(c -> { sagas.transition(c, saga.id(), RegistrationSagaState.PREPARED, RegistrationSagaState.REFUND_REQUIRED, "wrong predecessor"); new SqlAuditLog().append(c, new AuditEvent(UUID.randomUUID(), Optional.empty(), Optional.of(saga.founderId()), "SHOULD_NOT_EXIST", Map.of("x", 1), now)); return null; })).isInstanceOf(IllegalStateException.class);
+            try (Connection c = database.dataSource().getConnection(); var state = c.prepareStatement("SELECT state FROM registration_sagas"); var rows = state.executeQuery()) { rows.next(); assertThat(rows.getString(1)).isEqualTo("WITHDRAWN"); }
+            try (Connection c = database.dataSource().getConnection(); var audit = c.prepareStatement("SELECT COUNT(*) FROM audit_events"); var rows = audit.executeQuery()) { rows.next(); assertThat(rows.getInt(1)).isZero(); }
+        } finally { Files.deleteIfExists(file); }
+    }
+
     private static MainThreadExecutor directMain() { return new MainThreadExecutor() { @Override public <T> CompletionStage<T> submit(Supplier<T> work) { return CompletableFuture.completedFuture(work.get()); } }; }
 
     @Test
@@ -138,7 +176,7 @@ class CompanyRegistrationServiceTest {
             @Override public void save(Connection c, RegistrationSaga saga) { }
             @Override public java.util.List<RegistrationSaga> findPreparedBefore(Instant cutoff) { return java.util.List.of(); }
             @Override public java.util.List<RegistrationSaga> findWithdrawnBefore(Instant cutoff) { return java.util.List.of(); }
-            @Override public void transition(Connection c, UUID id, RegistrationSagaState state, String error) { }
+            @Override public void transition(Connection c, UUID id, RegistrationSagaState expected, RegistrationSagaState state, String error) { }
         }, Runnable::run);
 
         assertThat(queries.findByName("\u2003Red   Stone\u00a0").toCompletableFuture().join()).contains(stored);
@@ -269,7 +307,7 @@ class CompanyRegistrationServiceTest {
                 @Override public void save(Connection ignored, RegistrationSaga saga) { sagas.put(saga.id(), saga); }
                 @Override public java.util.List<RegistrationSaga> findPreparedBefore(Instant cutoff) { return sagas.values().stream().filter(saga -> saga.state() == RegistrationSagaState.PREPARED && saga.updatedAt().isBefore(cutoff)).toList(); }
                 @Override public java.util.List<RegistrationSaga> findWithdrawnBefore(Instant cutoff) { return sagas.values().stream().filter(saga -> saga.state() == RegistrationSagaState.WITHDRAWN && saga.updatedAt().isBefore(cutoff)).toList(); }
-                @Override public void transition(Connection ignored, UUID id, RegistrationSagaState state, String error) {
+                @Override public void transition(Connection ignored, UUID id, RegistrationSagaState expected, RegistrationSagaState state, String error) {
                     RegistrationSaga prior = sagas.get(id);
                     sagas.put(id, new RegistrationSaga(id, prior.founderId(), prior.companyNormalizedName(), prior.totalWithdrawal(), state, error, prior.createdAt(), now));
                 }

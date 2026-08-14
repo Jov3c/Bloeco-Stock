@@ -79,9 +79,16 @@ public final class CompanyRegistrationService {
     private CompletionStage<RegistrationResult> refund(RegistrationSaga saga, Throwable failure) {
         String sqlError = "SQL completion failure: " + failure.getMessage();
         return CompletableFuture.runAsync(() -> transactions.inTransaction(connection -> { transitionAndAudit(connection, saga, RegistrationSagaState.WITHDRAWN, RegistrationSagaState.REFUND_REQUIRED, sqlError); return null; }), sqlExecutor)
-                .handle((ignored, updateFailure) -> null)
-                .thenCompose(ignored -> mainThread.submit(() -> economy.deposit(saga.founderId(), saga.totalWithdrawal())))
-                .thenApplyAsync(refund -> {
+                .handle((ignored, updateFailure) -> updateFailure == null
+                        ? CompletableFuture.<RegistrationResult>completedFuture(null)
+                        : CompletableFuture.completedFuture(RegistrationResult.of(RegistrationResult.Status.RECOVERY_REQUIRED, sqlError + "; refund not attempted: " + updateFailure.getMessage())))
+                .thenCompose(stage -> stage)
+                .thenCompose(persistenceResult -> persistenceResult == null
+                        ? mainThread.submit(() -> economy.deposit(saga.founderId(), saga.totalWithdrawal())).thenApply(refund -> refundResult(saga, sqlError, refund))
+                        : CompletableFuture.completedFuture(persistenceResult))
+                ;
+    }
+    private RegistrationResult refundResult(RegistrationSaga saga, String sqlError, EconomyGateway.Result refund) {
                     String diagnostic = sqlError + "; refund: " + refund.message();
                     if (refund.outcome() != EconomyGateway.Outcome.SUCCESS) {
                         try { transactions.inTransaction(connection -> { transitionAndAudit(connection, saga, RegistrationSagaState.REFUND_REQUIRED, RegistrationSagaState.REFUND_REQUIRED, diagnostic); return null; }); } catch (RuntimeException ignored) { }
@@ -93,10 +100,9 @@ public final class CompanyRegistrationService {
                     } catch (RuntimeException updateFailure) {
                         return RegistrationResult.of(RegistrationResult.Status.RECOVERY_REQUIRED, diagnostic + "; state update failed: " + updateFailure.getMessage());
                     }
-                }, sqlExecutor);
     }
     private void transitionAndAudit(java.sql.Connection connection, RegistrationSaga saga, RegistrationSagaState from, RegistrationSagaState to, String diagnostic) throws java.sql.SQLException {
-        sagas.transition(connection, saga.id(), to, diagnostic);
+        sagas.transition(connection, saga.id(), from, to, diagnostic);
         audits.append(connection, event(saga, from, to, diagnostic));
     }
     private AuditEvent event(RegistrationSaga saga, RegistrationSagaState from, RegistrationSagaState to, String diagnostic) {
