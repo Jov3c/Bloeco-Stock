@@ -2,12 +2,15 @@ package cn.blockeco.exchange;
 
 import cn.blockeco.exchange.application.CompanyQueryService;
 import cn.blockeco.exchange.application.CompanyRegistrationService;
+import cn.blockeco.exchange.application.CompanyCapitalizationService;
 import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.infrastructure.sql.Database;
 import cn.blockeco.exchange.infrastructure.sql.SqlAuditLog;
 import cn.blockeco.exchange.infrastructure.sql.SqlCompanyRepository;
+import cn.blockeco.exchange.infrastructure.sql.SqlCompanyFinanceRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlRegistrationSagaRepository;
 import cn.blockeco.exchange.infrastructure.vault.VaultEconomyGateway;
+import cn.blockeco.exchange.infrastructure.vault.VaultTreasuryEscrowGateway;
 import cn.blockeco.exchange.paper.CompanyCommand;
 import cn.blockeco.exchange.paper.CompanyCreationRules;
 import cn.blockeco.exchange.paper.CompanyTabCompleter;
@@ -63,13 +66,17 @@ public final class BlockecoPlugin extends JavaPlugin {
         var companies = new SqlCompanyRepository(db.dataSource()); var sagas = new SqlRegistrationSagaRepository(db.dataSource(), clock);
         var mainThread = new PaperMainThread(this);
         int scale = getConfig().getInt("currency.scale");
+        var economy = new VaultEconomyGateway(getServer(), scale);
         var registration = new CompanyRegistrationService(companies, sagas, new SqlAuditLog(), db, new VaultEconomyGateway(getServer(), scale), mainThread, sqlExecutor, clock, configuredMoney("company.registration-fee", scale), configuredMoney("company.minimum-capital", scale));
+        var capitalization = new CompanyCapitalizationService(new SqlCompanyFinanceRepository(db.dataSource()), new SqlAuditLog(), db,
+                new VaultTreasuryEscrowGateway(economy, mainThread, escrowAccountId()), mainThread, sqlExecutor, clock);
         command = new CompanyCommand(registration, new CompanyQueryService(companies, sagas, sqlExecutor), new Messages(getConfig().getConfigurationSection("messages")), mainThread, creationRules);
         var companyCommand = getCommand("company");
         if (companyCommand == null) throw new IllegalStateException("company command is missing from plugin.yml");
         companyCommand.setExecutor(command);
         if (!runtime.attachReady(command, database)) return false;
         registration.recoverStaleRegistrations(Instant.now().minus(Duration.ofMinutes(5))).whenComplete((count, recoveryFailure) -> getServer().getScheduler().runTask(this, () -> getLogger().info("BlockStock ready; stale registration records scanned=" + (recoveryFailure == null ? count : "failed"))));
+        capitalization.recoverPendingCapitalizations().whenComplete((count, recoveryFailure) -> getServer().getScheduler().runTask(this, () -> getLogger().info("BlockStock capitalization recovery scanned=" + (recoveryFailure == null ? count : "failed"))));
         return true;
     }
 
@@ -90,9 +97,19 @@ public final class BlockecoPlugin extends JavaPlugin {
     private void validateConfiguration() {
         int scale = getConfig().getInt("currency.scale", -1); if (scale < 0 || scale > 8) throw new IllegalArgumentException("currency.scale must be between 0 and 8");
         positive("company.registration-fee", scale); positive("company.minimum-capital", scale);
+        escrowAccountId();
         creationRules = new CompanyCreationRules(configuredMoney("company.registration-fee", scale), configuredMoney("company.minimum-capital", scale), scale, getConfig().getInt("company.initial-shares"), getConfig().getIntegerList("company.allowed-dividend-percent"));
     }
     private void positive(String path, int scale) { if (configuredMoney(path, scale).minorUnits() <= 0) throw new IllegalArgumentException(path + " must be positive"); }
     private Money configuredMoney(String path, int scale) { return Money.fromMajor(new BigDecimal(getConfig().getString(path)), scale); }
+    private java.util.UUID escrowAccountId() {
+        String configured = getConfig().getString("treasury.escrow-account");
+        if (configured == null || configured.isBlank()) throw new IllegalArgumentException("treasury.escrow-account must be a reserved UUID");
+        try {
+            java.util.UUID id = java.util.UUID.fromString(configured);
+            if (id.getMostSignificantBits() == 0 && id.getLeastSignificantBits() == 0) throw new IllegalArgumentException("treasury.escrow-account must not be the zero UUID");
+            return id;
+        } catch (IllegalArgumentException exception) { throw new IllegalArgumentException("treasury.escrow-account must be a reserved UUID", exception); }
+    }
     private void failEnable(String message) { getLogger().severe(message); getServer().getPluginManager().disablePlugin(this); }
 }
