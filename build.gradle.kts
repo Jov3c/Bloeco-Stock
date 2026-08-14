@@ -1,6 +1,7 @@
 plugins {
     java
     id("com.gradleup.shadow") version "8.3.8"
+    id("xyz.jpenilla.run-paper") version "3.0.2"
 }
 
 group = "cn.blockeco"
@@ -56,4 +57,9 @@ tasks.processResources {
 tasks.shadowJar {
     relocate("com.zaxxer.hikari", "cn.blockeco.exchange.libs.com.zaxxer.hikari")
     relocate("org.sqlite", "cn.blockeco.exchange.libs.org.sqlite")
+}
+
+tasks.runServer {
+    minecraftVersion("1.21.4")
+    runDirectory.set(layout.projectDirectory.dir("run"))
 }
