@@ -4,7 +4,6 @@ import cn.blockeco.exchange.application.*;
 import cn.blockeco.exchange.domain.registration.RegistrationSaga;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executor;
 import org.bukkit.command.*;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
@@ -40,24 +39,24 @@ public final class CompanyCommand implements CommandExecutor {
         player.sendMessage(messages.processing());
         registration.register(request.get()).whenComplete((result, failure) -> plugin.getServer().getScheduler().runTask(plugin, () -> {
             inFlight.remove(player.getUniqueId());
-            player.sendMessage(messages.result(failure == null ? resultMessage(result) : "Registration failed; administrator recovery may be required."));
+            player.sendMessage(failure == null ? resultMessage(result) : messages.registrationFailed());
         }));
         return true;
     }
     private boolean info(CommandSender sender, String[] args) {
         if (!sender.hasPermission("blockeco.company.info")) { sender.sendMessage(messages.noPermission()); return true; }
         if (args.length < 2) return false;
-        queries.findByName(String.join(" ", Arrays.copyOfRange(args, 1, args.length))).whenComplete((company, failure) -> plugin.getServer().getScheduler().runTask(plugin, () -> sender.sendMessage(messages.result(failure != null ? "Company lookup failed." : company.map(c -> c.displayName() + " — " + c.status()).orElse("Company not found.")))));
+        queries.findByName(String.join(" ", Arrays.copyOfRange(args, 1, args.length))).whenComplete((company, failure) -> plugin.getServer().getScheduler().runTask(plugin, () -> sender.sendMessage(failure != null ? messages.lookupFailed() : company.map(c -> messages.companyInfo(c.displayName(), c.status())).orElse(messages.companyNotFound()))));
         return true;
     }
     private boolean recovery(CommandSender sender) {
         if (!sender.hasPermission("blockeco.admin.recovery")) { sender.sendMessage(messages.noPermission()); return true; }
         queries.recoveryList().whenComplete((records, failure) -> plugin.getServer().getScheduler().runTask(plugin, () -> {
-            if (failure != null) { sender.sendMessage(messages.result("Recovery lookup failed.")); return; }
-            if (records.isEmpty()) sender.sendMessage(messages.result("No recovery records."));
-            for (RegistrationSaga saga : records) sender.sendMessage(messages.result(saga.id()+" player="+saga.founderId()+" amount="+saga.totalWithdrawal().minorUnits()+" state="+saga.state()+" time="+saga.updatedAt()+" error="+(saga.errorMessage()==null ? "" : saga.errorMessage())));
+            if (failure != null) { sender.sendMessage(messages.recoveryLookupFailed()); return; }
+            if (records.isEmpty()) sender.sendMessage(messages.noRecoveryRecords());
+            for (RegistrationSaga saga : records) sender.sendMessage(messages.recoveryRecord(saga.id(), saga.founderId(), saga.totalWithdrawal().minorUnits(), saga.state(), saga.updatedAt(), saga.errorMessage()==null ? "" : saga.errorMessage()));
         }));
         return true;
     }
-    private static String resultMessage(RegistrationResult result) { return switch (result.status()) { case SUCCESS -> "Company registration completed."; case INSUFFICIENT_FUNDS -> "Insufficient funds."; case DUPLICATE_NAME -> "A company with that name already exists."; case REFUNDED_AFTER_FAILURE -> "Registration failed and your payment was refunded."; case RECOVERY_REQUIRED, PROVIDER_FAILURE -> "Registration requires administrator recovery."; }; }
+    private net.kyori.adventure.text.Component resultMessage(RegistrationResult result) { return switch (result.status()) { case SUCCESS -> messages.registrationSuccess(); case INSUFFICIENT_FUNDS -> messages.insufficientFunds(); case DUPLICATE_NAME -> messages.duplicateName(); case REFUNDED_AFTER_FAILURE -> messages.refunded(); case RECOVERY_REQUIRED, PROVIDER_FAILURE -> messages.recoveryRequired(); }; }
 }

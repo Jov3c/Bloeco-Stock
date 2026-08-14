@@ -49,6 +49,17 @@ class CompanyRegistrationServiceTest {
     }
 
     @Test
+    void configured_fee_and_capital_determine_withdrawal_and_treasury() {
+        RegistrationFixture fixture = RegistrationFixture.withAmounts(Money.ofMinor(321), Money.ofMinor(4_567));
+
+        RegistrationResult result = fixture.register("Blue Stone", 50);
+
+        assertThat(result.status()).isEqualTo(RegistrationResult.Status.SUCCESS);
+        assertThat(fixture.economy().withdrawn()).isEqualTo(Money.ofMinor(4_888));
+        assertThat(fixture.savedCompany().treasury()).isEqualTo(Money.ofMinor(4_567));
+    }
+
+    @Test
     void insufficient_funds_creates_no_company() {
         RegistrationFixture fixture = RegistrationFixture.standard();
         fixture.economy.withdrawResult = EconomyGateway.Result.insufficientFunds("balance too low");
@@ -123,7 +134,7 @@ class CompanyRegistrationServiceTest {
             };
             CompanyRegistrationService service = new CompanyRegistrationService(
                     new SqlCompanyRepository(database.dataSource()), new SqlRegistrationSagaRepository(database.dataSource()),
-                    new SqlAuditLog(), database, economy, main, Runnable::run, () -> Instant.parse("2026-08-14T12:00:00Z"));
+                    new SqlAuditLog(), database, economy, main, Runnable::run, () -> Instant.parse("2026-08-14T12:00:00Z"), Money.ofMinor(100_000), Money.ofMinor(1_000_000));
             RegistrationRequest request = new RegistrationRequest(UUID.randomUUID(), "Reserved Name", 50);
 
             CompletionStage<RegistrationResult> first = service.register(request);
@@ -146,7 +157,8 @@ class CompanyRegistrationServiceTest {
         private int sqlCalls;
         private final CompanyRegistrationService service;
 
-        private RegistrationFixture() {
+        private RegistrationFixture() { this(Money.ofMinor(100_000), Money.ofMinor(1_000_000)); }
+        private RegistrationFixture(Money fee, Money capital) {
             CompanyRepository companies = new CompanyRepository() {
                 @Override public void insert(Connection ignored, Company value) {
                     if (failCompanyInsert) throw new IllegalStateException("database unavailable");
@@ -181,10 +193,11 @@ class CompanyRegistrationServiceTest {
                 }
             };
             service = new CompanyRegistrationService(companies, sagaRepository, audit, transactions, economy, mainThread,
-                    Runnable::run, () -> now);
+                    Runnable::run, () -> now, fee, capital);
         }
 
         static RegistrationFixture standard() { return new RegistrationFixture(); }
+        static RegistrationFixture withAmounts(Money fee, Money capital) { return new RegistrationFixture(fee, capital); }
         RegistrationResult register(String name, int dividendRate) {
             return service.register(new RegistrationRequest(UUID.fromString("9fbb8514-5773-41c4-aa72-6e6a1e47f5c2"), name, dividendRate)).toCompletableFuture().join();
         }

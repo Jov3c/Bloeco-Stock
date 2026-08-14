@@ -67,6 +67,18 @@ class CompanyCommandTest {
     }
 
     @Test
+    void create_during_initialization_sends_configured_message_without_service_call() {
+        CompanyRegistrationService registration = mock(CompanyRegistrationService.class);
+        Player player = mock(Player.class); when(player.hasPermission("blockeco.company.create")).thenReturn(true);
+        CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), mock(Plugin.class));
+
+        command.onCommand(player, mock(Command.class), "company", new String[] {"create", "North", "30"});
+
+        verify(player).sendMessage(any(net.kyori.adventure.text.Component.class));
+        verifyNoInteractions(registration);
+    }
+
+    @Test
     void create_rejects_second_submission_while_first_is_in_flight() {
         CompanyRegistrationService registration = mock(CompanyRegistrationService.class);
         Player player = mock(Player.class); when(player.hasPermission("blockeco.company.create")).thenReturn(true); when(player.getUniqueId()).thenReturn(founder);
