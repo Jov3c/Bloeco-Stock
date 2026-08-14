@@ -80,7 +80,10 @@ public final class BlockecoPlugin extends JavaPlugin {
         var escrow = new VaultTreasuryEscrowGateway(economy, mainThread, java.util.UUID.fromString(getConfig().getString("company.treasury-escrow-uuid")));
         var registration = new CompanyRegistrationService(companies, sagas, new SqlAuditLog(), db, economy, mainThread, sqlExecutor, clock, configuredMoney("company.registration-fee", scale), configuredMoney("company.minimum-capital", scale), finance, escrow, creationRules.initialShares());
         getServer().getServicesManager().register(CompanyAssetAdapterRegistry.class, assetAdapterRegistry, this, ServicePriority.Normal);
-        var assetBindings = new AssetBindingService(new SqlAssetBindingRepository(db.dataSource()), db, assetAdapterRegistry.snapshot(), clock);
+        var assetBindings = new AssetBindingService(new SqlAssetBindingRepository(db.dataSource()), db, () -> {
+            CompanyAssetAdapterRegistry registry = getServer().getServicesManager().load(CompanyAssetAdapterRegistry.class);
+            return registry == null ? java.util.List.of() : registry.snapshot();
+        }, clock);
         var primaryOfferings = new PrimaryOfferingService(new SqlPrimaryOfferingRepository(db.dataSource()), db, escrow, sqlExecutor, clock);
         command = new CompanyCommand(registration, new CompanyQueryService(companies, sagas, new SqlCompanyFinanceRepository(db.dataSource()), sqlExecutor), new Messages(getConfig().getConfigurationSection("messages")), mainThread, creationRules, assetBindings, primaryOfferings);
         var companyCommand = getCommand("company");

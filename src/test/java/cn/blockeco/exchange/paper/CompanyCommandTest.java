@@ -202,13 +202,14 @@ class CompanyCommandTest {
             UUID companyFounder = cn.blockeco.exchange.application.Fixtures.founder(database, company);
             CompanyAssetAdapterRegistryImpl registry = new CompanyAssetAdapterRegistryImpl();
             CompanyAssetAdapter adapter = ownedAdapter("fixture-land", companyFounder);
-            registry.register(adapter);
-            AssetBindingService assetBindings = new AssetBindingService(new SqlAssetBindingRepository(database.dataSource()), database, registry.snapshot(), () -> Instant.parse("2026-08-14T12:00:00Z"));
+            AssetBindingService assetBindings = new AssetBindingService(new SqlAssetBindingRepository(database.dataSource()), database, registry::snapshot, () -> Instant.parse("2026-08-14T12:00:00Z"));
             QueuedMain main = new QueuedMain();
             CompanyCommand command = commandWithAssetBindings(database, assetBindings, main);
             Player player = permittedPlayer("blockeco.company.asset.bind");
             when(player.getUniqueId()).thenReturn(companyFounder);
             command.setAccepting(true);
+            // An integration can become available after Blockeco has finished enabling.
+            registry.register(adapter);
 
             assertThat(command.onCommand(player, mock(Command.class), "company", new String[] {"asset", "bind", "fixture-land", "plot-42"})).isTrue();
             main.awaitQueuedWork();
