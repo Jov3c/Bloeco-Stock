@@ -1,6 +1,7 @@
 package cn.blockeco.exchange;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.*;
 
 import cn.blockeco.exchange.application.*;
@@ -45,5 +46,12 @@ class PluginRuntimeTest {
   Player player=mock(Player.class); when(player.hasPermission("blockeco.company.create")).thenReturn(true);
   command.onCommand(player,mock(Command.class),"company",new String[]{"create","North","30"});
   verifyNoInteractions(service); assertThat(closes).hasValue(1);
+ }
+ @Test void close_failure_identifies_the_blockstock_database() {
+  PluginRuntime runtime=new PluginRuntime();
+
+  assertThatThrownBy(() -> runtime.closeDatabase(() -> { throw new Exception("locked"); }))
+      .isInstanceOf(IllegalStateException.class)
+      .hasMessage("could not close BlockStock database");
  }
 }

@@ -47,7 +47,7 @@ final class PluginRuntime {
         if (currentExecutor != null) shutdown(currentExecutor);
     }
     void closeDatabase(AutoCloseable value) {
-        if (value != null && databaseClosed.compareAndSet(false, true)) try { value.close(); } catch (Exception e) { throw new IllegalStateException("could not close Blockeco database", e); }
+        if (value != null && databaseClosed.compareAndSet(false, true)) try { value.close(); } catch (Exception e) { throw new IllegalStateException("could not close BlockStock database", e); }
     }
     private void shutdown(ExecutorService value) {
         value.shutdown();
