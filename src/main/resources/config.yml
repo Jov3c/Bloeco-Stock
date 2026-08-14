@@ -8,3 +8,10 @@ company:
 database:
   file: blockeco.db
   pool-size: 2
+messages:
+  processing: 'Company registration is processing.'
+  initializing: 'Blockeco is still initializing; please try again shortly.'
+  no-permission: 'You do not have permission.'
+  players-only: 'This command can only be used by a player.'
+  usage-create: 'Usage: /company create <name> <30|50|70>'
+  duplicate-request: 'Your company registration is already processing.'

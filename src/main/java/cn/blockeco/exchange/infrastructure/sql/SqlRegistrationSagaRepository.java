@@ -27,6 +27,15 @@ public final class SqlRegistrationSagaRepository implements RegistrationSagaRepo
         return findBefore("WITHDRAWN", cutoff);
     }
 
+    @Override public List<RegistrationSaga> findRecoveryRecords() {
+        String query = "SELECT id, founder_uuid, company_normalized_name, total_withdrawal_minor, state, error_message, created_at, updated_at FROM registration_sagas WHERE state IN ('REFUND_REQUIRED', 'AMBIGUOUS') ORDER BY updated_at";
+        try (Connection connection = dataSource.getConnection(); PreparedStatement statement = connection.prepareStatement(query); var rows = statement.executeQuery()) {
+            List<RegistrationSaga> sagas = new ArrayList<>();
+            while (rows.next()) sagas.add(new RegistrationSaga(UUID.fromString(rows.getString(1)), UUID.fromString(rows.getString(2)), rows.getString(3), cn.blockeco.exchange.domain.money.Money.ofMinor(rows.getLong(4)), RegistrationSagaState.valueOf(rows.getString(5)), rows.getString(6), Instant.parse(rows.getString(7)), Instant.parse(rows.getString(8))));
+            return sagas;
+        } catch (SQLException exception) { throw new IllegalStateException("could not read recovery registration sagas", exception); }
+    }
+
     private List<RegistrationSaga> findBefore(String state, Instant cutoff) {
         String query = "SELECT id, founder_uuid, company_normalized_name, total_withdrawal_minor, state, error_message, created_at, updated_at FROM registration_sagas WHERE state = ? AND updated_at < ?";
         try (Connection connection = dataSource.getConnection(); PreparedStatement statement = connection.prepareStatement(query)) {
