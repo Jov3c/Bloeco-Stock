@@ -33,7 +33,7 @@ public final class CompanyRegistrationService {
         });
     }
     /** Marks only definitely stale PREPARED records; it never attempts a monetary action. */
-    public CompletionStage<Integer> recoverStalePrepared(Instant cutoff) {
+    public CompletionStage<Integer> recoverStaleRegistrations(Instant cutoff) {
         return CompletableFuture.supplyAsync(() -> {
             int count = 0;
             for (RegistrationSaga saga : sagas.findPreparedBefore(cutoff)) {
@@ -52,8 +52,12 @@ public final class CompanyRegistrationService {
         Company candidate = Company.register(new CompanyId(UUID.randomUUID()), request.companyName(), request.founderId(), CAPITAL, rate, clock.now());
         if (companies.findByNormalizedName(candidate.normalizedName()).isPresent()) return new Prepared(null, RegistrationResult.of(RegistrationResult.Status.DUPLICATE_NAME, "company name already exists"));
         RegistrationSaga saga = new RegistrationSaga(UUID.randomUUID(), request.founderId(), candidate.normalizedName(), FEE.plus(CAPITAL), RegistrationSagaState.PREPARED, null, clock.now(), clock.now());
-        transactions.inTransaction(connection -> { sagas.save(connection, saga); audits.append(connection, event(saga, "COMPANY_REGISTRATION_PREPARED")); return null; });
-        return new Prepared(saga, null);
+        try {
+            transactions.inTransaction(connection -> { sagas.save(connection, saga); audits.append(connection, event(saga, "COMPANY_REGISTRATION_PREPARED")); return null; });
+            return new Prepared(saga, null);
+        } catch (DuplicateCompanyNameException duplicate) {
+            return new Prepared(null, RegistrationResult.of(RegistrationResult.Status.DUPLICATE_NAME, duplicate.getMessage()));
+        }
     }
     private CompletionStage<RegistrationResult> afterWithdrawal(RegistrationRequest request, RegistrationSaga saga, EconomyGateway.Result outcome) {
         if (outcome.outcome() != EconomyGateway.Outcome.SUCCESS) {

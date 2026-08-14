@@ -41,3 +41,10 @@ Vault's `EconomyResponse` only gives a generic failure outcome; a provider-retur
 - Compensation now durably attempts `REFUND_REQUIRED` before the refund and uses asynchronous continuations only; failed refund diagnostics include both SQL and provider details. Stale `WITHDRAWN` rows are recovered to `REFUND_REQUIRED`.
 - RED: the focused suite first failed after the changed rejection contract and mandatory Vault `has` precondition. GREEN: updated service/adapter and focused tests passed; then added null/exception response coverage and reran green.
 - Commands: `./gradlew.bat test --tests '*VaultEconomyGatewayTest' --tests '*CompanyRegistrationServiceTest'` and `./gradlew.bat test` — both passed.
+
+## Fix round 2
+
+- Restored V001 byte-for-byte to the prior schema and introduced V002 to rebuild `registration_sagas` with `REJECTED`, preserve old rows, and add the active-name partial unique index. The migrator now applies V001 then V002 independently with stored checksums.
+- SQLite reservation constraint violations are translated to `DuplicateCompanyNameException`; service preparation converts that typed condition into `DUPLICATE_NAME` rather than leaking an asynchronous failure.
+- Recovery method renamed to `recoverStaleRegistrations` because it covers both PREPARED and WITHDRAWN records.
+- RED/GREEN commands: `./gradlew.bat test --tests '*MigrationTest' --tests '*CompanyRegistrationServiceTest' --tests '*VaultEconomyGatewayTest'` then `./gradlew.bat test`; both green.

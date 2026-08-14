@@ -94,7 +94,7 @@ class CompanyRegistrationServiceTest {
         UUID sagaId = UUID.randomUUID();
         fixture.sagas.put(sagaId, new RegistrationSaga(sagaId, UUID.randomUUID(), "crash window", Money.ofMinor(1_100_000), RegistrationSagaState.PREPARED, null, fixture.now.minusSeconds(60), fixture.now.minusSeconds(60)));
 
-        assertThat(fixture.service.recoverStalePrepared(fixture.now).toCompletableFuture().join()).isEqualTo(1);
+        assertThat(fixture.service.recoverStaleRegistrations(fixture.now).toCompletableFuture().join()).isEqualTo(1);
 
         assertThat(fixture.sagas.get(sagaId).state()).isEqualTo(RegistrationSagaState.AMBIGUOUS);
         assertThat(fixture.economy.calls).isZero();

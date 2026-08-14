@@ -15,7 +15,7 @@ import java.sql.SQLException;
 
 public final class Database implements AutoCloseable, TransactionRunner {
 
-    private static final String V001 = "V001";
+    private static final String[] MIGRATIONS = {"V001", "V002"};
     private final HikariDataSource dataSource;
 
     public Database(String jdbcUrl) {
@@ -34,28 +34,26 @@ public final class Database implements AutoCloseable, TransactionRunner {
         try (Connection connection = dataSource.getConnection()) {
             enableForeignKeys(connection);
             createSchemaHistory(connection);
-            byte[] script = readMigration(V001);
-            String checksum = checksum(script);
-            if (isApplied(connection, V001, checksum)) {
-                return;
-            }
-
-            boolean originalAutoCommit = connection.getAutoCommit();
-            connection.setAutoCommit(false);
-            try {
-                executeStatements(connection, new String(script, StandardCharsets.UTF_8));
-                try (PreparedStatement statement = connection.prepareStatement(
-                        "INSERT INTO schema_history(version, checksum) VALUES (?, ?)")) {
-                    statement.setString(1, V001);
-                    statement.setString(2, checksum);
-                    statement.executeUpdate();
+            for (String version : MIGRATIONS) {
+                byte[] script = readMigration(version);
+                String checksum = checksum(script);
+                if (isApplied(connection, version, checksum)) continue;
+                boolean originalAutoCommit = connection.getAutoCommit();
+                connection.setAutoCommit(false);
+                try {
+                    executeStatements(connection, new String(script, StandardCharsets.UTF_8));
+                    try (PreparedStatement statement = connection.prepareStatement("INSERT INTO schema_history(version, checksum) VALUES (?, ?)")) {
+                        statement.setString(1, version);
+                        statement.setString(2, checksum);
+                        statement.executeUpdate();
+                    }
+                    connection.commit();
+                } catch (SQLException exception) {
+                    connection.rollback();
+                    throw exception;
+                } finally {
+                    connection.setAutoCommit(originalAutoCommit);
                 }
-                connection.commit();
-            } catch (SQLException exception) {
-                connection.rollback();
-                throw exception;
-            } finally {
-                connection.setAutoCommit(originalAutoCommit);
             }
         }
     }

@@ -16,15 +16,12 @@ CREATE TABLE registration_sagas (
   founder_uuid TEXT NOT NULL,
   company_normalized_name TEXT NOT NULL,
   total_withdrawal_minor INTEGER NOT NULL,
-  state TEXT NOT NULL CHECK (state IN ('PREPARED','WITHDRAWN','COMPLETED','REFUND_REQUIRED','REFUNDED','AMBIGUOUS','REJECTED')),
+  state TEXT NOT NULL CHECK (state IN ('PREPARED','WITHDRAWN','COMPLETED','REFUND_REQUIRED','REFUNDED','AMBIGUOUS')),
   error_message TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
 
-CREATE UNIQUE INDEX active_registration_saga_name
-ON registration_sagas(company_normalized_name)
-WHERE state IN ('PREPARED','WITHDRAWN','REFUND_REQUIRED','AMBIGUOUS');
 
 CREATE TABLE audit_events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,

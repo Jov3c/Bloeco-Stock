@@ -3,6 +3,7 @@ package cn.blockeco.exchange.infrastructure.sql;
 import cn.blockeco.exchange.domain.registration.RegistrationSagaState;
 import cn.blockeco.exchange.domain.registration.RegistrationSaga;
 import cn.blockeco.exchange.ports.RegistrationSagaRepository;
+import cn.blockeco.exchange.ports.DuplicateCompanyNameException;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
@@ -38,7 +39,13 @@ public final class SqlRegistrationSagaRepository implements RegistrationSagaRepo
     }
     @Override public void save(Connection connection, RegistrationSaga saga) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("INSERT INTO registration_sagas (id, founder_uuid, company_normalized_name, total_withdrawal_minor, state, error_message, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")) {
-            statement.setString(1, saga.id().toString()); statement.setString(2, saga.founderId().toString()); statement.setString(3, saga.companyNormalizedName()); statement.setLong(4, saga.totalWithdrawal().minorUnits()); statement.setString(5, saga.state().name()); statement.setString(6, saga.errorMessage()); statement.setString(7, saga.createdAt().toString()); statement.setString(8, saga.updatedAt().toString()); statement.executeUpdate();
+            statement.setString(1, saga.id().toString()); statement.setString(2, saga.founderId().toString()); statement.setString(3, saga.companyNormalizedName()); statement.setLong(4, saga.totalWithdrawal().minorUnits()); statement.setString(5, saga.state().name()); statement.setString(6, saga.errorMessage()); statement.setString(7, saga.createdAt().toString()); statement.setString(8, saga.updatedAt().toString());
+            statement.executeUpdate();
+        } catch (SQLException exception) {
+            if (exception.getMessage() != null && exception.getMessage().contains("registration_sagas.company_normalized_name")) {
+                throw new DuplicateCompanyNameException(saga.companyNormalizedName(), exception);
+            }
+            throw exception;
         }
     }
 
