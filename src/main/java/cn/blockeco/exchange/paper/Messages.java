@@ -8,23 +8,41 @@ public final class Messages {
     private final ConfigurationSection config;
     public Messages(ConfigurationSection config) { this.config = config; }
     private Component message(String key, String fallback) { return Component.text(config == null ? fallback : config.getString(key, fallback)); }
-    public Component processing() { return message("processing", "Company registration is processing."); }
-    public Component initializing() { return message("initializing", "Blockeco is still initializing; please try again shortly."); }
-    public Component noPermission() { return message("no-permission", "You do not have permission."); }
-    public Component playersOnly() { return message("players-only", "This command can only be used by a player."); }
-    public Component usageCreate() { return message("usage-create", "Usage: /company create <name> <30|50|70>"); }
-    public Component duplicateRequest() { return message("duplicate-request", "Your company registration is already processing."); }
-    public Component registrationFailed() { return message("registration-failed", "Registration failed; administrator recovery may be required."); }
-    public Component registrationSuccess() { return message("registration-success", "Company registration completed."); }
-    public Component insufficientFunds() { return message("insufficient-funds", "Insufficient funds."); }
-    public Component duplicateName() { return message("duplicate-name", "A company with that name already exists."); }
-    public Component refunded() { return message("refunded", "Registration failed and your payment was refunded."); }
-    public Component recoveryRequired() { return message("recovery-required", "Registration requires administrator recovery."); }
-    public Component lookupFailed() { return message("lookup-failed", "Company lookup failed."); }
-    public Component companyNotFound() { return message("company-not-found", "Company not found."); }
-    public Component companyInfo(String name, Object state) { return message("company-info", "%name% — %state%").replaceText(b -> b.matchLiteral("%name%").replacement(name)).replaceText(b -> b.matchLiteral("%state%").replacement(String.valueOf(state))); }
-    public Component recoveryLookupFailed() { return message("recovery-lookup-failed", "Recovery lookup failed."); }
-    public Component noRecoveryRecords() { return message("no-recovery-records", "No recovery records."); }
-    public Component recoveryRecord(Object id,Object player,Object amount,Object state,Object time,Object error) { return message("recovery-record", "%id% player=%player% amount=%amount% state=%state% time=%time% error=%error%").replaceText(b->b.matchLiteral("%id%").replacement(String.valueOf(id))).replaceText(b->b.matchLiteral("%player%").replacement(String.valueOf(player))).replaceText(b->b.matchLiteral("%amount%").replacement(String.valueOf(amount))).replaceText(b->b.matchLiteral("%state%").replacement(String.valueOf(state))).replaceText(b->b.matchLiteral("%time%").replacement(String.valueOf(time))).replaceText(b->b.matchLiteral("%error%").replacement(String.valueOf(error))); }
+    public Component processing() { return message("processing", "公司注册正在处理中。"); }
+    public Component initializing() { return message("initializing", "Blockeco 正在初始化，请稍后再试。"); }
+    public Component noPermission() { return message("no-permission", "你没有权限。"); }
+    public Component playersOnly() { return message("players-only", "此命令只能由玩家执行。"); }
+    public Component usageCreate() { return message("usage-create", "用法：/company create <名称> <30|50|70>"); }
+    public Component duplicateRequest() { return message("duplicate-request", "你的公司注册已在处理中。"); }
+    public Component registrationFailed() { return message("registration-failed", "注册失败，可能需要管理员恢复。"); }
+    public Component registrationSuccess() { return message("registration-success", "公司注册已完成。"); }
+    public Component insufficientFunds() { return message("insufficient-funds", "余额不足。"); }
+    public Component duplicateName() { return message("duplicate-name", "同名公司已存在。"); }
+    public Component refunded() { return message("refunded", "注册失败，付款已退款。"); }
+    public Component recoveryRequired() { return message("recovery-required", "注册需要管理员恢复。"); }
+    public Component lookupFailed() { return message("lookup-failed", "公司查询失败。"); }
+    public Component companyNotFound() { return message("company-not-found", "未找到公司。"); }
+    public Component companyInfo(String name, Object state) { return message("company-info", "%name% — %state%").replaceText(b -> b.matchLiteral("%name%").replacement(name)).replaceText(b -> b.matchLiteral("%state%").replacement(displayState(state))); }
+    public Component recoveryLookupFailed() { return message("recovery-lookup-failed", "恢复记录查询失败。"); }
+    public Component noRecoveryRecords() { return message("no-recovery-records", "没有恢复记录。"); }
+    public Component recoveryRecord(Object id,Object player,Object amount,Object state,Object time,Object error) { return message("recovery-record", "编号=%id% 玩家=%player% 金额=%amount% 状态=%state% 时间=%time% 原因=%error%").replaceText(b->b.matchLiteral("%id%").replacement(String.valueOf(id))).replaceText(b->b.matchLiteral("%player%").replacement(String.valueOf(player))).replaceText(b->b.matchLiteral("%amount%").replacement(String.valueOf(amount))).replaceText(b->b.matchLiteral("%state%").replacement(displayState(state))).replaceText(b->b.matchLiteral("%time%").replacement(String.valueOf(time))).replaceText(b->b.matchLiteral("%error%").replacement(String.valueOf(error))); }
     public Component result(String text) { return Component.text(text); }
+
+    private String displayState(Object state) {
+        return switch (String.valueOf(state)) {
+            case "PENDING_ASSET_BINDING" -> "待绑定资产";
+            case "LISTED" -> "已上市";
+            case "DELISTING" -> "退市中";
+            case "LIQUIDATING" -> "清算中";
+            case "DELISTED" -> "已退市";
+            case "PREPARED" -> "已准备";
+            case "WITHDRAWN" -> "已扣款";
+            case "COMPLETED" -> "已完成";
+            case "REFUND_REQUIRED" -> "待人工退款";
+            case "REFUNDED" -> "已退款";
+            case "AMBIGUOUS" -> "待人工核对";
+            case "REJECTED" -> "已拒绝";
+            default -> String.valueOf(state);
+        };
+    }
 }

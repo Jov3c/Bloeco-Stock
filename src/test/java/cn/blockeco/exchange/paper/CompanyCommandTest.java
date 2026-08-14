@@ -51,7 +51,7 @@ class CompanyCommandTest {
 
         ArgumentCaptor<net.kyori.adventure.text.Component> message = ArgumentCaptor.forClass(net.kyori.adventure.text.Component.class);
         verify(console).sendMessage(message.capture());
-        assertThat(PlainTextComponentSerializer.plainText().serialize(message.getValue())).contains("only be used by a player");
+        assertThat(PlainTextComponentSerializer.plainText().serialize(message.getValue())).contains("只能由玩家执行");
         verifyNoInteractions(registration);
     }
 
