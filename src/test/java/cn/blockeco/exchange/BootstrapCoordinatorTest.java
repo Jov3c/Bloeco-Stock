@@ -18,13 +18,19 @@ class BootstrapCoordinatorTest {
     @Test void provider_resolution_accepts_provider() { RegisteredServiceProvider<Economy> registration = mock(RegisteredServiceProvider.class); when(registration.getProvider()).thenReturn(mock(Economy.class)); assertThat(VaultProviderResolver.isAvailable(registration)).isTrue(); }
     @Test void coordinator_keeps_initializing_until_success_callback_runs_on_main_thread() {
         CompletableFuture<String> migration = new CompletableFuture<>(); AtomicInteger ready = new AtomicInteger(); AtomicInteger disabled = new AtomicInteger();
-        BootstrapCoordinator<String> coordinator = new BootstrapCoordinator<>(DIRECT_MAIN, value -> ready.incrementAndGet(), failure -> disabled.incrementAndGet());
+        BootstrapCoordinator<String> coordinator = new BootstrapCoordinator<>(DIRECT_MAIN, value -> { ready.incrementAndGet(); return true; }, failure -> disabled.incrementAndGet(), value -> {});
         coordinator.coordinate(migration); assertThat(coordinator.accepting()).isFalse(); migration.complete("db");
         assertThat(coordinator.accepting()).isTrue(); assertThat(disabled).hasValue(0);
     }
     @Test void coordinator_disables_once_after_migration_failure() {
-        AtomicInteger disabled = new AtomicInteger(); BootstrapCoordinator<String> coordinator = new BootstrapCoordinator<>(DIRECT_MAIN, value -> {}, failure -> disabled.incrementAndGet());
+        AtomicInteger disabled = new AtomicInteger(); BootstrapCoordinator<String> coordinator = new BootstrapCoordinator<>(DIRECT_MAIN, value -> true, failure -> disabled.incrementAndGet(), value -> {});
         coordinator.coordinate(CompletableFuture.failedFuture(new IllegalStateException("migration")));
         assertThat(disabled).hasValue(1); assertThat(coordinator.accepting()).isFalse(); coordinator.stop(); assertThat(coordinator.accepting()).isFalse();
+    }
+    @Test void stopped_before_background_success_closes_value_without_wiring_or_disable() {
+        CompletableFuture<String> migration = new CompletableFuture<>(); AtomicInteger ready = new AtomicInteger(); AtomicInteger disabled = new AtomicInteger(); AtomicInteger closed = new AtomicInteger();
+        BootstrapCoordinator<String> coordinator = new BootstrapCoordinator<>(DIRECT_MAIN, value -> { ready.incrementAndGet(); return true; }, failure -> disabled.incrementAndGet(), value -> closed.incrementAndGet());
+        coordinator.coordinate(migration); coordinator.stop(); migration.complete("database");
+        assertThat(ready).hasValue(0); assertThat(disabled).hasValue(0); assertThat(closed).hasValue(1); assertThat(coordinator.accepting()).isFalse();
     }
 }

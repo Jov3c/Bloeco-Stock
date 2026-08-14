@@ -33,13 +33,13 @@ public final class BlockecoPlugin extends JavaPlugin {
         catch (RuntimeException failure) { failEnable("Invalid Blockeco configuration: " + failure.getMessage()); return; }
         sqlExecutor = Executors.newSingleThreadExecutor(r -> { Thread thread = new Thread(r, "Blockeco-SQL"); thread.setDaemon(true); return thread; });
         Path file = getDataFolder().toPath().resolve(getConfig().getString("database.file", "blockeco.db"));
-        bootstrap = new BootstrapCoordinator<>(new PaperMainThread(this), this::finishEnable, failure -> failEnable("Blockeco initialization failed: " + failure.getMessage()));
+        bootstrap = new BootstrapCoordinator<>(new PaperMainThread(this), this::finishEnable, failure -> failEnable("Blockeco initialization failed: " + failure.getMessage()), Database::close);
         bootstrap.coordinate(java.util.concurrent.CompletableFuture.supplyAsync(() -> { Database db = new Database("jdbc:sqlite:" + file); try { db.migrate(); return db; } catch (Exception e) { db.close(); throw new IllegalStateException("SQLite migration failed", e); } }, sqlExecutor));
     }
 
-    private void finishEnable(Database db) {
+    private boolean finishEnable(Database db) {
         var economyRegistration = getServer().getServicesManager().getRegistration(Economy.class);
-        if (!VaultProviderResolver.isAvailable(economyRegistration)) { db.close(); failEnable("Vault economy provider is unavailable"); return; }
+        if (!VaultProviderResolver.isAvailable(economyRegistration)) { failEnable("Vault economy provider is unavailable"); return false; }
         database = db;
         var companies = new SqlCompanyRepository(db.dataSource()); var sagas = new SqlRegistrationSagaRepository(db.dataSource());
         var mainThread = new PaperMainThread(this);
@@ -47,10 +47,11 @@ public final class BlockecoPlugin extends JavaPlugin {
         var registration = new CompanyRegistrationService(companies, sagas, new SqlAuditLog(), db, new VaultEconomyGateway(getServer(), scale), mainThread, sqlExecutor, Instant::now, configuredMoney("company.registration-fee", scale), configuredMoney("company.minimum-capital", scale));
         command = new CompanyCommand(registration, new CompanyQueryService(companies, sagas, sqlExecutor), new Messages(getConfig().getConfigurationSection("messages")), this);
         var companyCommand = getCommand("company");
-        if (companyCommand == null) { database.close(); failEnable("company command is missing from plugin.yml"); return; }
+        if (companyCommand == null) { failEnable("company command is missing from plugin.yml"); return false; }
         companyCommand.setExecutor(command);
         command.setAccepting(true);
         registration.recoverStaleRegistrations(Instant.now().minus(Duration.ofMinutes(5))).whenComplete((count, recoveryFailure) -> getServer().getScheduler().runTask(this, () -> getLogger().info("Blockeco ready; stale registration records scanned=" + (recoveryFailure == null ? count : "failed"))));
+        return true;
     }
 
     /** Takes ownership of the command before asynchronous migration begins. */
