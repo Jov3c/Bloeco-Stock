@@ -56,7 +56,14 @@ tasks.processResources {
     expand("version" to pluginVersion)
 }
 
+val removeLegacyBlockecoShadowJar by tasks.registering(Delete::class) {
+    delete(fileTree(layout.buildDirectory.dir("libs")) {
+        include("blockeco-exchange-*-all.jar")
+    })
+}
+
 tasks.shadowJar {
+    dependsOn(removeLegacyBlockecoShadowJar)
     relocate("com.zaxxer.hikari", "cn.blockeco.exchange.libs.com.zaxxer.hikari")
     relocate("org.sqlite", "cn.blockeco.exchange.libs.org.sqlite")
 }
