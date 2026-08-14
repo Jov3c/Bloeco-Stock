@@ -31,6 +31,7 @@
 - `src/main/java/cn/blockeco/exchange/application/CompanyCapitalizationService.java` — 新公司实缴资本结算、旧公司补建和恢复。
 - `src/main/java/cn/blockeco/exchange/application/PrimaryOfferingService.java` — 公告、开窗、整数股认购、到期关闭。
 - `src/main/java/cn/blockeco/exchange/paper/CompanyCommand.java`、`CompanyTabCompleter.java`、`Messages.java` — 新资本输入、资产/首发命令、中文帮助和权限过滤补全。
+- `src/main/java/cn/blockeco/exchange/paper/StockAdminConfigCommand.java`、`MutableCompanyCreationRules.java` — 管理员可热更新的最低注册资金，供创建解析、帮助和补全读取同一当前规则。
 - `src/main/java/cn/blockeco/exchange/BlockecoPlugin.java`、`config.yml`、`plugin.yml` — 启动前置检查、服务装配、配置、权限和软依赖。
 - `src/test/java/...` — 领域、SQLite、服务和 Paper 命令的 TDD 覆盖；`MigrationTest` 扩展 V003 验证。
 
@@ -297,8 +298,63 @@ git add src/main/java/cn/blockeco/exchange/BlockecoPlugin.java README.md
 git commit -m "docs: document company finance and ipo operations"
 ```
 
+### Task 6: 管理员运行时最低注册资金配置
+
+**Files:**
+- Create: `src/main/java/cn/blockeco/exchange/paper/MutableCompanyCreationRules.java`
+- Create: `src/main/java/cn/blockeco/exchange/paper/StockAdminConfigCommand.java`
+- Modify: `src/main/java/cn/blockeco/exchange/paper/CompanyCommand.java`
+- Modify: `src/main/java/cn/blockeco/exchange/paper/CompanyTabCompleter.java`
+- Modify: `src/main/java/cn/blockeco/exchange/paper/Messages.java`
+- Modify: `src/main/java/cn/blockeco/exchange/BlockecoPlugin.java`
+- Modify: `src/main/resources/plugin.yml`
+- Modify: `README.md`
+- Create: `src/test/java/cn/blockeco/exchange/paper/StockAdminConfigCommandTest.java`
+- Modify: `src/test/java/cn/blockeco/exchange/paper/CompanyCommandTest.java`
+- Modify: `src/test/java/cn/blockeco/exchange/paper/CompanyTabCompleterTest.java`
+
+**Interfaces:**
+- Produces `/stockadmin config` and `/stockadmin config min-capital <金额>`; both require exact permission `blockstock.admin.config`, whose default is `op`.
+- Produces `MutableCompanyCreationRules.current()` and `replaceMinimumCapital(Money)` so creation parsing, Chinese help and Tab completion always use the same live `CompanyCreationRules` rather than a copied startup value.
+- Uses the existing `AuditLog` and `Database.transaction` to append `ADMIN_MINIMUM_CAPITAL_CHANGED` with the old/new minor amount, the player UUID actor when available, and `Instant` time. Console changes have no player UUID and identify `actor=CONSOLE` in the payload.
+
+- [ ] **Step 1: Write failing command and live-rule tests**
+
+```java
+@Test void op_can_read_and_set_a_precise_minimum_capital_and_persists_config() { /* /stockadmin config min-capital 25000.50 writes exact scale value */ }
+@Test void rejects_zero_negative_and_wrong_scale_without_changing_rules_or_config() { /* 0, -1, 1.234 with scale 2 */ }
+@Test void changed_minimum_is_used_immediately_by_company_parse_help_and_completion() { /* 10000 request rejected after replacement by 25000.50; help shows 25000.50 */ }
+@Test void unauthorized_sender_cannot_read_or_change_configuration() { /* no config or audit interaction */ }
+@Test void accepted_change_writes_audit_with_old_new_actor_and_time() { /* event type/payload and UUID/CONSOLE handling */ }
+```
+
+- [ ] **Step 2: Run to verify RED**
+
+Run: `./gradlew.bat test --tests cn.blockeco.exchange.paper.StockAdminConfigCommandTest --tests cn.blockeco.exchange.paper.CompanyCommandTest --tests cn.blockeco.exchange.paper.CompanyTabCompleterTest`
+
+Expected: FAIL because the `/stockadmin` command and mutable shared rule source do not exist.
+
+- [ ] **Step 3: Implement the minimal safe administrator path**
+
+Parse the amount with `Money.fromMajor(value, currency.scale)` and require a strictly positive exact-scale value. The query form returns the current Chinese-formatted minimum and the setting form saves exactly `company.minimum-capital` through Bukkit `saveConfig()` before publishing the replacement `CompanyCreationRules`; it affects only registrations begun after the successful command, never an in-flight registration or existing company. Append one immutable `ADMIN_MINIMUM_CAPITAL_CHANGED` audit event asynchronously on the SQL executor after the successful save, with payload keys `oldMinor`, `newMinor`, `actor`, and `source`; surface an administrative Chinese error if that audit write fails, without falsely claiming it was written. Wire `/stockadmin` in `plugin.yml`; expose only `config` at its first Tab level and `min-capital` at its second level, permission-filtered. Keep the existing `blockeco.*` company command permission nodes unchanged; this new node is exactly `blockstock.admin.config` and is granted to OP by default. Do not reload config or mutate registration fee/dividend candidates/initial shares.
+
+- [ ] **Step 4: Run focused tests to verify GREEN**
+
+Run: `./gradlew.bat test --tests cn.blockeco.exchange.paper.StockAdminConfigCommandTest --tests cn.blockeco.exchange.paper.CompanyCommandTest --tests cn.blockeco.exchange.paper.CompanyTabCompleterTest`
+
+Expected: PASS; configuration persistence, exact Money validation, audit payload, authorization and immediate next-registration behavior are covered.
+
+- [ ] **Step 5: Update operator documentation and commit**
+
+Document the two `/stockadmin config` forms, OP/default permission, exact decimal-scale rule, immediate effect boundary, config backup and audit-event limitation if the database is unavailable.
+
+```bash
+git add src/main/java/cn/blockeco/exchange/paper/MutableCompanyCreationRules.java src/main/java/cn/blockeco/exchange/paper/StockAdminConfigCommand.java src/main/java/cn/blockeco/exchange/paper/CompanyCommand.java src/main/java/cn/blockeco/exchange/paper/CompanyTabCompleter.java src/main/java/cn/blockeco/exchange/paper/Messages.java src/main/java/cn/blockeco/exchange/BlockecoPlugin.java src/main/resources/plugin.yml README.md src/test/java/cn/blockeco/exchange/paper/StockAdminConfigCommandTest src/test/java/cn/blockeco/exchange/paper/CompanyCommandTest src/test/java/cn/blockeco/exchange/paper/CompanyTabCompleterTest
+git commit -m "feat: let admins set minimum company capital"
+```
+
 ## Self-review
 
-- Spec coverage: Task 1 establishes the additive schema/domain invariants; Task 2 makes company cash externally backed and recoverable; Task 3 changes real capital/initial holdings; Task 4 covers provider-neutral asset binding and the 12-hour/2-day/five-times-capital primary offering; Task 5 covers startup, operations and real Paper verification. Trading, charts, monthly reports, dividends, specific external adapters and delisting are deliberately separate future plans from the approved spec.
+- Spec coverage: Task 1 establishes the additive schema/domain invariants; Task 2 makes company cash externally backed and recoverable; Task 3 changes real capital/initial holdings; Task 4 covers provider-neutral asset binding and the 12-hour/2-day/five-times-capital primary offering; Task 5 covers startup, operations and real Paper verification; Task 6 makes the minimum capital safely adjustable by administrators. Trading, charts, monthly reports, dividends, specific external adapters and delisting are deliberately separate future plans from the approved spec.
 - Placeholder scan: each task names files, interfaces, test cases, commands and expected output; no unspecified implementation/test step remains.
 - Type consistency: Task 2 supplies the capitalization/escrow interfaces consumed by Task 3 and Task 4; Task 1 domain values and V003 schema underpin all repositories; Task 5 wires the same services without an alternate money path.
