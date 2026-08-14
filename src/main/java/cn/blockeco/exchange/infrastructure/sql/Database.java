@@ -50,6 +50,9 @@ public final class Database implements AutoCloseable, TransactionRunner {
                     connection.commit();
                 } catch (SQLException exception) {
                     connection.rollback();
+                    if ("V002".equals(version) && isActiveSagaReservationConflict(exception)) {
+                        throw new IllegalStateException("V002 migration conflict: duplicate active registration saga name; manual handling is required", exception);
+                    }
                     throw exception;
                 } finally {
                     connection.setAutoCommit(originalAutoCommit);
@@ -160,5 +163,10 @@ public final class Database implements AutoCloseable, TransactionRunner {
         } catch (SQLException rollbackFailure) {
             original.addSuppressed(rollbackFailure);
         }
+    }
+
+    private static boolean isActiveSagaReservationConflict(SQLException exception) {
+        String message = exception.getMessage();
+        return message != null && message.contains("registration_sagas.company_normalized_name");
     }
 }

@@ -22,7 +22,6 @@ CREATE TABLE registration_sagas (
   updated_at TEXT NOT NULL
 );
 
-
 CREATE TABLE audit_events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id TEXT NOT NULL UNIQUE,
