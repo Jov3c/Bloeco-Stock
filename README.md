@@ -35,6 +35,18 @@ plugins/BlockStock/blockeco.db
 
 `run/` 被 Git 有意忽略。运行前，请在 `run/eula.txt` 接受 Mojang EULA，并手动将 Vault 和经济提供方放进 `run/plugins/`。Gradle 的 run-paper 任务会自动使用 Shadow JAR。
 
+### 从 BlockecoExchange 一次性迁移
+
+BlockStock 启动时会检查 `plugins/BlockecoExchange/`。仅当新目录
+`plugins/BlockStock/` 尚不存在时，插件才会将**整个目录**原子地迁移为
+`plugins/BlockStock/`，从而保留原有的 `config.yml`、`blockeco.db` 以及 SQLite
+关联文件。不要手工复制、移动、合并或删除旧目录；先正常执行 `stop` 并等待
+Paper 完成保存，再让 BlockStock 的下一次启动完成迁移。
+
+如果 `plugins/BlockStock/` 已存在，插件会保守地跳过迁移，绝不覆盖新目录中的
+数据。此时应保留两个目录并先人工核对备份，而不是删除任一目录。一次成功迁移后，
+`plugins/BlockecoExchange/` 应不再存在。
+
 ## 配置
 
 下列为 `plugins/BlockStock/config.yml` 的全部默认配置。货币值以十进制字符串保存，并通过 `currency.scale` 精确转换为带符号 `long` 最小货币单位。
@@ -59,6 +71,17 @@ plugins/BlockStock/blockeco.db
 | `/company create <name> <30\|50\|70>` | `blockeco.company.create`（默认：true） | 仅玩家可用。名称可以包含空格，也接受引号名称。该命令启动异步注册。 |
 | `/company info <name>` | `blockeco.company.info`（默认：true） | 显示已保存的公司名称与当前生命周期状态。 |
 | `/company recovery list` | `blockeco.admin.recovery`（默认：op） | 列出未解决/可见的注册记录；绝不强制退款。 |
+
+直接执行 `/company` 会按调用者权限显示中文指引：可创建的玩家会看到“BlockStock
+公司命令：”、`/company create <名称> <DIVIDENDS>`，以及创建费、最低注册资本、
+合计余额、初始发行股数、必须为玩家、插件完成初始化和公司名不可重复等规则；拥有
+查询或恢复权限时也会分别看到 `/company info <名称>` 与
+`/company recovery list`。不具备某项权限时，该项不会出现在根帮助中。
+
+原版客户端的 Tab 补全按权限过滤：在 `/company ` 后，具备相应权限的玩家会获得
+`create`、`info`、`recovery`；在 `/company create 红石工坊 ` 后会获得配置的
+`30`、`50`、`70`；在 `/company recovery ` 后，管理员会获得 `list`。这些候选项
+不替代实际命令权限检查。
 
 正常路径中，创建公司会**恰好一次**扣除**注册费用 + 最低资本**。仅最低资本进入公司金库。公司初始状态为 `PENDING_ASSET_BINDING`，拥有 1,000 股及所选、不可变的 30%、50% 或 70% 分红档位。创始人没有金库提款命令。
 
