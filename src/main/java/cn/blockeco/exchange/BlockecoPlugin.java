@@ -28,7 +28,7 @@ public final class BlockecoPlugin extends JavaPlugin {
 
     @Override public void onEnable() {
         saveDefaultConfig();
-        installInitializingCommand();
+        if (!installInitializingCommand()) return;
         try { validateConfiguration(); if (!getDataFolder().exists() && !getDataFolder().mkdirs()) throw new IllegalStateException("cannot create plugin data folder"); }
         catch (RuntimeException failure) { failEnable("Invalid Blockeco configuration: " + failure.getMessage()); return; }
         sqlExecutor = Executors.newSingleThreadExecutor(r -> { Thread thread = new Thread(r, "Blockeco-SQL"); thread.setDaemon(true); return thread; });
@@ -39,7 +39,7 @@ public final class BlockecoPlugin extends JavaPlugin {
 
     private boolean finishEnable(Database db) {
         var economyRegistration = getServer().getServicesManager().getRegistration(Economy.class);
-        if (!VaultProviderResolver.isAvailable(economyRegistration)) { failEnable("Vault economy provider is unavailable"); return false; }
+        if (!VaultProviderResolver.isAvailable(economyRegistration)) throw new IllegalStateException("Vault economy provider is unavailable");
         database = db;
         var companies = new SqlCompanyRepository(db.dataSource()); var sagas = new SqlRegistrationSagaRepository(db.dataSource());
         var mainThread = new PaperMainThread(this);
@@ -47,7 +47,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         var registration = new CompanyRegistrationService(companies, sagas, new SqlAuditLog(), db, new VaultEconomyGateway(getServer(), scale), mainThread, sqlExecutor, Instant::now, configuredMoney("company.registration-fee", scale), configuredMoney("company.minimum-capital", scale));
         command = new CompanyCommand(registration, new CompanyQueryService(companies, sagas, sqlExecutor), new Messages(getConfig().getConfigurationSection("messages")), mainThread);
         var companyCommand = getCommand("company");
-        if (companyCommand == null) { failEnable("company command is missing from plugin.yml"); return false; }
+        if (companyCommand == null) throw new IllegalStateException("company command is missing from plugin.yml");
         companyCommand.setExecutor(command);
         command.setAccepting(true);
         registration.recoverStaleRegistrations(Instant.now().minus(Duration.ofMinutes(5))).whenComplete((count, recoveryFailure) -> getServer().getScheduler().runTask(this, () -> getLogger().info("Blockeco ready; stale registration records scanned=" + (recoveryFailure == null ? count : "failed"))));
@@ -55,11 +55,12 @@ public final class BlockecoPlugin extends JavaPlugin {
     }
 
     /** Takes ownership of the command before asynchronous migration begins. */
-    private void installInitializingCommand() {
+    private boolean installInitializingCommand() {
         var companyCommand = getCommand("company");
-        if (companyCommand == null) { failEnable("company command is missing from plugin.yml"); return; }
+        if (companyCommand == null) { failEnable("company command is missing from plugin.yml"); return false; }
         Messages messages = new Messages(getConfig().getConfigurationSection("messages"));
         companyCommand.setExecutor((sender, command, label, args) -> { sender.sendMessage(messages.initializing()); return true; });
+        return true;
     }
 
     @Override public void onDisable() {
