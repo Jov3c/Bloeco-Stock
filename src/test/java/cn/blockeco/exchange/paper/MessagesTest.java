@@ -12,12 +12,22 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.bukkit.configuration.ConfigurationSection;
 
+import java.nio.charset.StandardCharsets;
 import java.util.stream.Stream;
 
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class MessagesTest {
+    @Test
+    void default_config_exposes_chinese_messages_and_preserves_placeholders() throws Exception {
+        String config = new String(getClass().getResourceAsStream("/config.yml").readAllBytes(),
+                StandardCharsets.UTF_8);
+
+        assertThat(config).contains("公司创建正在处理中", "%name%", "%state%", "%id%");
+        assertThat(config).doesNotContain("Company registration is processing.");
+    }
+
     @Test
     void localizes_company_and_recovery_states_without_localizing_storage_values() {
         Messages messages = new Messages(null);

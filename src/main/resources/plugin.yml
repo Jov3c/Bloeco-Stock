@@ -5,8 +5,8 @@ api-version: '1.21'
 softdepend: [Vault, VaultUnlocked]
 commands:
   company:
-    description: Manage Blockeco companies
-    usage: /company <create|info|recovery>
+    description: 管理 Blockeco 公司
+    usage: /company <创建|信息|恢复>
 permissions:
   blockeco.company.create:
     default: true
