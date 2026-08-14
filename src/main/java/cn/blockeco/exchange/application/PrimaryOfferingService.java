@@ -11,7 +11,7 @@ import java.util.UUID;
 import java.util.concurrent.*;
 
 /** Primary subscriptions use a durable expected-state treasury operation before each external Vault call. */
-public final class PrimaryOfferingService {
+public class PrimaryOfferingService {
  private final PrimaryOfferingRepository offerings; private final TransactionRunner transactions; private final TreasuryEscrowGateway escrow; private final Executor executor; private final AppClock clock;
  public PrimaryOfferingService(PrimaryOfferingRepository offerings,TransactionRunner transactions,TreasuryEscrowGateway escrow,Executor executor,AppClock clock){this.offerings=offerings;this.transactions=transactions;this.escrow=escrow;this.executor=executor;this.clock=clock;}
  public CompletionStage<PrimaryOffering> announce(CompanyId company,UUID founder,Money target,Money price){return CompletableFuture.supplyAsync(()->{if(!offerings.isFounder(company,founder))throw new IllegalArgumentException("only the founder may announce an offering");if(!offerings.hasActiveAsset(company))throw new IllegalStateException("an active asset binding is required"); long capital=offerings.paidInCapital(company); if(target.minorUnits()>Math.multiplyExact(capital,5))throw new IllegalArgumentException("target exceeds five times paid-in capital"); PrimaryOffering offer=PrimaryOffering.plan(company,target,price,clock.now()); transactions.inTransaction(c->{offerings.announce(c,offer);return null;});return offer;},executor);}

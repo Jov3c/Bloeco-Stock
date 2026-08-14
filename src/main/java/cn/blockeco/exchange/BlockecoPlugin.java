@@ -4,6 +4,7 @@ import cn.blockeco.exchange.application.CompanyQueryService;
 import cn.blockeco.exchange.application.CompanyRegistrationService;
 import cn.blockeco.exchange.application.AssetBindingService;
 import cn.blockeco.exchange.application.PrimaryOfferingService;
+import cn.blockeco.exchange.application.IpoLifecycleScheduler;
 import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.infrastructure.sql.Database;
 import cn.blockeco.exchange.infrastructure.sql.SqlAuditLog;
@@ -42,6 +43,7 @@ public final class BlockecoPlugin extends JavaPlugin {
     private CompanyCreationRules creationRules;
     private final PluginRuntime runtime = new PluginRuntime();
     private final CompanyAssetAdapterRegistry assetAdapterRegistry = new CompanyAssetAdapterRegistryImpl();
+    private IpoLifecycleScheduler ipoLifecycle;
 
     @Override public void onEnable() {
         try {
@@ -86,7 +88,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         companyCommand.setExecutor(command);
         if (!runtime.attachReady(command, database)) return false;
         registration.recoverStaleRegistrations(Instant.now().minus(Duration.ofMinutes(5))).whenComplete((count, recoveryFailure) -> getServer().getScheduler().runTask(this, () -> getLogger().info("BlockStock ready; stale registration records scanned=" + (recoveryFailure == null ? count : "failed"))));
-        getServer().getScheduler().runTaskTimerAsynchronously(this, () -> primaryOfferings.closeExpired(clock.now()).exceptionally(failure -> { getLogger().warning("IPO 状态调度失败，将在下个周期重试: " + failure.getMessage()); return null; }), 20L, 1200L);
+        ipoLifecycle = new IpoLifecycleScheduler(task -> { var bukkitTask=getServer().getScheduler().runTaskTimerAsynchronously(this,task,20L,1200L); return bukkitTask::cancel; }, clock::now, primaryOfferings, failure -> getLogger().warning("IPO 状态调度失败，将在下个周期重试: " + failure.getMessage())); ipoLifecycle.start();
         return true;
     }
 
@@ -101,6 +103,7 @@ public final class BlockecoPlugin extends JavaPlugin {
     }
 
     @Override public void onDisable() {
+        if (ipoLifecycle != null) ipoLifecycle.stop();
         getServer().getServicesManager().unregisterAll(this);
         runtime.stop();
     }
