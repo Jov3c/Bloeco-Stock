@@ -22,6 +22,8 @@ import cn.blockeco.exchange.paper.PaperMainThread;
 import cn.blockeco.exchange.paper.MigrationResult;
 import cn.blockeco.exchange.paper.PluginDataDirectoryMigrator;
 import cn.blockeco.exchange.ports.AppClock;
+import cn.blockeco.exchange.ports.CompanyAssetAdapterRegistry;
+import cn.blockeco.exchange.infrastructure.CompanyAssetAdapterRegistryImpl;
 import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -30,6 +32,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import net.milkbowl.vault.economy.Economy;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.plugin.ServicePriority;
 
 public final class BlockecoPlugin extends JavaPlugin {
     private ExecutorService sqlExecutor;
@@ -38,6 +41,7 @@ public final class BlockecoPlugin extends JavaPlugin {
     private BootstrapCoordinator<Database> bootstrap;
     private CompanyCreationRules creationRules;
     private final PluginRuntime runtime = new PluginRuntime();
+    private final CompanyAssetAdapterRegistry assetAdapterRegistry = new CompanyAssetAdapterRegistryImpl();
 
     @Override public void onEnable() {
         try {
@@ -73,7 +77,8 @@ public final class BlockecoPlugin extends JavaPlugin {
         var finance = new SqlCompanyFinanceRepository(db.dataSource());
         var escrow = new VaultTreasuryEscrowGateway(economy, mainThread, java.util.UUID.fromString(getConfig().getString("company.treasury-escrow-uuid")));
         var registration = new CompanyRegistrationService(companies, sagas, new SqlAuditLog(), db, economy, mainThread, sqlExecutor, clock, configuredMoney("company.registration-fee", scale), configuredMoney("company.minimum-capital", scale), finance, escrow, creationRules.initialShares());
-        var assetBindings = new AssetBindingService(new SqlAssetBindingRepository(db.dataSource()), db, java.util.List.of(), clock);
+        getServer().getServicesManager().register(CompanyAssetAdapterRegistry.class, assetAdapterRegistry, this, ServicePriority.Normal);
+        var assetBindings = new AssetBindingService(new SqlAssetBindingRepository(db.dataSource()), db, assetAdapterRegistry.snapshot(), clock);
         var primaryOfferings = new PrimaryOfferingService(new SqlPrimaryOfferingRepository(db.dataSource()), db, escrow, sqlExecutor, clock);
         command = new CompanyCommand(registration, new CompanyQueryService(companies, sagas, new SqlCompanyFinanceRepository(db.dataSource()), sqlExecutor), new Messages(getConfig().getConfigurationSection("messages")), mainThread, creationRules, assetBindings, primaryOfferings);
         var companyCommand = getCommand("company");
@@ -81,6 +86,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         companyCommand.setExecutor(command);
         if (!runtime.attachReady(command, database)) return false;
         registration.recoverStaleRegistrations(Instant.now().minus(Duration.ofMinutes(5))).whenComplete((count, recoveryFailure) -> getServer().getScheduler().runTask(this, () -> getLogger().info("BlockStock ready; stale registration records scanned=" + (recoveryFailure == null ? count : "failed"))));
+        getServer().getScheduler().runTaskTimerAsynchronously(this, () -> primaryOfferings.closeExpired(clock.now()).exceptionally(failure -> { getLogger().warning("IPO 状态调度失败，将在下个周期重试: " + failure.getMessage()); return null; }), 20L, 1200L);
         return true;
     }
 
@@ -95,6 +101,7 @@ public final class BlockecoPlugin extends JavaPlugin {
     }
 
     @Override public void onDisable() {
+        getServer().getServicesManager().unregisterAll(this);
         runtime.stop();
     }
 
