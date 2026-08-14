@@ -25,7 +25,7 @@ public final class BlockecoPlugin extends JavaPlugin {
     private Database database;
     private CompanyCommand command;
     private BootstrapCoordinator<Database> bootstrap;
-    private PluginRuntime runtime;
+    private final PluginRuntime runtime = new PluginRuntime();
 
     @Override public void onEnable() {
         saveDefaultConfig();
@@ -33,8 +33,10 @@ public final class BlockecoPlugin extends JavaPlugin {
         try { validateConfiguration(); if (!getDataFolder().exists() && !getDataFolder().mkdirs()) throw new IllegalStateException("cannot create plugin data folder"); }
         catch (RuntimeException failure) { failEnable("Invalid Blockeco configuration: " + failure.getMessage()); return; }
         sqlExecutor = Executors.newSingleThreadExecutor(r -> { Thread thread = new Thread(r, "Blockeco-SQL"); thread.setDaemon(true); return thread; });
+        runtime.attachExecutor(sqlExecutor);
         Path file = getDataFolder().toPath().resolve(getConfig().getString("database.file", "blockeco.db"));
-        bootstrap = new BootstrapCoordinator<>(new PaperMainThread(this), this::finishEnable, failure -> failEnable("Blockeco initialization failed: " + failure.getMessage()), Database::close);
+        bootstrap = new BootstrapCoordinator<>(new PaperMainThread(this), this::finishEnable, failure -> failEnable("Blockeco initialization failed: " + failure.getMessage()), runtime::closeDatabase);
+        runtime.attachBootstrap(bootstrap);
         bootstrap.coordinate(java.util.concurrent.CompletableFuture.supplyAsync(() -> { Database db = new Database("jdbc:sqlite:" + file); try { db.migrate(); return db; } catch (Exception e) { db.close(); throw new IllegalStateException("SQLite migration failed", e); } }, sqlExecutor));
     }
 
@@ -50,8 +52,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         var companyCommand = getCommand("company");
         if (companyCommand == null) throw new IllegalStateException("company command is missing from plugin.yml");
         companyCommand.setExecutor(command);
-        command.setAccepting(true);
-        runtime = new PluginRuntime(command, bootstrap, sqlExecutor, database);
+        if (!runtime.attachReady(command, database)) return false;
         registration.recoverStaleRegistrations(Instant.now().minus(Duration.ofMinutes(5))).whenComplete((count, recoveryFailure) -> getServer().getScheduler().runTask(this, () -> getLogger().info("Blockeco ready; stale registration records scanned=" + (recoveryFailure == null ? count : "failed"))));
         return true;
     }
@@ -61,12 +62,12 @@ public final class BlockecoPlugin extends JavaPlugin {
         var companyCommand = getCommand("company");
         if (companyCommand == null) { failEnable("company command is missing from plugin.yml"); return false; }
         Messages messages = new Messages(getConfig().getConfigurationSection("messages"));
-        companyCommand.setExecutor((sender, command, label, args) -> { sender.sendMessage(messages.initializing()); return true; });
+        companyCommand.setExecutor((sender, command, label, args) -> { sender.sendMessage(messages.initializing()); return runtime.accepting(); });
         return true;
     }
 
     @Override public void onDisable() {
-        if (runtime != null) runtime.stop();
+        runtime.stop();
     }
 
     private void validateConfiguration() {

@@ -5,10 +5,45 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/** Owns ready runtime shutdown ordering. */
+/** Owns shutdown from pre-migration initialization through the ready runtime. */
 final class PluginRuntime {
-    private final CompanyCommand command; private final BootstrapCoordinator<?> bootstrap; private final ExecutorService executor; private final AutoCloseable database; private final AtomicBoolean stopped = new AtomicBoolean();
-    PluginRuntime(CompanyCommand command, BootstrapCoordinator<?> bootstrap, ExecutorService executor, AutoCloseable database) { this.command=command; this.bootstrap=bootstrap; this.executor=executor; this.database=database; }
-    void stop() { if (!stopped.compareAndSet(false, true)) return; command.setAccepting(false); bootstrap.stop(); executor.shutdown(); try { executor.awaitTermination(5, TimeUnit.SECONDS); database.close(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); close(); } catch (Exception e) { throw new IllegalStateException("could not close Blockeco runtime", e); } }
-    private void close() { try { database.close(); } catch (Exception ignored) { } }
+    private final Object lock = new Object();
+    private final AtomicBoolean stopped = new AtomicBoolean();
+    private final AtomicBoolean databaseClosed = new AtomicBoolean();
+    private CompanyCommand command;
+    private BootstrapCoordinator<?> bootstrap;
+    private ExecutorService executor;
+    private AutoCloseable database;
+
+    PluginRuntime() { }
+    PluginRuntime(CompanyCommand command, BootstrapCoordinator<?> bootstrap, ExecutorService executor, AutoCloseable database) { this.command = command; this.bootstrap = bootstrap; this.executor = executor; this.database = database; }
+    PluginRuntime(CompanyCommand command) { this.command = command; }
+
+    boolean accepting() { return !stopped.get(); }
+    void attachBootstrap(BootstrapCoordinator<?> value) { boolean stop; synchronized (lock) { bootstrap = value; stop = stopped.get(); } if (stop) value.stop(); }
+    void attachExecutor(ExecutorService value) { boolean stop; synchronized (lock) { executor = value; stop = stopped.get(); } if (stop) shutdown(value); }
+    boolean attachReady(CompanyCommand value, AutoCloseable db) {
+        synchronized (lock) {
+            command = value;
+            if (!stopped.get()) { database = db; value.setAccepting(true); return true; }
+        }
+        closeDatabase(db);
+        return false;
+    }
+    void stop() {
+        if (!stopped.compareAndSet(false, true)) return;
+        CompanyCommand currentCommand; BootstrapCoordinator<?> currentBootstrap; ExecutorService currentExecutor; AutoCloseable currentDatabase;
+        synchronized (lock) { currentCommand = command; currentBootstrap = bootstrap; currentExecutor = executor; currentDatabase = database; }
+        if (currentCommand != null) currentCommand.setAccepting(false);
+        if (currentBootstrap != null) currentBootstrap.stop();
+        if (currentExecutor != null) shutdown(currentExecutor);
+        closeDatabase(currentDatabase);
+    }
+    void closeDatabase(AutoCloseable value) {
+        if (value != null && databaseClosed.compareAndSet(false, true)) try { value.close(); } catch (Exception e) { throw new IllegalStateException("could not close Blockeco database", e); }
+    }
+    private void shutdown(ExecutorService value) {
+        value.shutdown();
+        try { value.awaitTermination(5, TimeUnit.SECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+    }
 }
