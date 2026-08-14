@@ -13,7 +13,13 @@ public record RegistrationSaga(
         RegistrationSagaState state,
         String errorMessage,
         Instant createdAt,
-        Instant updatedAt) {
+        Instant updatedAt,
+        boolean requiresEscrow) {
+
+    public RegistrationSaga(UUID id, UUID founderId, String companyNormalizedName, Money totalWithdrawal,
+            RegistrationSagaState state, String errorMessage, Instant createdAt, Instant updatedAt) {
+        this(id, founderId, companyNormalizedName, totalWithdrawal, state, errorMessage, createdAt, updatedAt, false);
+    }
 
     public RegistrationSaga {
         Objects.requireNonNull(id, "id");

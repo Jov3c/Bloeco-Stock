@@ -48,6 +48,17 @@ public final class Company {
             Money capital,
             DividendRate dividendRate,
             Instant createdAt) {
+        return register(id, name, founderId, capital, INITIAL_SHARE_COUNT, dividendRate, createdAt);
+    }
+
+    public static Company register(
+            CompanyId id,
+            String name,
+            UUID founderId,
+            Money capital,
+            long initialShares,
+            DividendRate dividendRate,
+            Instant createdAt) {
         String displayName = normalizeDisplayName(name);
         return rehydrate(
                 id,
@@ -55,7 +66,7 @@ public final class Company {
                 displayName.toLowerCase(Locale.ROOT),
                 founderId,
                 capital,
-                INITIAL_SHARE_COUNT,
+                initialShares,
                 dividendRate,
                 CompanyStatus.PENDING_ASSET_BINDING,
                 createdAt);

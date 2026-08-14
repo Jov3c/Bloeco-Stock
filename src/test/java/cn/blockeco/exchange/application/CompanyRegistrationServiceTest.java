@@ -50,7 +50,7 @@ class CompanyRegistrationServiceTest {
             CompanyRegistrationService service = new CompanyRegistrationService(
                     new SqlCompanyRepository(database.dataSource()), new SqlRegistrationSagaRepository(database.dataSource(), () -> now),
                     new SqlAuditLog(), database, economy, directMain(), Runnable::run, () -> now,
-                    Money.ofMinor(100), Money.ofMinor(1_000), finance, escrow);
+                    Money.ofMinor(100), Money.ofMinor(1_000), finance, escrow, 2_000);
 
             RegistrationResult result = service.register(new RegistrationRequest(UUID.randomUUID(), "Escrow Guild", Money.ofMinor(1_500), 50)).toCompletableFuture().join();
 
@@ -59,8 +59,9 @@ class CompanyRegistrationServiceTest {
             assertThat(economy.withdrawn()).isEqualTo(Money.ofMinor(1_600));
             assertThat(escrow.deposits).isEqualTo(1);
             assertThat(escrow.deposited).isEqualTo(Money.ofMinor(1_500));
-            try (Connection c = database.dataSource().getConnection(); var statement = c.prepareStatement("SELECT cash_minor, paid_in_capital_minor FROM company_cash_accounts"); var rows = statement.executeQuery()) {
+            try (Connection c = database.dataSource().getConnection(); var statement = c.prepareStatement("SELECT cash_minor, paid_in_capital_minor, (SELECT total_shares FROM companies), (SELECT available_shares FROM share_holdings) FROM company_cash_accounts"); var rows = statement.executeQuery()) {
                 assertThat(rows.next()).isTrue(); assertThat(rows.getLong(1)).isEqualTo(1_500); assertThat(rows.getLong(2)).isEqualTo(1_500);
+                assertThat(rows.getLong(3)).isEqualTo(2_000); assertThat(rows.getLong(4)).isEqualTo(2_000);
             }
         } finally { Files.deleteIfExists(file); }
     }
@@ -99,6 +100,42 @@ class CompanyRegistrationServiceTest {
 
             assertThat(result.status()).isEqualTo(RegistrationResult.Status.PROVIDER_FAILURE);
             assertThat(economy.calls).isZero();
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
+    void escrow_deposited_name_reservation_is_reported_as_duplicate_before_vault() throws Exception {
+        Path file = Files.createTempFile("blockeco-escrow-name-reservation-", ".db");
+        try (Database database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate();
+            Instant now = Instant.parse("2026-08-14T12:00:00Z");
+            SqlRegistrationSagaRepository sagas = new SqlRegistrationSagaRepository(database.dataSource(), () -> now);
+            database.inTransaction(c -> { sagas.save(c, new RegistrationSaga(UUID.randomUUID(), UUID.randomUUID(), "escrow guild", Money.ofMinor(1_600), RegistrationSagaState.ESCROW_DEPOSITED, null, now, now)); return null; });
+            ProgrammableEconomy economy = new ProgrammableEconomy();
+            CompanyRegistrationService service = new CompanyRegistrationService(new SqlCompanyRepository(database.dataSource()), sagas, new SqlAuditLog(), database, economy, directMain(), Runnable::run, () -> now, Money.ofMinor(100), Money.ofMinor(1_000), new SqlCompanyFinanceRepository(database.dataSource()), new RecordingRegistrationEscrow());
+
+            RegistrationResult result = service.register(new RegistrationRequest(UUID.randomUUID(), "Escrow Guild", Money.ofMinor(1_500), 50)).toCompletableFuture().join();
+
+            assertThat(result.status()).isEqualTo(RegistrationResult.Status.DUPLICATE_NAME);
+            assertThat(economy.calls).isZero();
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
+    void recovery_marks_escrow_backed_withdrawal_ambiguous_without_another_vault_action() throws Exception {
+        Path file = Files.createTempFile("blockeco-escrow-withdrawn-recovery-", ".db");
+        try (Database database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate();
+            Instant now = Instant.parse("2026-08-14T12:00:00Z");
+            SqlRegistrationSagaRepository sagas = new SqlRegistrationSagaRepository(database.dataSource(), () -> now);
+            RegistrationSaga saga = new RegistrationSaga(UUID.randomUUID(), UUID.randomUUID(), "interrupted escrow", Money.ofMinor(1_600), RegistrationSagaState.WITHDRAWN, null, now.minusSeconds(10), now.minusSeconds(10), true);
+            database.inTransaction(c -> { sagas.save(c, saga); return null; });
+            ProgrammableEconomy economy = new ProgrammableEconomy();
+            CompanyRegistrationService service = new CompanyRegistrationService(new SqlCompanyRepository(database.dataSource()), sagas, new SqlAuditLog(), database, economy, directMain(), Runnable::run, () -> now, Money.ofMinor(100), Money.ofMinor(1_000), new SqlCompanyFinanceRepository(database.dataSource()), new RecordingRegistrationEscrow());
+
+            assertThat(service.recoverStaleRegistrations(now).toCompletableFuture().join()).isEqualTo(1);
+            assertThat(economy.calls).isZero();
+            try (Connection c = database.dataSource().getConnection(); var statement = c.prepareStatement("SELECT state FROM registration_sagas"); var rows = statement.executeQuery()) { assertThat(rows.next()).isTrue(); assertThat(rows.getString(1)).isEqualTo("AMBIGUOUS"); }
         } finally { Files.deleteIfExists(file); }
     }
 

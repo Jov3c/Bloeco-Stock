@@ -26,6 +26,7 @@ public final class CompanyRegistrationService {
     private final CompanyCapitalizationService capitalization;
     private final CompanyFinanceRepository finance;
     private final TreasuryEscrowGateway escrow;
+    private final long initialShares;
     public CompanyRegistrationService(CompanyRepository companies, RegistrationSagaRepository sagas, AuditLog audits,
             TransactionRunner transactions, EconomyGateway economy, MainThreadExecutor mainThread, Executor sqlExecutor, AppClock clock, Money registrationFee, Money minimumCapital) {
         this(companies, sagas, audits, transactions, economy, mainThread, sqlExecutor, clock, registrationFee, minimumCapital, null);
@@ -37,12 +38,21 @@ public final class CompanyRegistrationService {
     /** Production registration path: the capital was included in the one registration withdrawal. */
     public CompanyRegistrationService(CompanyRepository companies, RegistrationSagaRepository sagas, AuditLog audits,
             TransactionRunner transactions, EconomyGateway economy, MainThreadExecutor mainThread, Executor sqlExecutor, AppClock clock, Money registrationFee, Money minimumCapital, CompanyFinanceRepository finance, TreasuryEscrowGateway escrow) {
-        this(companies, sagas, audits, transactions, economy, mainThread, sqlExecutor, clock, registrationFee, minimumCapital, null, finance, escrow);
+        this(companies, sagas, audits, transactions, economy, mainThread, sqlExecutor, clock, registrationFee, minimumCapital, finance, escrow, 1_000);
+    }
+    public CompanyRegistrationService(CompanyRepository companies, RegistrationSagaRepository sagas, AuditLog audits,
+            TransactionRunner transactions, EconomyGateway economy, MainThreadExecutor mainThread, Executor sqlExecutor, AppClock clock, Money registrationFee, Money minimumCapital, CompanyFinanceRepository finance, TreasuryEscrowGateway escrow, long initialShares) {
+        this(companies, sagas, audits, transactions, economy, mainThread, sqlExecutor, clock, registrationFee, minimumCapital, null, finance, escrow, initialShares);
     }
     private CompanyRegistrationService(CompanyRepository companies, RegistrationSagaRepository sagas, AuditLog audits,
             TransactionRunner transactions, EconomyGateway economy, MainThreadExecutor mainThread, Executor sqlExecutor, AppClock clock, Money registrationFee, Money minimumCapital, CompanyCapitalizationService capitalization, CompanyFinanceRepository finance, TreasuryEscrowGateway escrow) {
+        this(companies, sagas, audits, transactions, economy, mainThread, sqlExecutor, clock, registrationFee, minimumCapital, capitalization, finance, escrow, 1_000);
+    }
+    private CompanyRegistrationService(CompanyRepository companies, RegistrationSagaRepository sagas, AuditLog audits,
+            TransactionRunner transactions, EconomyGateway economy, MainThreadExecutor mainThread, Executor sqlExecutor, AppClock clock, Money registrationFee, Money minimumCapital, CompanyCapitalizationService capitalization, CompanyFinanceRepository finance, TreasuryEscrowGateway escrow, long initialShares) {
+        if (initialShares < 1_000) throw new IllegalArgumentException("initialShares must be at least 1000");
         this.companies=companies; this.sagas=sagas; this.audits=audits; this.transactions=transactions; this.economy=economy;
-        this.mainThread=mainThread; this.sqlExecutor=sqlExecutor; this.clock=clock; this.registrationFee=registrationFee; this.minimumCapital=minimumCapital; this.capitalization=capitalization; this.finance=finance; this.escrow=escrow;
+        this.mainThread=mainThread; this.sqlExecutor=sqlExecutor; this.clock=clock; this.registrationFee=registrationFee; this.minimumCapital=minimumCapital; this.capitalization=capitalization; this.finance=finance; this.escrow=escrow; this.initialShares=initialShares;
     }
     public CompletionStage<RegistrationResult> register(RegistrationRequest request) {
         Money paidInCapital = paidInCapital(request);
@@ -62,6 +72,10 @@ public final class CompanyRegistrationService {
                 transactions.inTransaction(connection -> { transitionAndAudit(connection, saga, RegistrationSagaState.PREPARED, RegistrationSagaState.AMBIGUOUS, "crash window before withdrawal persistence"); return null; });
                 count++;
             }
+            for (RegistrationSaga saga : sagas.findEscrowWithdrawnBefore(cutoff)) {
+                transactions.inTransaction(connection -> { transitionAndAudit(connection, saga, RegistrationSagaState.WITHDRAWN, RegistrationSagaState.AMBIGUOUS, "crash window during escrow deposit; Vault outcome is unknown"); return null; });
+                count++;
+            }
             for (RegistrationSaga saga : sagas.findWithdrawnBefore(cutoff)) {
                 transactions.inTransaction(connection -> { transitionAndAudit(connection, saga, RegistrationSagaState.WITHDRAWN, RegistrationSagaState.REFUND_REQUIRED, "stale withdrawal requires compensation review"); return null; });
                 count++;
@@ -72,9 +86,9 @@ public final class CompanyRegistrationService {
     private Prepared prepare(RegistrationRequest request) {
         DividendRate rate = DividendRate.fromPercent(request.dividendPercent());
         Money paidInCapital = paidInCapital(request);
-        Company candidate = Company.register(new CompanyId(UUID.randomUUID()), request.companyName(), request.founderId(), paidInCapital, rate, clock.now());
+        Company candidate = Company.register(new CompanyId(UUID.randomUUID()), request.companyName(), request.founderId(), paidInCapital, initialShares, rate, clock.now());
         if (companies.findByNormalizedName(candidate.normalizedName()).isPresent()) return new Prepared(null, RegistrationResult.of(RegistrationResult.Status.DUPLICATE_NAME, "company name already exists"));
-        RegistrationSaga saga = new RegistrationSaga(UUID.randomUUID(), request.founderId(), candidate.normalizedName(), registrationFee.plus(paidInCapital), RegistrationSagaState.PREPARED, null, clock.now(), clock.now());
+        RegistrationSaga saga = new RegistrationSaga(UUID.randomUUID(), request.founderId(), candidate.normalizedName(), registrationFee.plus(paidInCapital), RegistrationSagaState.PREPARED, null, clock.now(), clock.now(), finance != null);
         try {
             transactions.inTransaction(connection -> { sagas.save(connection, saga); audits.append(connection, event(saga, "NONE", RegistrationSagaState.PREPARED, null)); return null; });
             return new Prepared(saga, null);
@@ -103,7 +117,7 @@ public final class CompanyRegistrationService {
     }
     private RegistrationResult completeEscrowedRegistration(RegistrationRequest request, RegistrationSaga saga) {
         Money capital = request.paidInCapital();
-        Company company = Company.register(new CompanyId(UUID.randomUUID()), request.companyName(), request.founderId(), capital, DividendRate.fromPercent(request.dividendPercent()), clock.now());
+        Company company = Company.register(new CompanyId(UUID.randomUUID()), request.companyName(), request.founderId(), capital, initialShares, DividendRate.fromPercent(request.dividendPercent()), clock.now());
         try {
             transactions.inTransaction(c -> {
                 transitionAndAudit(c, saga, RegistrationSagaState.WITHDRAWN, RegistrationSagaState.ESCROW_DEPOSITED, "confirmed escrow deposit");
@@ -112,7 +126,7 @@ public final class CompanyRegistrationService {
                 finance.prepare(c, operation, capitalizationEvent(operation, "NONE", TreasuryOperationState.PREPARED, "registration capital already collected"));
                 finance.transition(c, operation.id(), TreasuryOperationState.PREPARED, TreasuryOperationState.PLAYER_WITHDRAWN, capitalizationEvent(operation, "PREPARED", TreasuryOperationState.PLAYER_WITHDRAWN, "combined withdrawal"));
                 finance.transition(c, operation.id(), TreasuryOperationState.PLAYER_WITHDRAWN, TreasuryOperationState.ESCROW_DEPOSITED, capitalizationEvent(operation, "PLAYER_WITHDRAWN", TreasuryOperationState.ESCROW_DEPOSITED, "confirmed escrow deposit"));
-                finance.createCapitalization(c, new CompanyCashAccount(company.id(), capital, capital, Money.zero(), Money.zero()), new ShareHolding(company.id(), request.founderId(), 1_000, 0), operation, capitalizationEvent(operation, "ESCROW_DEPOSITED", TreasuryOperationState.COMPLETED, ""));
+                finance.createCapitalization(c, new CompanyCashAccount(company.id(), capital, capital, Money.zero(), Money.zero()), new ShareHolding(company.id(), request.founderId(), initialShares, 0), operation, capitalizationEvent(operation, "ESCROW_DEPOSITED", TreasuryOperationState.COMPLETED, ""));
                 audits.append(c, new AuditEvent(UUID.randomUUID(), Optional.of(company.id()), Optional.of(request.founderId()), "COMPANY_REGISTERED", Map.of("capitalMinor", capital.minorUnits()), clock.now()));
                 transitionAndAudit(c, saga, RegistrationSagaState.ESCROW_DEPOSITED, RegistrationSagaState.COMPLETED, null);
                 return null;
@@ -132,7 +146,7 @@ public final class CompanyRegistrationService {
     }
     private RegistrationResult persistCompleted(RegistrationRequest request, RegistrationSaga saga) {
         Money paidInCapital = paidInCapital(request);
-        Company company = Company.register(new CompanyId(UUID.randomUUID()), request.companyName(), request.founderId(), paidInCapital, DividendRate.fromPercent(request.dividendPercent()), clock.now());
+        Company company = Company.register(new CompanyId(UUID.randomUUID()), request.companyName(), request.founderId(), paidInCapital, initialShares, DividendRate.fromPercent(request.dividendPercent()), clock.now());
         transactions.inTransaction(connection -> { transitionAndAudit(connection, saga, RegistrationSagaState.PREPARED, RegistrationSagaState.WITHDRAWN, null); return null; });
         transactions.inTransaction(connection -> { companies.insert(connection, company); audits.append(connection, new AuditEvent(UUID.randomUUID(), Optional.of(company.id()), Optional.of(request.founderId()), "COMPANY_REGISTERED", Map.of("capitalMinor", paidInCapital.minorUnits()), clock.now())); return null; });
         if (capitalization != null) capitalization.capitalize(company, request.founderId(), paidInCapital, saga.id()).toCompletableFuture().join();

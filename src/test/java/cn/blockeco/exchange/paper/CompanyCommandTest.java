@@ -1,6 +1,7 @@
 package cn.blockeco.exchange.paper;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import cn.blockeco.exchange.application.RegistrationRequest;
 import cn.blockeco.exchange.application.CompanyQueryService;
@@ -29,6 +30,13 @@ class CompanyCommandTest {
     private final CompanyCreationRules rules = new CompanyCreationRules(Money.fromMajor(new BigDecimal("1000.00"), 2), Money.fromMajor(new BigDecimal("10000.00"), 2), 2, 1000, List.of(30, 50, 70));
 
     @Test
+    void rejects_initial_shares_below_the_company_domain_minimum_during_configuration() {
+        assertThatThrownBy(() -> new CompanyCreationRules(Money.ofMinor(1), Money.ofMinor(1), 0, 999, List.of(50)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("initialShares");
+    }
+
+    @Test
     void root_help_includes_live_create_rules_for_authorized_player() {
         Player player = permittedPlayer("blockeco.company.create", "blockeco.company.info");
         CompanyCommand command = new CompanyCommand(mock(CompanyRegistrationService.class), mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN, rules);
@@ -53,7 +61,7 @@ class CompanyCommandTest {
 
     @Test
     void create_parser_uses_configured_dividend_choices() {
-        CompanyCreationRules customRules = new CompanyCreationRules(Money.fromMajor(new BigDecimal("1"), 0), Money.fromMajor(new BigDecimal("2"), 0), 0, 1, List.of(25, 75));
+        CompanyCreationRules customRules = new CompanyCreationRules(Money.fromMajor(new BigDecimal("1"), 0), Money.fromMajor(new BigDecimal("2"), 0), 0, 1_000, List.of(25, 75));
         Player player = permittedPlayer("blockeco.company.create");
         CompanyCommand command = new CompanyCommand(mock(CompanyRegistrationService.class), mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN, customRules);
 

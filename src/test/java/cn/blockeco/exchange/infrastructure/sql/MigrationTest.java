@@ -46,7 +46,7 @@ class MigrationTest {
                 assertThat(historyRows(connection, "V001")).isEqualTo(1);
                 assertThat(historyRows(connection, "V002")).isEqualTo(1);
                 assertThat(sagaRows(connection)).isEqualTo(1);
-                try (PreparedStatement statement = connection.prepareStatement("INSERT INTO registration_sagas VALUES ('33333333-3333-3333-3333-333333333333','44444444-4444-4444-4444-444444444444','reserved',1,'REJECTED',NULL,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')")) { statement.executeUpdate(); }
+                try (PreparedStatement statement = connection.prepareStatement("INSERT INTO registration_sagas (id, founder_uuid, company_normalized_name, total_withdrawal_minor, state, error_message, created_at, updated_at) VALUES ('33333333-3333-3333-3333-333333333333','44444444-4444-4444-4444-444444444444','reserved',1,'REJECTED',NULL,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')")) { statement.executeUpdate(); }
             }
         } finally { Files.deleteIfExists(file); }
     }

@@ -10,6 +10,7 @@ public record CompanyCreationRules(Money registrationFee, Money minimumCapital, 
     public CompanyCreationRules {
         Objects.requireNonNull(registrationFee, "registrationFee");
         Objects.requireNonNull(minimumCapital, "minimumCapital");
+        if (initialShares < 1_000) throw new IllegalArgumentException("initialShares must be at least 1000");
         allowedDividendPercent = List.copyOf(Objects.requireNonNull(allowedDividendPercent, "allowedDividendPercent"));
         if (allowedDividendPercent.isEmpty() || allowedDividendPercent.stream().anyMatch(value -> value == null || value < 1 || value > 100)
                 || allowedDividendPercent.stream().distinct().count() != allowedDividendPercent.size()) {

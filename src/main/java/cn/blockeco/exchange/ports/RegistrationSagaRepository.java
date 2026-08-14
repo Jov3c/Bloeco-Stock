@@ -16,6 +16,9 @@ public interface RegistrationSagaRepository {
 
     List<RegistrationSaga> findWithdrawnBefore(Instant cutoff);
 
+    /** Escrow-backed withdrawals cannot be compensated automatically after a crash. */
+    default List<RegistrationSaga> findEscrowWithdrawnBefore(Instant cutoff) { return List.of(); }
+
     /** Administrative visibility only; no recovery action is implied. */
     default List<RegistrationSaga> findRecoveryRecords() { return List.of(); }
 
