@@ -3,7 +3,7 @@ build/
 run/
 .idea/
 *.iml
-.worktrees/
+.worktrees
 .superpowers/
 *.db
 *.db-shm
