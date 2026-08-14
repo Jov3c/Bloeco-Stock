@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import cn.blockeco.exchange.domain.company.Company;
 import cn.blockeco.exchange.domain.company.CompanyId;
+import cn.blockeco.exchange.domain.company.CompanyStatus;
 import cn.blockeco.exchange.domain.company.DividendRate;
 import cn.blockeco.exchange.domain.audit.AuditEvent;
 import cn.blockeco.exchange.domain.money.Money;
@@ -58,6 +59,42 @@ class SqlCompanyRepositoryTest {
                 repository.insert(connection, company(" northwind   guild ", 2, DividendRate.SEVENTY));
                 return null;
             })).isInstanceOf(DuplicateCompanyNameException.class);
+        } finally {
+            Files.deleteIfExists(databaseFile);
+        }
+    }
+
+    @Test
+    void readsLegallyRehydratedCompanyAfterShareIncreaseAndListing() throws Exception {
+        Path databaseFile = Files.createTempFile("blockeco-company-rehydration-", ".db");
+        CompanyId id = new CompanyId(UUID.fromString("cb77f738-c87e-414d-b1a1-4fbd6442cd58"));
+        UUID founderId = UUID.fromString("8c760b55-95b3-49e5-982f-cb4ca336cf99");
+        Instant createdAt = Instant.parse("2026-08-14T04:00:00Z");
+        try (Database database = migratedDatabase(databaseFile)) {
+            insertCompanyRow(
+                    database,
+                    id,
+                    "northwind guild",
+                    "Northwind Guild",
+                    founderId,
+                    CompanyStatus.LISTED,
+                    17_500,
+                    1001,
+                    5000,
+                    createdAt);
+            SqlCompanyRepository repository = new SqlCompanyRepository(database.dataSource());
+
+            Company actual = repository.findById(id).orElseThrow();
+
+            assertThat(actual.id()).isEqualTo(id);
+            assertThat(actual.normalizedName()).isEqualTo("northwind guild");
+            assertThat(actual.displayName()).isEqualTo("Northwind Guild");
+            assertThat(actual.founderId()).isEqualTo(founderId);
+            assertThat(actual.status()).isEqualTo(CompanyStatus.LISTED);
+            assertThat(actual.treasury()).isEqualTo(Money.ofMinor(17_500));
+            assertThat(actual.totalShares()).isEqualTo(1001);
+            assertThat(actual.dividendRate()).isEqualTo(DividendRate.FIFTY);
+            assertThat(actual.createdAt()).isEqualTo(createdAt);
         } finally {
             Files.deleteIfExists(databaseFile);
         }
@@ -156,6 +193,38 @@ class SqlCompanyRepositoryTest {
         assertThat(actual.totalShares()).isEqualTo(expected.totalShares());
         assertThat(actual.dividendRate()).isEqualTo(expected.dividendRate());
         assertThat(actual.createdAt()).isEqualTo(expected.createdAt());
+    }
+
+    private void insertCompanyRow(
+            Database database,
+            CompanyId id,
+            String normalizedName,
+            String displayName,
+            UUID founderId,
+            CompanyStatus status,
+            long treasuryMinor,
+            long totalShares,
+            int dividendBasisPoints,
+            Instant createdAt) {
+        database.inTransaction(connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    INSERT INTO companies (id, normalized_name, display_name, founder_uuid, status, treasury_minor,
+                                           total_shares, dividend_basis_points, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """)) {
+                statement.setString(1, id.value().toString());
+                statement.setString(2, normalizedName);
+                statement.setString(3, displayName);
+                statement.setString(4, founderId.toString());
+                statement.setString(5, status.name());
+                statement.setLong(6, treasuryMinor);
+                statement.setLong(7, totalShares);
+                statement.setInt(8, dividendBasisPoints);
+                statement.setString(9, createdAt.toString());
+                statement.executeUpdate();
+            }
+            return null;
+        });
     }
 
     private String auditJson(Connection connection, UUID eventId) throws Exception {

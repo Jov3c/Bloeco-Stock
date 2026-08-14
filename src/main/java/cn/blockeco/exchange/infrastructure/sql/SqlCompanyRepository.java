@@ -84,13 +84,16 @@ public final class SqlCompanyRepository implements CompanyRepository {
         Money treasury = Money.ofMinor(row.getLong("treasury_minor"));
         DividendRate dividendRate = rateFromBasisPoints(row.getInt("dividend_basis_points"));
         Instant createdAt = Instant.parse(row.getString("created_at"));
-        Company company = Company.register(id, displayName, founderId, treasury, dividendRate, createdAt);
-        if (!company.normalizedName().equals(row.getString("normalized_name"))
-                || company.totalShares() != row.getLong("total_shares")
-                || company.status() != CompanyStatus.valueOf(row.getString("status"))) {
-            throw new IllegalStateException("stored company cannot be represented by the current domain model");
-        }
-        return company;
+        return Company.rehydrate(
+                id,
+                displayName,
+                row.getString("normalized_name"),
+                founderId,
+                treasury,
+                row.getLong("total_shares"),
+                dividendRate,
+                CompanyStatus.valueOf(row.getString("status")),
+                createdAt);
     }
 
     private static DividendRate rateFromBasisPoints(int basisPoints) {

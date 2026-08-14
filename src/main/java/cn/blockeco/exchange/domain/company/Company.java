@@ -26,16 +26,18 @@ public final class Company {
             String normalizedName,
             UUID founderId,
             Money treasury,
+            long totalShares,
             DividendRate dividendRate,
+            CompanyStatus status,
             Instant createdAt) {
         this.id = id;
         this.displayName = displayName;
         this.normalizedName = normalizedName;
         this.founderId = founderId;
         this.treasury = treasury;
-        this.totalShares = INITIAL_SHARE_COUNT;
+        this.totalShares = totalShares;
         this.dividendRate = dividendRate;
-        this.status = CompanyStatus.PENDING_ASSET_BINDING;
+        this.status = status;
         this.createdAt = createdAt;
     }
 
@@ -46,28 +48,59 @@ public final class Company {
             Money capital,
             DividendRate dividendRate,
             Instant createdAt) {
-        Objects.requireNonNull(id, "id");
-        Objects.requireNonNull(founderId, "founderId");
-        Objects.requireNonNull(capital, "capital");
-        Objects.requireNonNull(dividendRate, "dividendRate");
-        Objects.requireNonNull(createdAt, "createdAt");
-        if (founderId.getMostSignificantBits() == 0 && founderId.getLeastSignificantBits() == 0) {
-            throw new IllegalArgumentException("founderId must not be the zero UUID");
-        }
-        capital.requireNonNegative("capital");
-
-        String displayName = normalizeWhitespace(name);
-        int codePointCount = displayName.codePointCount(0, displayName.length());
-        if (codePointCount < 2 || codePointCount > 24) {
-            throw new IllegalArgumentException("name must contain between 2 and 24 Unicode code points");
-        }
-        return new Company(
+        String displayName = validateDisplayName(name);
+        return rehydrate(
                 id,
                 displayName,
                 displayName.toLowerCase(Locale.ROOT),
                 founderId,
                 capital,
+                INITIAL_SHARE_COUNT,
                 dividendRate,
+                CompanyStatus.PENDING_ASSET_BINDING,
+                createdAt);
+    }
+
+    public static Company rehydrate(
+            CompanyId id,
+            String displayName,
+            String normalizedName,
+            UUID founderId,
+            Money treasury,
+            long totalShares,
+            DividendRate dividendRate,
+            CompanyStatus status,
+            Instant createdAt) {
+        Objects.requireNonNull(id, "id");
+        requireNonZero(id.value(), "id");
+        Objects.requireNonNull(founderId, "founderId");
+        requireNonZero(founderId, "founderId");
+        Objects.requireNonNull(treasury, "treasury");
+        treasury.requireNonNegative("treasury");
+        if (totalShares < INITIAL_SHARE_COUNT) {
+            throw new IllegalArgumentException("totalShares must be at least " + INITIAL_SHARE_COUNT);
+        }
+        Objects.requireNonNull(dividendRate, "dividendRate");
+        Objects.requireNonNull(status, "status");
+        Objects.requireNonNull(createdAt, "createdAt");
+
+        String canonicalDisplayName = validateDisplayName(displayName);
+        if (!canonicalDisplayName.equals(displayName)) {
+            throw new IllegalArgumentException("displayName must be normalized");
+        }
+        String expectedNormalizedName = displayName.toLowerCase(Locale.ROOT);
+        if (!expectedNormalizedName.equals(normalizedName)) {
+            throw new IllegalArgumentException("normalizedName must match displayName");
+        }
+        return new Company(
+                id,
+                displayName,
+                normalizedName,
+                founderId,
+                treasury,
+                totalShares,
+                dividendRate,
+                status,
                 createdAt);
     }
 
@@ -127,5 +160,20 @@ public final class Company {
             offset += Character.charCount(codePoint);
         }
         return normalized.toString();
+    }
+
+    private static String validateDisplayName(String name) {
+        String displayName = normalizeWhitespace(name);
+        int codePointCount = displayName.codePointCount(0, displayName.length());
+        if (codePointCount < 2 || codePointCount > 24) {
+            throw new IllegalArgumentException("name must contain between 2 and 24 Unicode code points");
+        }
+        return displayName;
+    }
+
+    private static void requireNonZero(UUID value, String field) {
+        if (value.getMostSignificantBits() == 0 && value.getLeastSignificantBits() == 0) {
+            throw new IllegalArgumentException(field + " must not be the zero UUID");
+        }
     }
 }
