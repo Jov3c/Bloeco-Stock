@@ -37,7 +37,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         Path file = getDataFolder().toPath().resolve(getConfig().getString("database.file", "blockeco.db"));
         bootstrap = new BootstrapCoordinator<>(new PaperMainThread(this), this::finishEnable, failure -> failEnable("Blockeco initialization failed: " + failure.getMessage()), runtime::closeDatabase);
         runtime.attachBootstrap(bootstrap);
-        bootstrap.coordinate(java.util.concurrent.CompletableFuture.supplyAsync(() -> { Database db = new Database("jdbc:sqlite:" + file); try { db.migrate(); return db; } catch (Exception e) { db.close(); throw new IllegalStateException("SQLite migration failed", e); } }, sqlExecutor));
+        bootstrap.coordinate(java.util.concurrent.CompletableFuture.supplyAsync(() -> { Database db = new Database("jdbc:sqlite:" + file); runtime.attachDatabase(db); try { db.migrate(); return db; } catch (Exception e) { runtime.closeDatabase(db); throw new IllegalStateException("SQLite migration failed", e); } }, sqlExecutor));
     }
 
     private boolean finishEnable(Database db) {

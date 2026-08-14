@@ -22,6 +22,13 @@ final class PluginRuntime {
     boolean accepting() { return !stopped.get(); }
     void attachBootstrap(BootstrapCoordinator<?> value) { boolean stop; synchronized (lock) { bootstrap = value; stop = stopped.get(); } if (stop) value.stop(); }
     void attachExecutor(ExecutorService value) { boolean stop; synchronized (lock) { executor = value; stop = stopped.get(); } if (stop) shutdown(value); }
+    /** Claims a pool as soon as it exists, before any potentially-blocking migration work. */
+    void attachDatabase(AutoCloseable value) {
+        synchronized (lock) {
+            if (!stopped.get()) { database = value; return; }
+        }
+        closeDatabase(value);
+    }
     boolean attachReady(CompanyCommand value, AutoCloseable db) {
         synchronized (lock) {
             command = value;
@@ -36,8 +43,8 @@ final class PluginRuntime {
         synchronized (lock) { currentCommand = command; currentBootstrap = bootstrap; currentExecutor = executor; currentDatabase = database; }
         if (currentCommand != null) currentCommand.setAccepting(false);
         if (currentBootstrap != null) currentBootstrap.stop();
-        if (currentExecutor != null) shutdown(currentExecutor);
         closeDatabase(currentDatabase);
+        if (currentExecutor != null) shutdown(currentExecutor);
     }
     void closeDatabase(AutoCloseable value) {
         if (value != null && databaseClosed.compareAndSet(false, true)) try { value.close(); } catch (Exception e) { throw new IllegalStateException("could not close Blockeco database", e); }

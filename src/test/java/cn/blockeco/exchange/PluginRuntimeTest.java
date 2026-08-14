@@ -12,6 +12,17 @@ import org.bukkit.entity.Player;
 import org.junit.jupiter.api.Test;
 
 class PluginRuntimeTest {
+ @Test void stop_closes_published_database_before_a_blocked_migration_finishes() throws Exception {
+  CompanyRegistrationService service=mock(CompanyRegistrationService.class); MainThreadExecutor main=new MainThreadExecutor(){public <T> CompletionStage<T> submit(java.util.function.Supplier<T>w){return CompletableFuture.completedFuture(w.get());}};
+  CompanyCommand command=new CompanyCommand(service,mock(CompanyQueryService.class),new Messages(null),main); ExecutorService migrationExecutor=Executors.newSingleThreadExecutor(); ExecutorService stopper=Executors.newSingleThreadExecutor();
+  CountDownLatch published=new CountDownLatch(1); CountDownLatch releaseMigration=new CountDownLatch(1); CountDownLatch closed=new CountDownLatch(1); java.util.concurrent.atomic.AtomicInteger closes=new java.util.concurrent.atomic.AtomicInteger(); java.util.concurrent.atomic.AtomicInteger wired=new java.util.concurrent.atomic.AtomicInteger();
+  PluginRuntime runtime=new PluginRuntime(command); BootstrapCoordinator<AutoCloseable> bootstrap=new BootstrapCoordinator<>(main, value -> { wired.incrementAndGet(); return runtime.attachReady(command,value); }, failure -> {}, runtime::closeDatabase); runtime.attachBootstrap(bootstrap); runtime.attachExecutor(migrationExecutor);
+  CompletableFuture<AutoCloseable> migration=CompletableFuture.supplyAsync(() -> { AutoCloseable database=() -> { closes.incrementAndGet(); closed.countDown(); }; runtime.attachDatabase(database); published.countDown(); try { releaseMigration.await(); } catch (InterruptedException exception) { Thread.currentThread().interrupt(); } return database; }, migrationExecutor);
+  bootstrap.coordinate(migration); assertThat(published.await(1, TimeUnit.SECONDS)).isTrue(); Future<?> stopping=stopper.submit(runtime::stop);
+  assertThat(closed.await(1, TimeUnit.SECONDS)).isTrue(); assertThat(closes).hasValue(1); releaseMigration.countDown(); stopping.get(1, TimeUnit.SECONDS); migration.get(1, TimeUnit.SECONDS); stopper.shutdown();
+  Player player=mock(Player.class); when(player.hasPermission("blockeco.company.create")).thenReturn(true); command.onCommand(player,mock(Command.class),"company",new String[]{"create","North","30"});
+  assertThat(wired).hasValue(0); verifyNoInteractions(service); assertThat(migrationExecutor.isShutdown()).isTrue();
+ }
  @Test void stop_during_migration_prevents_wiring_and_closes_completed_database_once() {
   CompanyRegistrationService service=mock(CompanyRegistrationService.class); MainThreadExecutor main=new MainThreadExecutor(){public <T> CompletionStage<T> submit(java.util.function.Supplier<T>w){return CompletableFuture.completedFuture(w.get());}};
   CompanyCommand command=new CompanyCommand(service,mock(CompanyQueryService.class),new Messages(null),main); command.setAccepting(true);
