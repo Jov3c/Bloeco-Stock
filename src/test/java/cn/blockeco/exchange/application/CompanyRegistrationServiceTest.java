@@ -14,6 +14,12 @@ import cn.blockeco.exchange.ports.EconomyGateway;
 import cn.blockeco.exchange.ports.MainThreadExecutor;
 import cn.blockeco.exchange.ports.RegistrationSagaRepository;
 import cn.blockeco.exchange.ports.TransactionRunner;
+import cn.blockeco.exchange.infrastructure.sql.Database;
+import cn.blockeco.exchange.infrastructure.sql.SqlAuditLog;
+import cn.blockeco.exchange.infrastructure.sql.SqlCompanyRepository;
+import cn.blockeco.exchange.infrastructure.sql.SqlRegistrationSagaRepository;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.time.Instant;
 import java.util.HashMap;
@@ -23,6 +29,8 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
 class CompanyRegistrationServiceTest {
@@ -100,6 +108,35 @@ class CompanyRegistrationServiceTest {
         assertThat(fixture.economy.calls).isZero();
     }
 
+    @Test
+    void sqlite_name_reservation_rejects_second_request_before_any_second_withdrawal() throws Exception {
+        Path file = Files.createTempFile("blockeco-registration-reservation-", ".db");
+        try (Database database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate();
+            CountDownLatch firstAtVault = new CountDownLatch(1);
+            CountDownLatch releaseFirst = new CountDownLatch(1);
+            BlockingEconomy economy = new BlockingEconomy(firstAtVault, releaseFirst);
+            MainThreadExecutor main = new MainThreadExecutor() {
+                @Override public <T> CompletionStage<T> submit(Supplier<T> work) {
+                    return CompletableFuture.supplyAsync(work);
+                }
+            };
+            CompanyRegistrationService service = new CompanyRegistrationService(
+                    new SqlCompanyRepository(database.dataSource()), new SqlRegistrationSagaRepository(database.dataSource()),
+                    new SqlAuditLog(), database, economy, main, Runnable::run, () -> Instant.parse("2026-08-14T12:00:00Z"));
+            RegistrationRequest request = new RegistrationRequest(UUID.randomUUID(), "Reserved Name", 50);
+
+            CompletionStage<RegistrationResult> first = service.register(request);
+            assertThat(firstAtVault.await(5, TimeUnit.SECONDS)).isTrue();
+            RegistrationResult second = service.register(new RegistrationRequest(UUID.randomUUID(), "  reserved   name ", 50)).toCompletableFuture().join();
+
+            assertThat(second.status()).isEqualTo(RegistrationResult.Status.DUPLICATE_NAME);
+            assertThat(economy.withdrawCalls).isEqualTo(1);
+            releaseFirst.countDown();
+            assertThat(first.toCompletableFuture().join().status()).isEqualTo(RegistrationResult.Status.SUCCESS);
+        } finally { Files.deleteIfExists(file); }
+    }
+
     private static final class RegistrationFixture {
         private final Map<String, Company> company = new HashMap<>();
         private final Map<UUID, RegistrationSaga> sagas = new HashMap<>();
@@ -164,5 +201,17 @@ class CompanyRegistrationServiceTest {
         @Override public Result withdraw(UUID player, Money amount) { calls++; withdrawn = amount; return withdrawResult; }
         @Override public Result deposit(UUID player, Money amount) { calls++; deposited = amount; return depositResult; }
         Money withdrawn() { return withdrawn; } Money deposited() { return deposited; }
+    }
+
+    private static final class BlockingEconomy implements EconomyGateway {
+        private final CountDownLatch entered; private final CountDownLatch release; private int withdrawCalls;
+        private BlockingEconomy(CountDownLatch entered, CountDownLatch release) { this.entered = entered; this.release = release; }
+        @Override public Result withdraw(UUID player, Money amount) {
+            withdrawCalls++; entered.countDown();
+            try { if (!release.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("test timeout"); }
+            catch (InterruptedException exception) { Thread.currentThread().interrupt(); throw new IllegalStateException(exception); }
+            return Result.success("");
+        }
+        @Override public Result deposit(UUID player, Money amount) { return Result.success(""); }
     }
 }

@@ -48,3 +48,9 @@ Vault's `EconomyResponse` only gives a generic failure outcome; a provider-retur
 - SQLite reservation constraint violations are translated to `DuplicateCompanyNameException`; service preparation converts that typed condition into `DUPLICATE_NAME` rather than leaking an asynchronous failure.
 - Recovery method renamed to `recoverStaleRegistrations` because it covers both PREPARED and WITHDRAWN records.
 - RED/GREEN commands: `./gradlew.bat test --tests '*MigrationTest' --tests '*CompanyRegistrationServiceTest' --tests '*VaultEconomyGatewayTest'` then `./gradlew.bat test`; both green.
+
+### Round 2 completion
+
+- Added `sqlite_name_reservation_rejects_second_request_before_any_second_withdrawal`: a real temporary SQLite database, first request blocked at the main-thread/Vault fake after PREPARED, and an interleaved normalized-name request returning `DUPLICATE_NAME`; it asserts exactly one withdrawal before releasing the first request.
+- `SqlRegistrationSagaRepository` now requires SQLite's `SQLITE_CONSTRAINT_UNIQUE` result code and verifies an active persisted saga of the same normalized name using the same connection before emitting `DuplicateCompanyNameException`; unrelated database failures remain SQL failures.
+- Focused command: `./gradlew.bat test --tests '*MigrationTest' --tests '*SqlCompanyRepositoryTest' --tests '*CompanyRegistrationServiceTest' --tests '*VaultEconomyGatewayTest'` — GREEN. Full `./gradlew.bat test` — GREEN.

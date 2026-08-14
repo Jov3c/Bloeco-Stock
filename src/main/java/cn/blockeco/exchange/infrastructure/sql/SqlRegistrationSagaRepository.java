@@ -12,6 +12,8 @@ import java.util.UUID;
 import java.util.List;
 import java.util.ArrayList;
 import javax.sql.DataSource;
+import org.sqlite.SQLiteErrorCode;
+import org.sqlite.SQLiteException;
 
 public final class SqlRegistrationSagaRepository implements RegistrationSagaRepository {
     private final DataSource dataSource;
@@ -42,10 +44,28 @@ public final class SqlRegistrationSagaRepository implements RegistrationSagaRepo
             statement.setString(1, saga.id().toString()); statement.setString(2, saga.founderId().toString()); statement.setString(3, saga.companyNormalizedName()); statement.setLong(4, saga.totalWithdrawal().minorUnits()); statement.setString(5, saga.state().name()); statement.setString(6, saga.errorMessage()); statement.setString(7, saga.createdAt().toString()); statement.setString(8, saga.updatedAt().toString());
             statement.executeUpdate();
         } catch (SQLException exception) {
-            if (exception.getMessage() != null && exception.getMessage().contains("registration_sagas.company_normalized_name")) {
+            if (isActiveNameReservationConflict(connection, saga.companyNormalizedName(), exception)) {
                 throw new DuplicateCompanyNameException(saga.companyNormalizedName(), exception);
             }
             throw exception;
+        }
+    }
+
+    private boolean isActiveNameReservationConflict(Connection connection, String normalizedName, SQLException exception)
+            throws SQLException {
+        if (!(exception instanceof SQLiteException sqlite)
+                || sqlite.getResultCode() != SQLiteErrorCode.SQLITE_CONSTRAINT_UNIQUE) {
+            return false;
+        }
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT 1 FROM registration_sagas
+                WHERE company_normalized_name = ?
+                  AND state IN ('PREPARED', 'WITHDRAWN', 'REFUND_REQUIRED', 'AMBIGUOUS')
+                """)) {
+            statement.setString(1, normalizedName);
+            try (var rows = statement.executeQuery()) {
+                return rows.next();
+            }
         }
     }
 
