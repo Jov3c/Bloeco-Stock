@@ -1,6 +1,6 @@
 # BlockStock
 
-BlockStock 是 Minecraft 经济与公司交易所的**仅服务端** Paper 插件基础。在 Phase 1 中，玩家无需安装客户端模组或资源包。本构建可安全地创建持久化公司、通过 Vault 扣除注册资金，并让管理员查看恢复信息。交易、图表、土地/商店/生产适配器、分红、发行与退市将在后续阶段提供。
+BlockStock 是 Minecraft 经济与公司交易所的**仅服务端** Paper 插件基础。在 Phase 1 中，玩家无需安装客户端模组或资源包。本构建可安全地创建持久化公司、通过 Vault 扣除注册资金，并让管理员查看恢复信息。交易、图表、土地/商店/生产适配器、分红与退市将在后续阶段提供。
 
 ## 环境要求
 
@@ -57,6 +57,7 @@ Paper 完成保存，再让 BlockStock 的下一次启动完成迁移。
 | `company.registration-fee` | `'1000.00'` | 成功注册时从流通中移除的正数费用。 |
 | `company.minimum-capital` | `'10000.00'` | 转入新公司内部金库的正数资本。 |
 | `company.initial-shares` | `1000` | 保留的 Phase 1/IPO 设置。初始公司固定使用 1,000 股。 |
+| `company.treasury-escrow-uuid` | 非零 UUID | BlockStock 专用、非玩家的 Vault 托管账户。启动时会验证；账户不存在时会请求 Vault 经济提供方创建它。若提供方拒绝，失败时公司和 IPO 命令不会接受请求。绝不可填写真实玩家 UUID。 |
 | `company.allowed-dividend-percent` | `[30, 50, 70]` | 三个不可变注册选项的保留配置镜像。 |
 | `database.file` | `blockeco.db` | 相对于 `plugins/BlockStock/` 的 SQLite 文件名。 |
 | `database.pool-size` | `2` | 保留的连接池大小设置；本 Phase 1 构建使用固定的小型 Hikari 配置。 |
@@ -68,12 +69,14 @@ Paper 完成保存，再让 BlockStock 的下一次启动完成迁移。
 
 | 命令 | 权限 | 说明 |
 | --- | --- | --- |
-| `/company create <name> <30\|50\|70>` | `blockeco.company.create`（默认：true） | 仅玩家可用。名称可以包含空格，也接受引号名称。该命令启动异步注册。 |
+| `/company create <name> <paid-in-capital> <30\|50\|70>` | `blockeco.company.create`（默认：true） | 仅玩家可用。名称可以包含空格，也接受引号名称。该命令启动异步注册。 |
 | `/company info <name>` | `blockeco.company.info`（默认：true） | 显示已保存的公司名称与当前生命周期状态。 |
 | `/company recovery list` | `blockeco.admin.recovery`（默认：op） | 列出未解决/可见的注册记录；绝不强制退款。 |
+| `/company asset bind <adapter> <external-key>` | `blockeco.company.asset.bind`（默认：true） | 将创始人的公司绑定到外部资产；没有已验证适配器时会拒绝。 |
+| `/company ipo announce <目标金额> <发行价>` | `blockeco.company.ipo.announce`（默认：true） | 为已绑定资产的公司公告首次发行；公告 12 小时后才开放认购。 |
 
 直接执行 `/company` 会按调用者权限显示中文指引：可创建的玩家会看到“BlockStock
-公司命令：”、`/company create <名称> <DIVIDENDS>`，以及创建费、最低注册资本、
+公司命令：”、`/company create <名称> <实缴资本> <DIVIDENDS>`，以及创建费、最低注册资本、
 合计余额、初始发行股数、必须为玩家、插件完成初始化和公司名不可重复等规则；拥有
 查询或恢复权限时也会分别看到 `/company info <名称>` 与
 `/company recovery list`。不具备某项权限时，该项不会出现在根帮助中。
@@ -95,7 +98,17 @@ Paper 完成保存，再让 BlockStock 的下一次启动完成迁移。
 `/company `、`/company create 红石工坊 `、`/company recovery `。上文描述的是实现的预期
 行为；在可优雅停服并启动 BlockStock 后，仍须由 Aoozzz 实机验证并记录结果。
 
-正常路径中，创建公司会**恰好一次**扣除**注册费用 + 最低资本**。仅最低资本进入公司金库。公司初始状态为 `PENDING_ASSET_BINDING`，拥有 1,000 股及所选、不可变的 30%、50% 或 70% 分红档位。创始人没有金库提款命令。
+正常路径中，`/company create <名称> <实缴资本> <30|50|70>` 会**恰好一次**扣除**注册费用 + 实缴资本**，且实缴资本不得低于 `company.minimum-capital`。注册费从流通中移除；仅实缴资本会进入 BlockStock 的公司现金账，并在 Vault 的保留托管账户中等额留存。公司初始状态为 `PENDING_ASSET_BINDING`，拥有 1,000 股及所选、不可变的 30%、50% 或 70% 分红档位。创始人没有金库提款命令。
+
+## 公司财务与 IPO 运维
+
+BlockStock 在 Vault 中只使用 `company.treasury-escrow-uuid` 指向的非玩家托管身份。先从创始人账户扣除注册费和实缴资本；只有实缴资本再存入该托管身份，并在 SQLite 中创建同额公司现金/实缴资本记录。托管身份不是玩家钱包，也不是可由公司命令取现的账户。每次调用有持久化操作 ID 和审计事件；重启恢复绝不重放无法证明结果的 Vault 调用。
+
+首次部署前，确认 Vault 报告唯一经济提供方。启动前置检查会检查这个保留 UUID 对应的账户；账户不存在时仅请求提供方创建空账户，不会发生资金转移。若提供方拒绝，日志会给出中文管理员诊断，`/company` 继续显示“正在初始化”，不会开始资本恢复或接受公司/资产/IPO 操作。请先修复 Vault/账户配置再重启；不要通过改用玩家 UUID 规避检查。
+
+启动验证通过后，BlockStock 会在 SQL 线程执行一次遗留公司资本化恢复，再将公司命令切换为可接受状态。旧公司按其保存的金库余额创建一次、稳定 ID 的资本化记录；重复启动不会重复建立现金记录、股份或 Vault 入账。处于无法证明外部转账结果的操作会标记为 `AMBIGUOUS`，需要管理员查 Vault 历史与审计记录，不能自动补偿。
+
+资产绑定依赖第三方 `CompanyAssetAdapter`。本发行包**不包含**土地、商店、生产或任何第三方资产适配器；所以未安装并验证适配器时，不能声称资产绑定成功。IPO 公告需要已绑定资产。公告后固定等待 12 小时才可认购，开放窗口为两天，募资目标不得超过公司实缴资本的五倍。没有已安装、已验证的适配器及真实玩家会话时，不得宣称资产归属验证、玩家认购或资金结算已经通过。
 
 ## 备份、恢复与故障处理
 
