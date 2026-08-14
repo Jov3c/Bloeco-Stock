@@ -141,6 +141,9 @@ public final class Company {
     }
 
     public Company withTotalShares(long totalShares) {
+        if (totalShares < this.totalShares) {
+            throw new IllegalArgumentException("totalShares must not decrease");
+        }
         return rehydrate(id, displayName, normalizedName, founderId, treasury, totalShares, dividendRate, status, createdAt);
     }
 

@@ -29,6 +29,9 @@ public record PrimaryOffering(
         if (target.minorUnits() == 0 || issuePrice.minorUnits() == 0 || maximumShares <= 0) {
             throw new IllegalArgumentException("offering target, price, and maximum shares must be positive");
         }
+        if (maximumShares != target.minorUnits() / issuePrice.minorUnits()) {
+            throw new IllegalArgumentException("maximumShares must equal target divided by issuePrice");
+        }
         Objects.requireNonNull(announcedAt, "announcedAt");
         Objects.requireNonNull(opensAt, "opensAt");
         Objects.requireNonNull(closesAt, "closesAt");

@@ -21,12 +21,9 @@ CREATE TABLE asset_bindings (
   external_key TEXT NOT NULL,
   verified_owner_uuid TEXT NOT NULL,
   state TEXT NOT NULL CHECK (state IN ('PENDING','ACTIVE','REVOKED')),
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  UNIQUE (adapter_id, external_key)
 );
-
-CREATE UNIQUE INDEX active_asset_binding_key
-ON asset_bindings(adapter_id, external_key)
-WHERE state = 'ACTIVE';
 
 CREATE TABLE treasury_operations (
   id TEXT PRIMARY KEY,
@@ -52,7 +49,7 @@ CREATE TABLE primary_offerings (
   company_id TEXT NOT NULL REFERENCES companies(id),
   target_minor INTEGER NOT NULL CHECK (target_minor > 0),
   issue_price_minor INTEGER NOT NULL CHECK (issue_price_minor > 0),
-  maximum_shares INTEGER NOT NULL CHECK (maximum_shares > 0),
+  maximum_shares INTEGER NOT NULL CHECK (maximum_shares > 0 AND maximum_shares = target_minor / issue_price_minor),
   announced_at TEXT NOT NULL,
   opens_at TEXT NOT NULL,
   closes_at TEXT NOT NULL,

@@ -109,8 +109,12 @@ class MigrationTest {
                     assertThatThrownBy(holding::executeUpdate).isInstanceOf(Exception.class);
                 }
                 try (PreparedStatement binding = connection.prepareStatement("INSERT INTO asset_bindings VALUES (?, ?, ?, ?, ?, ?, ?)")) {
-                    binding.setString(1, "binding-1"); binding.setString(2, "company-1"); binding.setString(3, "lands"); binding.setString(4, "plot-a"); binding.setString(5, "owner-1"); binding.setString(6, "ACTIVE"); binding.setString(7, "2026-08-14T12:00:00Z"); binding.executeUpdate();
+                    binding.setString(1, "binding-1"); binding.setString(2, "company-1"); binding.setString(3, "lands"); binding.setString(4, "plot-a"); binding.setString(5, "owner-1"); binding.setString(6, "PENDING"); binding.setString(7, "2026-08-14T12:00:00Z"); binding.executeUpdate();
                     binding.setString(1, "binding-2"); assertThatThrownBy(binding::executeUpdate).isInstanceOf(Exception.class);
+                }
+                try (PreparedStatement offering = connection.prepareStatement("INSERT INTO primary_offerings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+                    offering.setString(1, "offering-1"); offering.setString(2, "company-1"); offering.setLong(3, 501); offering.setLong(4, 100); offering.setLong(5, 6); offering.setString(6, "2026-08-14T12:00:00Z"); offering.setString(7, "2026-08-15T00:00:00Z"); offering.setString(8, "2026-08-17T00:00:00Z"); offering.setString(9, "ANNOUNCED");
+                    assertThatThrownBy(offering::executeUpdate).isInstanceOf(Exception.class);
                 }
             }
         } finally {

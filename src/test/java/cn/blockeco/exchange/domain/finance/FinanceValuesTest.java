@@ -58,11 +58,23 @@ class FinanceValuesTest {
     }
 
     @Test
+    void offering_rejects_a_maximum_share_count_that_does_not_match_its_target_and_price() {
+        assertThatThrownBy(() -> new PrimaryOffering(
+                        UUID.randomUUID(), COMPANY_ID, Money.ofMinor(501), Money.ofMinor(100), 6,
+                        ANNOUNCED_AT, ANNOUNCED_AT.plus(Duration.ofHours(12)),
+                        ANNOUNCED_AT.plus(Duration.ofHours(60)), PrimaryOfferingState.ANNOUNCED))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void company_preserves_its_invariants_when_issued_shares_are_added() {
         Company company = Company.register(
                 COMPANY_ID, "Finance Works", UUID.randomUUID(), Money.zero(), DividendRate.FIFTY, ANNOUNCED_AT);
 
-        assertThat(company.withTotalShares(1_005).totalShares()).isEqualTo(1_005L);
-        assertThatThrownBy(() -> company.withTotalShares(999L)).isInstanceOf(IllegalArgumentException.class);
+        Company grownCompany = company.withTotalShares(1_005);
+
+        assertThat(grownCompany.totalShares()).isEqualTo(1_005L);
+        assertThatThrownBy(() -> grownCompany.withTotalShares(1_004L))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }
