@@ -18,6 +18,7 @@ public record CompanyCreationRules(Money registrationFee, Money minimumCapital, 
     }
 
     public Money totalRequired() { return registrationFee.plus(minimumCapital); }
+    public boolean acceptsPaidInCapital(Money paidInCapital) { return paidInCapital.minorUnits() > 0 && paidInCapital.minorUnits() >= minimumCapital.minorUnits(); }
     public String registrationFeeMajor() { return registrationFee.toMajor(scale).toPlainString(); }
     public String minimumCapitalMajor() { return minimumCapital.toMajor(scale).toPlainString(); }
     public String totalRequiredMajor() { return totalRequired().toMajor(scale).toPlainString(); }

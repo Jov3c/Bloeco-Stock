@@ -36,6 +36,18 @@ import org.junit.jupiter.api.Test;
 class CompanyRegistrationServiceTest {
 
     @Test
+    void completed_registration_uses_requested_paid_in_capital() {
+        RegistrationFixture fixture = RegistrationFixture.standard();
+        Money paidInCapital = Money.ofMinor(1_234_567);
+
+        RegistrationResult result = fixture.service.register(new RegistrationRequest(UUID.randomUUID(), "Capital Guild", paidInCapital, 50)).toCompletableFuture().join();
+
+        assertThat(result.status()).isEqualTo(RegistrationResult.Status.SUCCESS);
+        assertThat(fixture.economy().withdrawn()).isEqualTo(Money.ofMinor(1_334_567));
+        assertThat(fixture.savedCompany().treasury()).isEqualTo(paidInCapital);
+    }
+
+    @Test
     void successful_registration_puts_only_capital_in_treasury() {
         RegistrationFixture fixture = RegistrationFixture.standard();
         RegistrationResult result = fixture.register("Red Stone", 50);

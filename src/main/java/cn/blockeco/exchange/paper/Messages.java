@@ -13,14 +13,14 @@ public final class Messages {
     public Component initializing() { return message("initializing", "BlockStock 正在初始化，请稍后再试。"); }
     public Component noPermission() { return message("no-permission", "你没有权限。"); }
     public Component playersOnly() { return message("players-only", "此命令只能由玩家执行。"); }
-    public Component usageCreate(CompanyCreationRules rules) { return message("usage-create", "用法：/company create <名称> <DIVIDENDS>").replaceText(b -> b.matchLiteral("DIVIDENDS").replacement(rules.dividendChoices())); }
+    public Component usageCreate(CompanyCreationRules rules) { return message("usage-create", "用法：/company create <名称> <实缴资本> <DIVIDENDS>").replaceText(b -> b.matchLiteral("DIVIDENDS").replacement(rules.dividendChoices())); }
     public Component usageInfo() { return message("usage-info", "用法：/company info <名称>"); }
     public Component usageRecovery() { return message("usage-recovery", "用法：/company recovery list"); }
     public List<Component> companyHelp(boolean canCreate, boolean canInfo, boolean canRecovery, CompanyCreationRules rules) {
         java.util.ArrayList<Component> lines = new java.util.ArrayList<>();
         lines.add(message("help-root", "BlockStock 公司命令："));
         if (canCreate) {
-            lines.add(message("help-create", "/company create <名称> <DIVIDENDS>").replaceText(b -> b.matchLiteral("DIVIDENDS").replacement(rules.dividendChoices())));
+            lines.add(message("help-create", "/company create <名称> <实缴资本> <DIVIDENDS>").replaceText(b -> b.matchLiteral("DIVIDENDS").replacement(rules.dividendChoices())));
             String createRules = net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText().serialize(template("help-create-rules", "创建费：%fee%\n最低注册资本：%capital%\n合计余额：%total%\n初始发行：%shares% 股\n必须是玩家\n插件完成初始化\n公司名不能重复", rules));
             for (String line : createRules.split("\\R")) lines.add(Component.text(line));
         }

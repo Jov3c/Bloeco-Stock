@@ -4,6 +4,8 @@ import cn.blockeco.exchange.application.*;
 import cn.blockeco.exchange.domain.registration.RegistrationSaga;
 import cn.blockeco.exchange.application.CapitalizationRecoveryRecord;
 import cn.blockeco.exchange.ports.MainThreadExecutor;
+import cn.blockeco.exchange.domain.money.Money;
+import java.math.BigDecimal;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import org.bukkit.command.*;
@@ -16,12 +18,14 @@ public final class CompanyCommand implements CommandExecutor {
     public CompanyCommand(CompanyRegistrationService registration, CompanyQueryService queries, Messages messages, MainThreadExecutor mainThread, CompanyCreationRules rules) { this.registration=registration; this.queries=queries; this.messages=messages; this.mainThread=mainThread; this.rules=rules; }
     public void setAccepting(boolean accepting) { this.accepting = accepting; }
     public static Optional<RegistrationRequest> parseCreate(UUID player, String[] args, CompanyCreationRules rules) {
-        if (args.length < 3 || !"create".equalsIgnoreCase(args[0])) return Optional.empty();
+        if (args.length < 4 || !"create".equalsIgnoreCase(args[0])) return Optional.empty();
         int percent; try { percent = Integer.parseInt(args[args.length - 1]); } catch (NumberFormatException e) { return Optional.empty(); }
         if (!rules.allowedDividendPercent().contains(percent)) return Optional.empty();
-        String name = String.join(" ", Arrays.copyOfRange(args, 1, args.length - 1)).trim();
+        Money paidInCapital; try { paidInCapital = Money.fromMajor(new BigDecimal(args[args.length - 2]), rules.scale()); } catch (ArithmeticException | NumberFormatException e) { return Optional.empty(); }
+        if (!rules.acceptsPaidInCapital(paidInCapital)) return Optional.empty();
+        String name = String.join(" ", Arrays.copyOfRange(args, 1, args.length - 2)).trim();
         if (name.length() >= 2 && name.startsWith("\"") && name.endsWith("\"")) name = name.substring(1, name.length() - 1).trim();
-        return name.isBlank() ? Optional.empty() : Optional.of(new RegistrationRequest(player, name, percent));
+        return name.isBlank() ? Optional.empty() : Optional.of(new RegistrationRequest(player, name, paidInCapital, percent));
     }
     @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (args.length == 0) { messages.companyHelp(sender instanceof Player && sender.hasPermission("blockeco.company.create"), sender.hasPermission("blockeco.company.info"), sender.hasPermission("blockeco.admin.recovery"), rules).forEach(sender::sendMessage); return true; }

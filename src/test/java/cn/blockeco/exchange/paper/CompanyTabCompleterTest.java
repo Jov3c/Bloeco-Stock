@@ -23,7 +23,7 @@ class CompanyTabCompleterTest {
 
     @Test
     void dividend_and_recovery_candidates_are_permission_scoped_and_prefix_filtered() {
-        assertThat(tab.complete(playerWith("blockeco.company.create"), new String[] {"create", "红石", "5"})).containsExactly("50");
+        assertThat(tab.complete(playerWith("blockeco.company.create"), new String[] {"create", "红石", "10000.00", "5"})).containsExactly("50");
         assertThat(tab.complete(opWithAllPermissions(), new String[] {"recovery", ""})).containsExactly("list");
         assertThat(tab.complete(mock(CommandSender.class), new String[] {""})).isEmpty();
     }

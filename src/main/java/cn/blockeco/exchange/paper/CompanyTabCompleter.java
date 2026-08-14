@@ -19,7 +19,7 @@ public final class CompanyTabCompleter implements TabCompleter {
             if (sender.hasPermission("blockeco.admin.recovery")) choices.add("recovery");
             return filter(choices, args[0]);
         }
-        if (args.length >= 3 && "create".equalsIgnoreCase(args[0]) && sender instanceof Player && sender.hasPermission("blockeco.company.create"))
+        if (args.length >= 4 && "create".equalsIgnoreCase(args[0]) && sender instanceof Player && sender.hasPermission("blockeco.company.create"))
             return filter(rules.allowedDividendPercent().stream().map(String::valueOf).toList(), args[args.length - 1]);
         if (args.length == 2 && "recovery".equalsIgnoreCase(args[0]) && sender.hasPermission("blockeco.admin.recovery")) return filter(List.of("list"), args[1]);
         return List.of();

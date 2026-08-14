@@ -19,12 +19,20 @@ public final class CompanyRegistrationService {
     private final CompanyRepository companies; private final RegistrationSagaRepository sagas; private final AuditLog audits;
     private final TransactionRunner transactions; private final EconomyGateway economy; private final MainThreadExecutor mainThread;
     private final Executor sqlExecutor; private final AppClock clock;
+    private final CompanyCapitalizationService capitalization;
     public CompanyRegistrationService(CompanyRepository companies, RegistrationSagaRepository sagas, AuditLog audits,
             TransactionRunner transactions, EconomyGateway economy, MainThreadExecutor mainThread, Executor sqlExecutor, AppClock clock, Money registrationFee, Money minimumCapital) {
+        this(companies, sagas, audits, transactions, economy, mainThread, sqlExecutor, clock, registrationFee, minimumCapital, null);
+    }
+    public CompanyRegistrationService(CompanyRepository companies, RegistrationSagaRepository sagas, AuditLog audits,
+            TransactionRunner transactions, EconomyGateway economy, MainThreadExecutor mainThread, Executor sqlExecutor, AppClock clock, Money registrationFee, Money minimumCapital, CompanyCapitalizationService capitalization) {
         this.companies=companies; this.sagas=sagas; this.audits=audits; this.transactions=transactions; this.economy=economy;
-        this.mainThread=mainThread; this.sqlExecutor=sqlExecutor; this.clock=clock; this.registrationFee=registrationFee; this.minimumCapital=minimumCapital;
+        this.mainThread=mainThread; this.sqlExecutor=sqlExecutor; this.clock=clock; this.registrationFee=registrationFee; this.minimumCapital=minimumCapital; this.capitalization=capitalization;
     }
     public CompletionStage<RegistrationResult> register(RegistrationRequest request) {
+        Money paidInCapital = paidInCapital(request);
+        if (paidInCapital.minorUnits() <= 0 || paidInCapital.minorUnits() < minimumCapital.minorUnits())
+            return CompletableFuture.completedFuture(RegistrationResult.of(RegistrationResult.Status.PROVIDER_FAILURE, "paid-in capital is below the configured minimum"));
         return CompletableFuture.supplyAsync(() -> prepare(request), sqlExecutor).thenCompose(prepared -> {
             if (prepared.result != null) return CompletableFuture.completedFuture(prepared.result);
             return mainThread.submit(() -> economy.withdraw(request.founderId(), prepared.saga.totalWithdrawal()))
@@ -48,9 +56,10 @@ public final class CompanyRegistrationService {
     }
     private Prepared prepare(RegistrationRequest request) {
         DividendRate rate = DividendRate.fromPercent(request.dividendPercent());
-        Company candidate = Company.register(new CompanyId(UUID.randomUUID()), request.companyName(), request.founderId(), minimumCapital, rate, clock.now());
+        Money paidInCapital = paidInCapital(request);
+        Company candidate = Company.register(new CompanyId(UUID.randomUUID()), request.companyName(), request.founderId(), paidInCapital, rate, clock.now());
         if (companies.findByNormalizedName(candidate.normalizedName()).isPresent()) return new Prepared(null, RegistrationResult.of(RegistrationResult.Status.DUPLICATE_NAME, "company name already exists"));
-        RegistrationSaga saga = new RegistrationSaga(UUID.randomUUID(), request.founderId(), candidate.normalizedName(), registrationFee.plus(minimumCapital), RegistrationSagaState.PREPARED, null, clock.now(), clock.now());
+        RegistrationSaga saga = new RegistrationSaga(UUID.randomUUID(), request.founderId(), candidate.normalizedName(), registrationFee.plus(paidInCapital), RegistrationSagaState.PREPARED, null, clock.now(), clock.now());
         try {
             transactions.inTransaction(connection -> { sagas.save(connection, saga); audits.append(connection, event(saga, "NONE", RegistrationSagaState.PREPARED, null)); return null; });
             return new Prepared(saga, null);
@@ -71,9 +80,12 @@ public final class CompanyRegistrationService {
         return RegistrationResult.of(status, message);
     }
     private RegistrationResult persistCompleted(RegistrationRequest request, RegistrationSaga saga) {
-        Company company = Company.register(new CompanyId(UUID.randomUUID()), request.companyName(), request.founderId(), minimumCapital, DividendRate.fromPercent(request.dividendPercent()), clock.now());
+        Money paidInCapital = paidInCapital(request);
+        Company company = Company.register(new CompanyId(UUID.randomUUID()), request.companyName(), request.founderId(), paidInCapital, DividendRate.fromPercent(request.dividendPercent()), clock.now());
         transactions.inTransaction(connection -> { transitionAndAudit(connection, saga, RegistrationSagaState.PREPARED, RegistrationSagaState.WITHDRAWN, null); return null; });
-        transactions.inTransaction(connection -> { companies.insert(connection, company); audits.append(connection, new AuditEvent(UUID.randomUUID(), Optional.of(company.id()), Optional.of(request.founderId()), "COMPANY_REGISTERED", Map.of("capitalMinor", minimumCapital.minorUnits()), clock.now())); transitionAndAudit(connection, saga, RegistrationSagaState.WITHDRAWN, RegistrationSagaState.COMPLETED, null); return null; });
+        transactions.inTransaction(connection -> { companies.insert(connection, company); audits.append(connection, new AuditEvent(UUID.randomUUID(), Optional.of(company.id()), Optional.of(request.founderId()), "COMPANY_REGISTERED", Map.of("capitalMinor", paidInCapital.minorUnits()), clock.now())); return null; });
+        if (capitalization != null) capitalization.capitalize(company, request.founderId(), paidInCapital, saga.id()).toCompletableFuture().join();
+        transactions.inTransaction(connection -> { transitionAndAudit(connection, saga, RegistrationSagaState.WITHDRAWN, RegistrationSagaState.COMPLETED, null); return null; });
         return RegistrationResult.of(RegistrationResult.Status.SUCCESS, "");
     }
     private CompletionStage<RegistrationResult> refund(RegistrationSaga saga, Throwable failure) {
@@ -113,5 +125,6 @@ public final class CompanyRegistrationService {
                 "sagaId", saga.id().toString(), "fromState", from, "toState", to.name(),
                 "totalWithdrawalMinor", saga.totalWithdrawal().minorUnits(), "reason", diagnostic == null ? "" : diagnostic), clock.now());
     }
+    private Money paidInCapital(RegistrationRequest request) { return request.paidInCapital().minorUnits() == 0 ? minimumCapital : request.paidInCapital(); }
     private record Prepared(RegistrationSaga saga, RegistrationResult result) { }
 }

@@ -35,7 +35,7 @@ class CompanyCommandTest {
 
         assertThat(command.onCommand(player, mock(Command.class), "company", new String[0])).isTrue();
 
-        assertThat(allPlainMessages(player)).contains("/company create <名称> <30|50|70>", "创建费：1000.00", "最低注册资本：10000.00", "合计余额：11000.00", "初始发行：1000 股", "必须是玩家", "插件完成初始化", "公司名不能重复");
+        assertThat(allPlainMessages(player)).contains("/company create <名称> <实缴资本> <30|50|70>", "创建费：1000.00", "最低注册资本：10000.00", "合计余额：11000.00", "初始发行：1000 股", "必须是玩家", "插件完成初始化", "公司名不能重复");
     }
 
     @Test
@@ -57,29 +57,40 @@ class CompanyCommandTest {
         Player player = permittedPlayer("blockeco.company.create");
         CompanyCommand command = new CompanyCommand(mock(CompanyRegistrationService.class), mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN, customRules);
 
-        assertThat(CompanyCommand.parseCreate(founder, new String[] {"create", "North", "25"}, customRules)).contains(new RegistrationRequest(founder, "North", 25));
-        assertThat(CompanyCommand.parseCreate(founder, new String[] {"create", "North", "30"}, customRules)).isEmpty();
+        assertThat(CompanyCommand.parseCreate(founder, new String[] {"create", "North", "2", "25"}, customRules)).contains(new RegistrationRequest(founder, "North", Money.ofMinor(2), 25));
+        assertThat(CompanyCommand.parseCreate(founder, new String[] {"create", "North", "2", "30"}, customRules)).isEmpty();
         command.onCommand(player, mock(Command.class), "company", new String[0]);
-        assertThat(allPlainMessages(player)).contains("/company create <名称> <25|75>");
+        assertThat(allPlainMessages(player)).contains("/company create <名称> <实缴资本> <25|75>");
+    }
+
+    @Test
+    void parses_precise_paid_in_capital_before_dividend() {
+        assertThat(CompanyCommand.parseCreate(founder, new String[] {"create", "红石", "100000.00", "50"}, rules))
+                .contains(new RegistrationRequest(founder, "红石", Money.fromMajor(new BigDecimal("100000.00"), 2), 50));
+    }
+
+    @Test
+    void rejects_paid_in_capital_below_configured_minimum() {
+        assertThat(CompanyCommand.parseCreate(founder, new String[] {"create", "红石", "9999.99", "50"}, rules)).isEmpty();
     }
 
     @Test
     void create_parser_joins_multiword_name_before_final_dividend() {
-        var result = CompanyCommand.parseCreate(founder, new String[] {"create", "North", "Star", "50"}, rules);
+        var result = CompanyCommand.parseCreate(founder, new String[] {"create", "North", "Star", "10000.00", "50"}, rules);
 
-        assertThat(result).contains(new RegistrationRequest(founder, "North Star", 50));
+        assertThat(result).contains(new RegistrationRequest(founder, "North Star", Money.ofMinor(1_000_000), 50));
     }
 
     @Test
     void create_parser_strips_optional_quotes_from_multiword_name() {
-        var result = CompanyCommand.parseCreate(founder, new String[] {"create", "\"North", "Star\"", "70"}, rules);
+        var result = CompanyCommand.parseCreate(founder, new String[] {"create", "\"North", "Star\"", "10000.00", "70"}, rules);
 
-        assertThat(result).contains(new RegistrationRequest(founder, "North Star", 70));
+        assertThat(result).contains(new RegistrationRequest(founder, "North Star", Money.ofMinor(1_000_000), 70));
     }
 
     @Test
     void create_parser_rejects_dividend_outside_supported_choices() {
-        var result = CompanyCommand.parseCreate(founder, new String[] {"create", "North", "40"}, rules);
+        var result = CompanyCommand.parseCreate(founder, new String[] {"create", "North", "10000.00", "40"}, rules);
 
         assertThat(result).isEmpty();
     }
@@ -90,7 +101,7 @@ class CompanyCommandTest {
         CommandSender console = mock(CommandSender.class);
         CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN, rules);
 
-        command.onCommand(console, mock(Command.class), "company", new String[] {"create", "North", "30"});
+        command.onCommand(console, mock(Command.class), "company", new String[] {"create", "North", "10000.00", "30"});
 
         ArgumentCaptor<net.kyori.adventure.text.Component> message = ArgumentCaptor.forClass(net.kyori.adventure.text.Component.class);
         verify(console).sendMessage(message.capture());
@@ -104,7 +115,7 @@ class CompanyCommandTest {
         Player player = mock(Player.class); when(player.hasPermission("blockeco.company.create")).thenReturn(false);
         CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN, rules);
 
-        command.onCommand(player, mock(Command.class), "company", new String[] {"create", "North", "30"});
+        command.onCommand(player, mock(Command.class), "company", new String[] {"create", "North", "10000.00", "30"});
 
         verify(player).sendMessage(any(net.kyori.adventure.text.Component.class));
         verifyNoInteractions(registration);
@@ -129,10 +140,10 @@ class CompanyCommandTest {
         when(registration.register(any())).thenReturn(new CompletableFuture<>());
         CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN, rules); command.setAccepting(true);
 
-        command.onCommand(player, mock(Command.class), "company", new String[] {"create", "North", "30"});
-        command.onCommand(player, mock(Command.class), "company", new String[] {"create", "North", "30"});
+        command.onCommand(player, mock(Command.class), "company", new String[] {"create", "North", "10000.00", "30"});
+        command.onCommand(player, mock(Command.class), "company", new String[] {"create", "North", "10000.00", "30"});
 
-        verify(registration, times(1)).register(new RegistrationRequest(founder, "North", 30));
+        verify(registration, times(1)).register(new RegistrationRequest(founder, "North", Money.ofMinor(1_000_000), 30));
         verify(player, times(2)).sendMessage(any(net.kyori.adventure.text.Component.class));
     }
 
@@ -141,7 +152,7 @@ class CompanyCommandTest {
         CompanyRegistrationService registration = mock(CompanyRegistrationService.class); CompletableFuture<cn.blockeco.exchange.application.RegistrationResult> result = new CompletableFuture<>(); when(registration.register(any())).thenReturn(result);
         Player player = mock(Player.class); when(player.hasPermission("blockeco.company.create")).thenReturn(true); when(player.getUniqueId()).thenReturn(founder);
         QueuedMain main = new QueuedMain(); CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), main, rules); command.setAccepting(true);
-        command.onCommand(player, mock(Command.class), "company", new String[] {"create", "North", "30"}); result.complete(cn.blockeco.exchange.application.RegistrationResult.of(cn.blockeco.exchange.application.RegistrationResult.Status.SUCCESS, ""));
+        command.onCommand(player, mock(Command.class), "company", new String[] {"create", "North", "10000.00", "30"}); result.complete(cn.blockeco.exchange.application.RegistrationResult.of(cn.blockeco.exchange.application.RegistrationResult.Status.SUCCESS, ""));
         verify(player, times(1)).sendMessage(any(net.kyori.adventure.text.Component.class)); main.runAll();
         verify(player, times(2)).sendMessage(any(net.kyori.adventure.text.Component.class));
     }
