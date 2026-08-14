@@ -15,7 +15,7 @@
 - Paper 版本固定 `1.21.4`，Java toolchain/release 固定 `21`；不新增运行时依赖。
 - 仅当 `plugins/BlockStock` 不存在且 `plugins/BlockecoExchange` 存在时，才在 `saveDefaultConfig()` 之前移动完整旧目录；目标存在时绝不覆盖、合并或删除旧目录；移动失败安全停用。
 - 根命令与 Tab 候选必须按实际权限过滤；补全不得查询 SQLite 或暴露公司名称。
-- 帮助中的创建费、最低注册资本、合计、初始股数和分红档位必须从当前 `config.yml` 构造，不能写死默认数值。
+- 帮助中的创建费、最低注册资本、合计、初始股数和分红档位必须从当前 `config.yml` 构造，不能写死默认数值；创建解析和 Tab 必须使用同一个已验证分红档位集合。
 - 所有新增行为先写 RED 测试，再做最小 GREEN 实现；每个任务后独立审查与提交。
 
 ---
@@ -123,7 +123,7 @@ git commit -m "feat: rename plugin to BlockStock safely"
 - Modify: `src/test/java/cn/blockeco/exchange/paper/MessagesTest.java`
 
 **Interfaces:**
-- Produces: `CompanyCreationRules(Money registrationFee, Money minimumCapital, int scale, int initialShares, List<Integer> allowedDividendPercent)` with `totalRequired()` and formatted major-unit values.
+- Produces: `CompanyCreationRules(Money registrationFee, Money minimumCapital, int scale, int initialShares, List<Integer> allowedDividendPercent)` with `totalRequired()` and formatted major-unit values; its constructor rejects empty, duplicated or non-`1..100` dividend values.
 - Produces: `CompanyTabCompleter implements TabCompleter`; `onTabComplete(CommandSender, Command, String, String[])` always returns a non-null immutable candidate list.
 - Consumes: `CompanyCommand(CompanyRegistrationService, CompanyQueryService, Messages, MainThreadExecutor, CompanyCreationRules)` and existing concrete permissions `blockeco.company.create`, `blockeco.company.info`, `blockeco.admin.recovery`.
 
@@ -171,7 +171,7 @@ public List<Component> companyHelp(boolean canCreate, boolean canInfo, boolean c
                                    CompanyCreationRules rules) { /* role-filtered Chinese lines */ }
 ```
 
-Create the rules snapshot from `currency.scale`, `company.registration-fee`, `company.minimum-capital`, `company.initial-shares`, and `company.allowed-dividend-percent` in `BlockecoPlugin`. Format values using `Money.toMajor(scale).toPlainString()`. Add default Chinese config templates for the root, create-rule, info and recovery help lines. `CompanyCommand.onCommand` sends role-filtered help for no arguments, sends targeted usage for incomplete `info` and `recovery`, and never sends administrator text to a sender without recovery permission.
+Create the rules snapshot from `currency.scale`, `company.registration-fee`, `company.minimum-capital`, `company.initial-shares`, and `company.allowed-dividend-percent` in `BlockecoPlugin`. Format values using `Money.toMajor(scale).toPlainString()`. Replace the hard-coded `30/50/70` acceptance in `CompanyCommand.parseCreate` with `rules.allowedDividendPercent().contains(percent)`, and add configuration validation that rejects an empty, duplicate or outside-`1..100` dividend list during startup. Add default Chinese config templates for the root, create-rule, info and recovery help lines. `CompanyCommand.onCommand` sends role-filtered help for no arguments, sends targeted usage for incomplete `info` and `recovery`, and never sends administrator text to a sender without recovery permission.
 
 - [ ] **Step 4: Implement the stateless completer and registration**
 
