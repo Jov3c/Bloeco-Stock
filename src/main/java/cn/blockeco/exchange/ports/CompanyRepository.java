@@ -5,6 +5,7 @@ import cn.blockeco.exchange.domain.company.CompanyId;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.Optional;
+import java.util.UUID;
 
 public interface CompanyRepository {
 
@@ -13,4 +14,5 @@ public interface CompanyRepository {
     Optional<Company> findById(CompanyId id);
 
     Optional<Company> findByNormalizedName(String normalizedName);
+    default Optional<Company> findByFounder(UUID founderId) { return Optional.empty(); }
 }

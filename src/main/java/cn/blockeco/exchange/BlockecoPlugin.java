@@ -2,12 +2,16 @@ package cn.blockeco.exchange;
 
 import cn.blockeco.exchange.application.CompanyQueryService;
 import cn.blockeco.exchange.application.CompanyRegistrationService;
+import cn.blockeco.exchange.application.AssetBindingService;
+import cn.blockeco.exchange.application.PrimaryOfferingService;
 import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.infrastructure.sql.Database;
 import cn.blockeco.exchange.infrastructure.sql.SqlAuditLog;
 import cn.blockeco.exchange.infrastructure.sql.SqlCompanyRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlCompanyFinanceRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlRegistrationSagaRepository;
+import cn.blockeco.exchange.infrastructure.sql.SqlAssetBindingRepository;
+import cn.blockeco.exchange.infrastructure.sql.SqlPrimaryOfferingRepository;
 import cn.blockeco.exchange.infrastructure.vault.VaultEconomyGateway;
 import cn.blockeco.exchange.infrastructure.vault.VaultTreasuryEscrowGateway;
 import cn.blockeco.exchange.paper.CompanyCommand;
@@ -69,7 +73,9 @@ public final class BlockecoPlugin extends JavaPlugin {
         var finance = new SqlCompanyFinanceRepository(db.dataSource());
         var escrow = new VaultTreasuryEscrowGateway(economy, mainThread, java.util.UUID.fromString(getConfig().getString("company.treasury-escrow-uuid")));
         var registration = new CompanyRegistrationService(companies, sagas, new SqlAuditLog(), db, economy, mainThread, sqlExecutor, clock, configuredMoney("company.registration-fee", scale), configuredMoney("company.minimum-capital", scale), finance, escrow, creationRules.initialShares());
-        command = new CompanyCommand(registration, new CompanyQueryService(companies, sagas, new SqlCompanyFinanceRepository(db.dataSource()), sqlExecutor), new Messages(getConfig().getConfigurationSection("messages")), mainThread, creationRules);
+        var assetBindings = new AssetBindingService(new SqlAssetBindingRepository(db.dataSource()), db, java.util.List.of(), clock);
+        var primaryOfferings = new PrimaryOfferingService(new SqlPrimaryOfferingRepository(db.dataSource()), db, escrow, sqlExecutor, clock);
+        command = new CompanyCommand(registration, new CompanyQueryService(companies, sagas, new SqlCompanyFinanceRepository(db.dataSource()), sqlExecutor), new Messages(getConfig().getConfigurationSection("messages")), mainThread, creationRules, assetBindings, primaryOfferings);
         var companyCommand = getCommand("company");
         if (companyCommand == null) throw new IllegalStateException("company command is missing from plugin.yml");
         companyCommand.setExecutor(command);

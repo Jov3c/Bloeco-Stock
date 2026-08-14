@@ -12,10 +12,11 @@ import org.bukkit.command.*;
 import org.bukkit.entity.Player;
 
 public final class CompanyCommand implements CommandExecutor {
-    private final CompanyRegistrationService registration; private final CompanyQueryService queries; private final Messages messages; private final MainThreadExecutor mainThread; private final CompanyCreationRules rules;
+    private final CompanyRegistrationService registration; private final CompanyQueryService queries; private final Messages messages; private final MainThreadExecutor mainThread; private final CompanyCreationRules rules; private final AssetBindingService assets; private final PrimaryOfferingService offerings;
     private final Set<UUID> inFlight = ConcurrentHashMap.newKeySet();
     private volatile boolean accepting = false;
-    public CompanyCommand(CompanyRegistrationService registration, CompanyQueryService queries, Messages messages, MainThreadExecutor mainThread, CompanyCreationRules rules) { this.registration=registration; this.queries=queries; this.messages=messages; this.mainThread=mainThread; this.rules=rules; }
+    public CompanyCommand(CompanyRegistrationService registration, CompanyQueryService queries, Messages messages, MainThreadExecutor mainThread, CompanyCreationRules rules) { this(registration,queries,messages,mainThread,rules,null,null); }
+    public CompanyCommand(CompanyRegistrationService registration, CompanyQueryService queries, Messages messages, MainThreadExecutor mainThread, CompanyCreationRules rules, AssetBindingService assets, PrimaryOfferingService offerings) { this.registration=registration; this.queries=queries; this.messages=messages; this.mainThread=mainThread; this.rules=rules; this.assets=assets; this.offerings=offerings; }
     public void setAccepting(boolean accepting) { this.accepting = accepting; }
     public static Optional<RegistrationRequest> parseCreate(UUID player, String[] args, CompanyCreationRules rules) {
         if (args.length < 4 || !"create".equalsIgnoreCase(args[0])) return Optional.empty();
@@ -31,6 +32,8 @@ public final class CompanyCommand implements CommandExecutor {
         if (args.length == 0) { messages.companyHelp(sender instanceof Player && sender.hasPermission("blockeco.company.create"), sender.hasPermission("blockeco.company.info"), sender.hasPermission("blockeco.admin.recovery"), rules).forEach(sender::sendMessage); return true; }
         if ("create".equalsIgnoreCase(args[0])) return create(sender, args);
         if ("info".equalsIgnoreCase(args[0])) return info(sender, args);
+        if ("asset".equalsIgnoreCase(args[0])) return bindAsset(sender,args);
+        if ("ipo".equalsIgnoreCase(args[0])) return announce(sender,args);
         if ("recovery".equalsIgnoreCase(args[0])) {
             if (args.length == 2 && "list".equalsIgnoreCase(args[1])) return recovery(sender);
             if (!sender.hasPermission("blockeco.admin.recovery")) { sender.sendMessage(messages.noPermission()); return true; }
@@ -38,6 +41,8 @@ public final class CompanyCommand implements CommandExecutor {
         }
         return false;
     }
+    private boolean bindAsset(CommandSender sender,String[] args) { if (!(sender instanceof Player player)) { sender.sendMessage(messages.playersOnly()); return true; } if(!player.hasPermission("blockeco.company.asset.bind")){player.sendMessage(messages.noPermission());return true;} if(!accepting||assets==null){player.sendMessage(messages.initializing());return true;} if(args.length!=4||!"bind".equalsIgnoreCase(args[1])){player.sendMessage(messages.usageAssetBind());return true;} queries.findByFounder(player.getUniqueId()).whenComplete((company,failure)->{if(failure!=null||company.isEmpty()){mainThread.submit(()->{player.sendMessage(messages.companyNotFound());return null;});return;} assets.bind(company.get().id(),player.getUniqueId(),args[2],args[3]).whenComplete((binding,error)->mainThread.submit(()->{player.sendMessage(error==null?messages.assetBound():messages.assetBindFailed());return null;}));}); return true; }
+    private boolean announce(CommandSender sender,String[] args) { if (!(sender instanceof Player player)) { sender.sendMessage(messages.playersOnly()); return true; } if(!player.hasPermission("blockeco.company.ipo.announce")){player.sendMessage(messages.noPermission());return true;} if(!accepting||offerings==null){player.sendMessage(messages.initializing());return true;} if(args.length!=4||!"announce".equalsIgnoreCase(args[1])){player.sendMessage(messages.usageIpoAnnounce());return true;} Money target,price;try{target=Money.fromMajor(new BigDecimal(args[2]),rules.scale());price=Money.fromMajor(new BigDecimal(args[3]),rules.scale());}catch(RuntimeException e){player.sendMessage(messages.usageIpoAnnounce());return true;} queries.findByFounder(player.getUniqueId()).whenComplete((company,failure)->{if(failure!=null||company.isEmpty()){mainThread.submit(()->{player.sendMessage(messages.companyNotFound());return null;});return;} offerings.announce(company.get().id(),player.getUniqueId(),target,price).whenComplete((offer,error)->mainThread.submit(()->{player.sendMessage(error==null?messages.ipoAnnounced():messages.ipoAnnounceFailed());return null;}));}); return true; }
     private boolean create(CommandSender sender, String[] args) {
         if (!(sender instanceof Player player)) { sender.sendMessage(messages.playersOnly()); return true; }
         if (!player.hasPermission("blockeco.company.create")) { player.sendMessage(messages.noPermission()); return true; }

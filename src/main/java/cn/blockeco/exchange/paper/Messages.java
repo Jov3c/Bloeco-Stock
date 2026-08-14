@@ -16,6 +16,12 @@ public final class Messages {
     public Component usageCreate(CompanyCreationRules rules) { return message("usage-create", "用法：/company create <名称> <实缴资本> <DIVIDENDS>").replaceText(b -> b.matchLiteral("DIVIDENDS").replacement(rules.dividendChoices())); }
     public Component usageInfo() { return message("usage-info", "用法：/company info <名称>"); }
     public Component usageRecovery() { return message("usage-recovery", "用法：/company recovery list"); }
+    public Component usageAssetBind() { return message("usage-asset-bind", "用法：/company asset bind <adapter> <external-key>"); }
+    public Component usageIpoAnnounce() { return message("usage-ipo-announce", "用法：/company ipo announce <目标金额> <发行价>"); }
+    public Component assetBound() { return message("asset-bound", "资产绑定已完成。"); }
+    public Component assetBindFailed() { return message("asset-bind-failed", "资产绑定失败。请确认资产归属和适配器。"); }
+    public Component ipoAnnounced() { return message("ipo-announced", "首次公开发行已公告，12 小时后开放认购。"); }
+    public Component ipoAnnounceFailed() { return message("ipo-announce-failed", "首次公开发行公告失败。请确认资产绑定和目标金额。"); }
     public List<Component> companyHelp(boolean canCreate, boolean canInfo, boolean canRecovery, CompanyCreationRules rules) {
         java.util.ArrayList<Component> lines = new java.util.ArrayList<>();
         lines.add(message("help-root", "BlockStock 公司命令："));

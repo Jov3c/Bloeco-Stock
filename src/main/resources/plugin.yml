@@ -6,13 +6,15 @@ softdepend: [Vault, VaultUnlocked]
 commands:
   company:
     description: 管理 BlockStock 公司
-    usage: /company <创建 名称 实缴资本 分红比例|信息|恢复>
+    usage: /company <create|info|asset bind|ipo announce|recovery>
 permissions:
   blockeco.player:
     description: 'BlockStock 玩家权限'
     children:
       blockeco.company.create: true
       blockeco.company.info: true
+      blockeco.company.asset.bind: true
+      blockeco.company.ipo.announce: true
   blockeco.admin:
     description: 'BlockStock 管理员权限'
     children:
@@ -20,6 +22,10 @@ permissions:
   blockeco.company.create:
     default: true
   blockeco.company.info:
+    default: true
+  blockeco.company.asset.bind:
+    default: true
+  blockeco.company.ipo.announce:
     default: true
   blockeco.admin.recovery:
     default: op

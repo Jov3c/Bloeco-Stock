@@ -18,6 +18,12 @@ messages:
   usage-create: '用法：/company create <名称> <实缴资本> <DIVIDENDS>'
   usage-info: '用法：/company info <名称>'
   usage-recovery: '用法：/company recovery list'
+  usage-asset-bind: '用法：/company asset bind <adapter> <external-key>'
+  usage-ipo-announce: '用法：/company ipo announce <目标金额> <发行价>'
+  asset-bound: '资产绑定已完成。'
+  asset-bind-failed: '资产绑定失败。请确认资产归属和适配器。'
+  ipo-announced: '首次公开发行已公告，12 小时后开放认购。'
+  ipo-announce-failed: '首次公开发行公告失败。请确认资产绑定和目标金额。'
   help-root: 'BlockStock 公司命令：'
   help-create: '/company create <名称> <实缴资本> <DIVIDENDS>'
   help-create-rules: |-

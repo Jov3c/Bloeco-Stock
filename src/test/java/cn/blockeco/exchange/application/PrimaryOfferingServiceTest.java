@@ -1,0 +1,39 @@
+package cn.blockeco.exchange.application;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import cn.blockeco.exchange.domain.company.CompanyId;
+import cn.blockeco.exchange.domain.money.Money;
+import cn.blockeco.exchange.infrastructure.sql.Database;
+import cn.blockeco.exchange.infrastructure.sql.SqlPrimaryOfferingRepository;
+import cn.blockeco.exchange.ports.AppClock;
+import cn.blockeco.exchange.ports.EconomyGateway;
+import cn.blockeco.exchange.ports.TreasuryEscrowGateway;
+import java.nio.file.*;
+import java.time.*;
+import java.util.UUID;
+import org.junit.jupiter.api.Test;
+
+class PrimaryOfferingServiceTest {
+ @Test void never_replays_a_persisted_prepared_subscription_after_a_crash_window() throws Exception {
+  Path file=Files.createTempFile("ipo-recovery-", ".db"); try(Database db=new Database("jdbc:sqlite:"+file)) { db.migrate(); CompanyId c=Fixtures.company(db,100); MutableClock clock=new MutableClock(); SqlPrimaryOfferingRepository repo=new SqlPrimaryOfferingRepository(db.dataSource()); UUID founder=Fixtures.founder(db,c);
+   Fixtures.activeAsset(db,c,founder); PrimaryOfferingService service=new PrimaryOfferingService(repo,db,new Escrow(),Runnable::run,clock);
+   var offer=service.announce(c,founder,Money.ofMinor(100),Money.ofMinor(10)).toCompletableFuture().join(); clock.now=offer.opensAt(); UUID subscriber=UUID.randomUUID(); UUID subscription=UUID.nameUUIDFromBytes((offer.id()+":"+subscriber+":2").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+   db.inTransaction(x->{repo.prepareSubscription(x,subscription,offer,subscriber,2,clock.now);return null;});
+   assertThatThrownBy(()->service.subscribe(subscriber,offer.id(),2).toCompletableFuture().join()).hasCauseInstanceOf(IllegalStateException.class).hasMessageContaining("recovery");
+  } finally {Files.deleteIfExists(file);} }
+ @Test void requires_active_asset_caps_target_and_honors_exact_open_close_boundaries() throws Exception {
+  Path file=Files.createTempFile("ipo-", ".db"); try(Database db=new Database("jdbc:sqlite:"+file)) { db.migrate(); CompanyId c=Fixtures.company(db,100_000); UUID founder=Fixtures.founder(db,c); MutableClock clock=new MutableClock();
+   PrimaryOfferingService service=new PrimaryOfferingService(new SqlPrimaryOfferingRepository(db.dataSource()), db, new Escrow(), Runnable::run, clock);
+   assertThatThrownBy(()->service.announce(c,founder,Money.ofMinor(1),Money.ofMinor(1)).toCompletableFuture().join()).hasCauseInstanceOf(IllegalStateException.class);
+   Fixtures.activeAsset(db,c,founder);
+   assertThatThrownBy(()->service.announce(c,founder,Money.ofMinor(500_001),Money.ofMinor(1)).toCompletableFuture().join()).hasCauseInstanceOf(IllegalArgumentException.class);
+   var offer=service.announce(c,founder,Money.ofMinor(500_000),Money.ofMinor(100)).toCompletableFuture().join(); UUID buyer=UUID.randomUUID();
+   assertThatThrownBy(()->service.subscribe(buyer,offer.id(),1).toCompletableFuture().join()).hasCauseInstanceOf(IllegalStateException.class);
+   clock.now=offer.opensAt(); service.subscribe(buyer,offer.id(),2).toCompletableFuture().join();
+   clock.now=offer.closesAt(); assertThatThrownBy(()->service.subscribe(UUID.randomUUID(),offer.id(),1).toCompletableFuture().join()).hasCauseInstanceOf(IllegalStateException.class);
+  } finally {Files.deleteIfExists(file);} }
+ static final class MutableClock implements AppClock { Instant now=Instant.parse("2026-08-14T12:00:00Z"); public Instant now(){return now;} }
+ static final class Escrow implements TreasuryEscrowGateway { public EconomyGateway.Result withdrawPlayer(UUID p,Money m,UUID i){return EconomyGateway.Result.success("");} public EconomyGateway.Result depositEscrow(Money m,UUID i){return EconomyGateway.Result.success("");} public EconomyGateway.Result withdrawEscrow(Money m,UUID i){return EconomyGateway.Result.success("");} public EconomyGateway.Result refundPlayer(UUID p,Money m,UUID i){return EconomyGateway.Result.success("");} }
+}

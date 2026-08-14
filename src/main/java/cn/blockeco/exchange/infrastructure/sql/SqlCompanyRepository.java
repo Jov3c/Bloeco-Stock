@@ -65,6 +65,10 @@ public final class SqlCompanyRepository implements CompanyRepository {
         return findOne(SELECT + "WHERE normalized_name = ?", normalizedName);
     }
 
+    @Override public Optional<Company> findByFounder(UUID founderId) {
+        return findOne(SELECT + "WHERE founder_uuid = ? ORDER BY created_at LIMIT 1", founderId.toString());
+    }
+
     private Optional<Company> findOne(String sql, String value) {
         try (Connection connection = dataSource.getConnection();
                 PreparedStatement statement = connection.prepareStatement(sql)) {
