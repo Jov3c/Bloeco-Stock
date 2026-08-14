@@ -38,9 +38,9 @@ plugins/BlockStock/blockeco.db
 ### 从 BlockecoExchange 一次性迁移
 
 BlockStock 启动时会检查 `plugins/BlockecoExchange/`。仅当新目录
-`plugins/BlockStock/` 尚不存在时，插件才会将**整个目录**原子地迁移为
+`plugins/BlockStock/` 尚不存在时，插件才会将**整个目录**迁移为
 `plugins/BlockStock/`，从而保留原有的 `config.yml`、`blockeco.db` 以及 SQLite
-关联文件。不要手工复制、移动、合并或删除旧目录；先正常执行 `stop` 并等待
+关联文件。迁移通过文件系统的目录移动完成；实现并未承诺原子移动。不要手工复制、移动、合并或删除旧目录；先正常执行 `stop` 并等待
 Paper 完成保存，再让 BlockStock 的下一次启动完成迁移。
 
 如果 `plugins/BlockStock/` 已存在，插件会保守地跳过迁移，绝不覆盖新目录中的
@@ -82,6 +82,17 @@ Paper 完成保存，再让 BlockStock 的下一次启动完成迁移。
 `create`、`info`、`recovery`；在 `/company create 红石工坊 ` 后会获得配置的
 `30`、`50`、`70`；在 `/company recovery ` 后，管理员会获得 `list`。这些候选项
 不替代实际命令权限检查。
+
+### 本次本地验收的限制（2026-08-14）
+
+这不是一次已完成的 BlockStock 实机迁移。当前旧 Paper 的控制台输入没有消费自动化会话
+写入的 `stop`，所以为避免强制终止 JVM，BlockStock **没有启动**，旧
+`plugins/BlockecoExchange/` 目录**没有迁移**。因此本次没有验证 BlockStock 的端口监听、
+Vault/Essentials 挂钩或新的 BlockStock 启动日志。
+
+同样，Aoozzz 的原版客户端 `/company` 聊天输出，以及以下三条 Tab 路径均**未执行**：
+`/company `、`/company create 红石工坊 `、`/company recovery `。上文描述的是实现的预期
+行为；在可优雅停服并启动 BlockStock 后，仍须由 Aoozzz 实机验证并记录结果。
 
 正常路径中，创建公司会**恰好一次**扣除**注册费用 + 最低资本**。仅最低资本进入公司金库。公司初始状态为 `PENDING_ASSET_BINDING`，拥有 1,000 股及所选、不可变的 30%、50% 或 70% 分红档位。创始人没有金库提款命令。
 
