@@ -1,0 +1,16 @@
+name: BlockecoExchange
+version: '${version}'
+main: cn.blockeco.exchange.BlockecoPlugin
+api-version: '1.21'
+softdepend: [Vault, VaultUnlocked]
+commands:
+  company:
+    description: Manage Blockeco companies
+    usage: /company <create|info|recovery>
+permissions:
+  blockeco.company.create:
+    default: true
+  blockeco.company.info:
+    default: true
+  blockeco.admin.recovery:
+    default: op

@@ -1,0 +1,10 @@
+currency:
+  scale: 2
+company:
+  registration-fee: '1000.00'
+  minimum-capital: '10000.00'
+  initial-shares: 1000
+  allowed-dividend-percent: [30, 50, 70]
+database:
+  file: blockeco.db
+  pool-size: 2
