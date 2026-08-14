@@ -9,6 +9,8 @@ import cn.blockeco.exchange.infrastructure.sql.SqlCompanyRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlRegistrationSagaRepository;
 import cn.blockeco.exchange.infrastructure.vault.VaultEconomyGateway;
 import cn.blockeco.exchange.paper.CompanyCommand;
+import cn.blockeco.exchange.paper.CompanyCreationRules;
+import cn.blockeco.exchange.paper.CompanyTabCompleter;
 import cn.blockeco.exchange.paper.Messages;
 import cn.blockeco.exchange.paper.PaperMainThread;
 import cn.blockeco.exchange.paper.MigrationResult;
@@ -28,6 +30,7 @@ public final class BlockecoPlugin extends JavaPlugin {
     private Database database;
     private CompanyCommand command;
     private BootstrapCoordinator<Database> bootstrap;
+    private CompanyCreationRules creationRules;
     private final PluginRuntime runtime = new PluginRuntime();
 
     @Override public void onEnable() {
@@ -41,9 +44,9 @@ public final class BlockecoPlugin extends JavaPlugin {
             return;
         }
         saveDefaultConfig();
-        if (!installInitializingCommand()) return;
         try { validateConfiguration(); if (!getDataFolder().exists() && !getDataFolder().mkdirs()) throw new IllegalStateException("cannot create plugin data folder"); }
         catch (RuntimeException failure) { failEnable("Invalid BlockStock configuration: " + failure.getMessage()); return; }
+        if (!installInitializingCommand()) return;
         sqlExecutor = Executors.newSingleThreadExecutor(r -> { Thread thread = new Thread(r, "BlockStock-SQL"); thread.setDaemon(true); return thread; });
         runtime.attachExecutor(sqlExecutor);
         Path file = getDataFolder().toPath().resolve(getConfig().getString("database.file", "blockeco.db"));
@@ -61,7 +64,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         var mainThread = new PaperMainThread(this);
         int scale = getConfig().getInt("currency.scale");
         var registration = new CompanyRegistrationService(companies, sagas, new SqlAuditLog(), db, new VaultEconomyGateway(getServer(), scale), mainThread, sqlExecutor, clock, configuredMoney("company.registration-fee", scale), configuredMoney("company.minimum-capital", scale));
-        command = new CompanyCommand(registration, new CompanyQueryService(companies, sagas, sqlExecutor), new Messages(getConfig().getConfigurationSection("messages")), mainThread);
+        command = new CompanyCommand(registration, new CompanyQueryService(companies, sagas, sqlExecutor), new Messages(getConfig().getConfigurationSection("messages")), mainThread, creationRules);
         var companyCommand = getCommand("company");
         if (companyCommand == null) throw new IllegalStateException("company command is missing from plugin.yml");
         companyCommand.setExecutor(command);
@@ -76,6 +79,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         if (companyCommand == null) { failEnable("company command is missing from plugin.yml"); return false; }
         Messages messages = new Messages(getConfig().getConfigurationSection("messages"));
         companyCommand.setExecutor((sender, command, label, args) -> { sender.sendMessage(messages.initializing()); return runtime.accepting(); });
+        companyCommand.setTabCompleter(new CompanyTabCompleter(creationRules));
         return true;
     }
 
@@ -86,6 +90,7 @@ public final class BlockecoPlugin extends JavaPlugin {
     private void validateConfiguration() {
         int scale = getConfig().getInt("currency.scale", -1); if (scale < 0 || scale > 8) throw new IllegalArgumentException("currency.scale must be between 0 and 8");
         positive("company.registration-fee", scale); positive("company.minimum-capital", scale);
+        creationRules = new CompanyCreationRules(configuredMoney("company.registration-fee", scale), configuredMoney("company.minimum-capital", scale), scale, getConfig().getInt("company.initial-shares"), getConfig().getIntegerList("company.allowed-dividend-percent"));
     }
     private void positive(String path, int scale) { if (configuredMoney(path, scale).minorUnits() <= 0) throw new IllegalArgumentException(path + " must be positive"); }
     private Money configuredMoney(String path, int scale) { return Money.fromMajor(new BigDecimal(getConfig().getString(path)), scale); }

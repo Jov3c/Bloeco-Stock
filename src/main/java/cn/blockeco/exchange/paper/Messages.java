@@ -1,6 +1,7 @@
 package cn.blockeco.exchange.paper;
 
 import net.kyori.adventure.text.Component;
+import java.util.List;
 import org.bukkit.configuration.ConfigurationSection;
 
 /** Configuration-backed user messages; defaults keep the first deployment usable. */
@@ -13,6 +14,22 @@ public final class Messages {
     public Component noPermission() { return message("no-permission", "你没有权限。"); }
     public Component playersOnly() { return message("players-only", "此命令只能由玩家执行。"); }
     public Component usageCreate() { return message("usage-create", "用法：/company create <名称> <30|50|70>"); }
+    public Component usageCreate(CompanyCreationRules rules) { return message("usage-create", "用法：/company create <名称> <DIVIDENDS>").replaceText(b -> b.matchLiteral("DIVIDENDS").replacement(rules.dividendChoices())); }
+    public Component usageInfo() { return message("usage-info", "用法：/company info <名称>"); }
+    public Component usageRecovery() { return message("usage-recovery", "用法：/company recovery list"); }
+    public List<Component> companyHelp(boolean canCreate, boolean canInfo, boolean canRecovery, CompanyCreationRules rules) {
+        java.util.ArrayList<Component> lines = new java.util.ArrayList<>();
+        lines.add(message("help-root", "BlockStock 公司命令："));
+        if (canCreate) {
+            lines.add(message("help-create", "/company create <名称> <DIVIDENDS>").replaceText(b -> b.matchLiteral("DIVIDENDS").replacement(rules.dividendChoices())));
+            String createRules = net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText().serialize(template("help-create-rules", "创建费：%fee%\n最低注册资本：%capital%\n合计余额：%total%\n初始发行：%shares% 股\n必须是玩家\n插件完成初始化\n公司名不能重复", rules));
+            for (String line : createRules.split("\\R")) lines.add(Component.text(line));
+        }
+        if (canInfo) lines.add(message("help-info", "查询：/company info <名称>"));
+        if (canRecovery) lines.add(message("help-recovery", "恢复：/company recovery list"));
+        return List.copyOf(lines);
+    }
+    private Component template(String key, String fallback, CompanyCreationRules rules) { return message(key, fallback).replaceText(b -> b.matchLiteral("%fee%").replacement(rules.registrationFeeMajor())).replaceText(b -> b.matchLiteral("%capital%").replacement(rules.minimumCapitalMajor())).replaceText(b -> b.matchLiteral("%total%").replacement(rules.totalRequiredMajor())).replaceText(b -> b.matchLiteral("%shares%").replacement(String.valueOf(rules.initialShares()))); }
     public Component duplicateRequest() { return message("duplicate-request", "你的公司注册已在处理中。"); }
     public Component registrationFailed() { return message("registration-failed", "注册失败，可能需要管理员恢复。"); }
     public Component registrationSuccess() { return message("registration-success", "公司注册已完成。"); }

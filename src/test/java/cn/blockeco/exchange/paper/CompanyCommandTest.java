@@ -6,6 +6,9 @@ import cn.blockeco.exchange.application.RegistrationRequest;
 import cn.blockeco.exchange.application.CompanyQueryService;
 import cn.blockeco.exchange.application.CompanyRegistrationService;
 import cn.blockeco.exchange.ports.MainThreadExecutor;
+import cn.blockeco.exchange.domain.money.Money;
+import java.math.BigDecimal;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import java.util.UUID;
@@ -19,6 +22,38 @@ import static org.mockito.Mockito.*;
 class CompanyCommandTest {
     private static final MainThreadExecutor DIRECT_MAIN = new MainThreadExecutor() { @Override public <T> java.util.concurrent.CompletionStage<T> submit(java.util.function.Supplier<T> work) { return CompletableFuture.completedFuture(work.get()); } };
     private final UUID founder = UUID.fromString("11111111-1111-1111-1111-111111111111");
+    private final CompanyCreationRules rules = new CompanyCreationRules(Money.fromMajor(new BigDecimal("1000.00"), 2), Money.fromMajor(new BigDecimal("10000.00"), 2), 2, 1000, List.of(30, 50, 70));
+
+    @Test
+    void root_help_includes_live_create_rules_for_authorized_player() {
+        Player player = permittedPlayer("blockeco.company.create", "blockeco.company.info");
+        CompanyCommand command = new CompanyCommand(mock(CompanyRegistrationService.class), mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN, rules);
+
+        assertThat(command.onCommand(player, mock(Command.class), "company", new String[0])).isTrue();
+
+        assertThat(allPlainMessages(player)).contains("/company create <名称> <30|50|70>", "创建费：1000.00", "最低注册资本：10000.00", "合计余额：11000.00", "初始发行：1000 股", "必须是玩家", "插件完成初始化", "公司名不能重复");
+    }
+
+    @Test
+    void missing_info_name_sends_explicit_usage() {
+        CommandSender sender = mock(CommandSender.class);
+        when(sender.hasPermission("blockeco.company.info")).thenReturn(true);
+        CompanyCommand command = new CompanyCommand(mock(CompanyRegistrationService.class), mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN, rules);
+
+        assertThat(command.onCommand(sender, mock(Command.class), "company", new String[] {"info"})).isTrue();
+
+        ArgumentCaptor<net.kyori.adventure.text.Component> captured = ArgumentCaptor.forClass(net.kyori.adventure.text.Component.class);
+        verify(sender).sendMessage(captured.capture());
+        assertThat(PlainTextComponentSerializer.plainText().serialize(captured.getValue())).contains("/company info <名称>");
+    }
+
+    @Test
+    void create_parser_uses_configured_dividend_choices() {
+        CompanyCreationRules customRules = new CompanyCreationRules(Money.fromMajor(new BigDecimal("1"), 0), Money.fromMajor(new BigDecimal("2"), 0), 0, 1, List.of(25, 75));
+
+        assertThat(CompanyCommand.parseCreate(founder, new String[] {"create", "North", "25"}, customRules)).contains(new RegistrationRequest(founder, "North", 25));
+        assertThat(CompanyCommand.parseCreate(founder, new String[] {"create", "North", "30"}, customRules)).isEmpty();
+    }
 
     @Test
     void create_parser_joins_multiword_name_before_final_dividend() {
@@ -107,5 +142,17 @@ class CompanyCommandTest {
         private final java.util.List<java.util.function.Supplier<?>> queue = new java.util.ArrayList<>();
         @Override public <T> java.util.concurrent.CompletionStage<T> submit(java.util.function.Supplier<T> work) { queue.add(work); return new CompletableFuture<>(); }
         void runAll() { while (!queue.isEmpty()) queue.remove(0).get(); }
+    }
+
+    private static Player permittedPlayer(String... permissions) {
+        Player player = mock(Player.class);
+        for (String permission : permissions) when(player.hasPermission(permission)).thenReturn(true);
+        return player;
+    }
+
+    private static List<String> allPlainMessages(CommandSender sender) {
+        ArgumentCaptor<net.kyori.adventure.text.Component> captured = ArgumentCaptor.forClass(net.kyori.adventure.text.Component.class);
+        verify(sender, atLeastOnce()).sendMessage(captured.capture());
+        return captured.getAllValues().stream().map(component -> PlainTextComponentSerializer.plainText().serialize(component)).toList();
     }
 }

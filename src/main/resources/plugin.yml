@@ -8,6 +8,15 @@ commands:
     description: 管理 BlockStock 公司
     usage: /company <创建|信息|恢复>
 permissions:
+  blockeco.player:
+    description: 'BlockStock 玩家权限'
+    children:
+      blockeco.company.create: true
+      blockeco.company.info: true
+  blockeco.admin:
+    description: 'BlockStock 管理员权限'
+    children:
+      blockeco.admin.recovery: true
   blockeco.company.create:
     default: true
   blockeco.company.info:
