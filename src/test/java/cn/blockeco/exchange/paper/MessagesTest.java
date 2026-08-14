@@ -94,7 +94,7 @@ class MessagesTest {
         assertThat(plain(messages.noPermission())).isEqualTo("你没有权限。");
         assertThat(plain(messages.playersOnly())).isEqualTo("此命令只能由玩家执行。");
         CompanyCreationRules rules = new CompanyCreationRules(Money.fromMajor(new BigDecimal("1000.00"), 2), Money.fromMajor(new BigDecimal("10000.00"), 2), 2, 1000, List.of(30, 50, 70));
-        assertThat(plain(messages.usageCreate(rules))).isEqualTo("用法：/company create <名称> <30|50|70>");
+        assertThat(plain(messages.usageCreate(rules))).isEqualTo("用法：/company create <名称> <实缴资本> <30|50|70>");
         assertThat(plain(messages.duplicateRequest())).isEqualTo("你的公司注册已在处理中。");
         assertThat(plain(messages.registrationFailed())).isEqualTo("注册失败，可能需要管理员恢复。");
         assertThat(plain(messages.registrationSuccess())).isEqualTo("公司注册已完成。");

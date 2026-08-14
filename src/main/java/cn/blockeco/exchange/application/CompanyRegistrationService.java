@@ -7,6 +7,10 @@ import cn.blockeco.exchange.domain.company.DividendRate;
 import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.domain.registration.RegistrationSaga;
 import cn.blockeco.exchange.domain.registration.RegistrationSagaState;
+import cn.blockeco.exchange.domain.finance.CompanyCashAccount;
+import cn.blockeco.exchange.domain.finance.ShareHolding;
+import cn.blockeco.exchange.domain.finance.TreasuryOperation;
+import cn.blockeco.exchange.domain.finance.TreasuryOperationState;
 import cn.blockeco.exchange.ports.*;
 import java.time.Instant;
 import java.util.Map;
@@ -20,14 +24,25 @@ public final class CompanyRegistrationService {
     private final TransactionRunner transactions; private final EconomyGateway economy; private final MainThreadExecutor mainThread;
     private final Executor sqlExecutor; private final AppClock clock;
     private final CompanyCapitalizationService capitalization;
+    private final CompanyFinanceRepository finance;
+    private final TreasuryEscrowGateway escrow;
     public CompanyRegistrationService(CompanyRepository companies, RegistrationSagaRepository sagas, AuditLog audits,
             TransactionRunner transactions, EconomyGateway economy, MainThreadExecutor mainThread, Executor sqlExecutor, AppClock clock, Money registrationFee, Money minimumCapital) {
         this(companies, sagas, audits, transactions, economy, mainThread, sqlExecutor, clock, registrationFee, minimumCapital, null);
     }
     public CompanyRegistrationService(CompanyRepository companies, RegistrationSagaRepository sagas, AuditLog audits,
             TransactionRunner transactions, EconomyGateway economy, MainThreadExecutor mainThread, Executor sqlExecutor, AppClock clock, Money registrationFee, Money minimumCapital, CompanyCapitalizationService capitalization) {
+        this(companies, sagas, audits, transactions, economy, mainThread, sqlExecutor, clock, registrationFee, minimumCapital, capitalization, null, null);
+    }
+    /** Production registration path: the capital was included in the one registration withdrawal. */
+    public CompanyRegistrationService(CompanyRepository companies, RegistrationSagaRepository sagas, AuditLog audits,
+            TransactionRunner transactions, EconomyGateway economy, MainThreadExecutor mainThread, Executor sqlExecutor, AppClock clock, Money registrationFee, Money minimumCapital, CompanyFinanceRepository finance, TreasuryEscrowGateway escrow) {
+        this(companies, sagas, audits, transactions, economy, mainThread, sqlExecutor, clock, registrationFee, minimumCapital, null, finance, escrow);
+    }
+    private CompanyRegistrationService(CompanyRepository companies, RegistrationSagaRepository sagas, AuditLog audits,
+            TransactionRunner transactions, EconomyGateway economy, MainThreadExecutor mainThread, Executor sqlExecutor, AppClock clock, Money registrationFee, Money minimumCapital, CompanyCapitalizationService capitalization, CompanyFinanceRepository finance, TreasuryEscrowGateway escrow) {
         this.companies=companies; this.sagas=sagas; this.audits=audits; this.transactions=transactions; this.economy=economy;
-        this.mainThread=mainThread; this.sqlExecutor=sqlExecutor; this.clock=clock; this.registrationFee=registrationFee; this.minimumCapital=minimumCapital; this.capitalization=capitalization;
+        this.mainThread=mainThread; this.sqlExecutor=sqlExecutor; this.clock=clock; this.registrationFee=registrationFee; this.minimumCapital=minimumCapital; this.capitalization=capitalization; this.finance=finance; this.escrow=escrow;
     }
     public CompletionStage<RegistrationResult> register(RegistrationRequest request) {
         Money paidInCapital = paidInCapital(request);
@@ -69,12 +84,48 @@ public final class CompanyRegistrationService {
     }
     private CompletionStage<RegistrationResult> afterWithdrawal(RegistrationRequest request, RegistrationSaga saga, EconomyGateway.Result outcome) {
         if (outcome.outcome() != EconomyGateway.Outcome.SUCCESS) {
+            if (finance != null && outcome.outcome() == EconomyGateway.Outcome.PROVIDER_FAILURE) return CompletableFuture.supplyAsync(() -> ambiguous(saga, RegistrationSagaState.PREPARED, outcome.message()), sqlExecutor);
             RegistrationResult.Status status = outcome.outcome() == EconomyGateway.Outcome.INSUFFICIENT_FUNDS
                     ? RegistrationResult.Status.INSUFFICIENT_FUNDS : RegistrationResult.Status.PROVIDER_FAILURE;
             return CompletableFuture.supplyAsync(() -> reject(saga, outcome.message(), status), sqlExecutor);
         }
+        if (finance != null) return afterCollectedWithdrawal(request, saga);
         return CompletableFuture.supplyAsync(() -> persistCompleted(request, saga), sqlExecutor).handle((result, failure) -> failure == null ? CompletableFuture.completedFuture(result) : refund(saga, failure)).thenCompose(stage -> stage);
     }
+    private CompletionStage<RegistrationResult> afterCollectedWithdrawal(RegistrationRequest request, RegistrationSaga saga) {
+        return CompletableFuture.runAsync(() -> transitionAndAudit(saga, RegistrationSagaState.PREPARED, RegistrationSagaState.WITHDRAWN, "confirmed combined registration withdrawal"), sqlExecutor)
+                .thenCompose(ignored -> CompletableFuture.supplyAsync(() -> escrow.depositEscrow(request.paidInCapital(), saga.id())))
+                .thenCompose(result -> {
+                    if (result.outcome() != EconomyGateway.Outcome.SUCCESS) return CompletableFuture.supplyAsync(() -> ambiguous(saga, RegistrationSagaState.WITHDRAWN, result.message()), sqlExecutor);
+                    return CompletableFuture.supplyAsync(() -> completeEscrowedRegistration(request, saga), sqlExecutor);
+                })
+                .exceptionally(failure -> RegistrationResult.of(RegistrationResult.Status.RECOVERY_REQUIRED, "registration requires administrator recovery: " + failure.getMessage()));
+    }
+    private RegistrationResult completeEscrowedRegistration(RegistrationRequest request, RegistrationSaga saga) {
+        Money capital = request.paidInCapital();
+        Company company = Company.register(new CompanyId(UUID.randomUUID()), request.companyName(), request.founderId(), capital, DividendRate.fromPercent(request.dividendPercent()), clock.now());
+        try {
+            transactions.inTransaction(c -> {
+                transitionAndAudit(c, saga, RegistrationSagaState.WITHDRAWN, RegistrationSagaState.ESCROW_DEPOSITED, "confirmed escrow deposit");
+                companies.insert(c, company);
+                TreasuryOperation operation = new TreasuryOperation(saga.id(), company.id(), request.founderId(), capital, saga.id().toString(), TreasuryOperationState.PREPARED, clock.now(), clock.now());
+                finance.prepare(c, operation, capitalizationEvent(operation, "NONE", TreasuryOperationState.PREPARED, "registration capital already collected"));
+                finance.transition(c, operation.id(), TreasuryOperationState.PREPARED, TreasuryOperationState.PLAYER_WITHDRAWN, capitalizationEvent(operation, "PREPARED", TreasuryOperationState.PLAYER_WITHDRAWN, "combined withdrawal"));
+                finance.transition(c, operation.id(), TreasuryOperationState.PLAYER_WITHDRAWN, TreasuryOperationState.ESCROW_DEPOSITED, capitalizationEvent(operation, "PLAYER_WITHDRAWN", TreasuryOperationState.ESCROW_DEPOSITED, "confirmed escrow deposit"));
+                finance.createCapitalization(c, new CompanyCashAccount(company.id(), capital, capital, Money.zero(), Money.zero()), new ShareHolding(company.id(), request.founderId(), 1_000, 0), operation, capitalizationEvent(operation, "ESCROW_DEPOSITED", TreasuryOperationState.COMPLETED, ""));
+                audits.append(c, new AuditEvent(UUID.randomUUID(), Optional.of(company.id()), Optional.of(request.founderId()), "COMPANY_REGISTERED", Map.of("capitalMinor", capital.minorUnits()), clock.now()));
+                transitionAndAudit(c, saga, RegistrationSagaState.ESCROW_DEPOSITED, RegistrationSagaState.COMPLETED, null);
+                return null;
+            });
+            return RegistrationResult.of(RegistrationResult.Status.SUCCESS, "");
+        } catch (RuntimeException failure) { return RegistrationResult.of(RegistrationResult.Status.RECOVERY_REQUIRED, "escrow confirmed; database completion requires administrator recovery: " + failure.getMessage()); }
+    }
+    private RegistrationResult ambiguous(RegistrationSaga saga, RegistrationSagaState state, String reason) {
+        transitionAndAudit(saga, state, RegistrationSagaState.AMBIGUOUS, reason);
+        return RegistrationResult.of(RegistrationResult.Status.RECOVERY_REQUIRED, reason);
+    }
+    private void transitionAndAudit(RegistrationSaga saga, RegistrationSagaState from, RegistrationSagaState to, String reason) { transactions.inTransaction(c -> { transitionAndAudit(c, saga, from, to, reason); return null; }); }
+    private AuditEvent capitalizationEvent(TreasuryOperation operation, String from, TreasuryOperationState to, String reason) { return new AuditEvent(UUID.randomUUID(), Optional.of(operation.companyId()), Optional.of(operation.playerId()), "COMPANY_CAPITALIZATION_" + to.name(), Map.of("operationId", operation.id().toString(), "fromState", from, "toState", to.name(), "amountMinor", operation.amount().minorUnits(), "reason", reason == null ? "" : reason), clock.now()); }
     private RegistrationResult reject(RegistrationSaga saga, String message, RegistrationResult.Status status) {
         transactions.inTransaction(connection -> { transitionAndAudit(connection, saga, RegistrationSagaState.PREPARED, RegistrationSagaState.REJECTED, message); return null; });
         return RegistrationResult.of(status, message);
@@ -125,6 +176,9 @@ public final class CompanyRegistrationService {
                 "sagaId", saga.id().toString(), "fromState", from, "toState", to.name(),
                 "totalWithdrawalMinor", saga.totalWithdrawal().minorUnits(), "reason", diagnostic == null ? "" : diagnostic), clock.now());
     }
-    private Money paidInCapital(RegistrationRequest request) { return request.paidInCapital().minorUnits() == 0 ? minimumCapital : request.paidInCapital(); }
+    private Money paidInCapital(RegistrationRequest request) {
+        if (request.paidInCapital().minorUnits() == 0 && finance != null) return request.paidInCapital();
+        return request.paidInCapital().minorUnits() == 0 ? minimumCapital : request.paidInCapital();
+    }
     private record Prepared(RegistrationSaga saga, RegistrationResult result) { }
 }

@@ -9,6 +9,7 @@ import cn.blockeco.exchange.infrastructure.sql.SqlCompanyRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlCompanyFinanceRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlRegistrationSagaRepository;
 import cn.blockeco.exchange.infrastructure.vault.VaultEconomyGateway;
+import cn.blockeco.exchange.infrastructure.vault.VaultTreasuryEscrowGateway;
 import cn.blockeco.exchange.paper.CompanyCommand;
 import cn.blockeco.exchange.paper.CompanyCreationRules;
 import cn.blockeco.exchange.paper.CompanyTabCompleter;
@@ -64,7 +65,10 @@ public final class BlockecoPlugin extends JavaPlugin {
         var companies = new SqlCompanyRepository(db.dataSource()); var sagas = new SqlRegistrationSagaRepository(db.dataSource(), clock);
         var mainThread = new PaperMainThread(this);
         int scale = getConfig().getInt("currency.scale");
-        var registration = new CompanyRegistrationService(companies, sagas, new SqlAuditLog(), db, new VaultEconomyGateway(getServer(), scale), mainThread, sqlExecutor, clock, configuredMoney("company.registration-fee", scale), configuredMoney("company.minimum-capital", scale));
+        var economy = new VaultEconomyGateway(getServer(), scale);
+        var finance = new SqlCompanyFinanceRepository(db.dataSource());
+        var escrow = new VaultTreasuryEscrowGateway(economy, mainThread, java.util.UUID.fromString(getConfig().getString("company.treasury-escrow-uuid")));
+        var registration = new CompanyRegistrationService(companies, sagas, new SqlAuditLog(), db, economy, mainThread, sqlExecutor, clock, configuredMoney("company.registration-fee", scale), configuredMoney("company.minimum-capital", scale), finance, escrow);
         command = new CompanyCommand(registration, new CompanyQueryService(companies, sagas, new SqlCompanyFinanceRepository(db.dataSource()), sqlExecutor), new Messages(getConfig().getConfigurationSection("messages")), mainThread, creationRules);
         var companyCommand = getCommand("company");
         if (companyCommand == null) throw new IllegalStateException("company command is missing from plugin.yml");
@@ -91,6 +95,8 @@ public final class BlockecoPlugin extends JavaPlugin {
     private void validateConfiguration() {
         int scale = getConfig().getInt("currency.scale", -1); if (scale < 0 || scale > 8) throw new IllegalArgumentException("currency.scale must be between 0 and 8");
         positive("company.registration-fee", scale); positive("company.minimum-capital", scale);
+        try { if (new java.util.UUID(0, 0).equals(java.util.UUID.fromString(getConfig().getString("company.treasury-escrow-uuid")))) throw new IllegalArgumentException("company.treasury-escrow-uuid must not be zero"); }
+        catch (IllegalArgumentException failure) { throw new IllegalArgumentException("company.treasury-escrow-uuid must be a non-zero UUID", failure); }
         creationRules = new CompanyCreationRules(configuredMoney("company.registration-fee", scale), configuredMoney("company.minimum-capital", scale), scale, getConfig().getInt("company.initial-shares"), getConfig().getIntegerList("company.allowed-dividend-percent"));
     }
     private void positive(String path, int scale) { if (configuredMoney(path, scale).minorUnits() <= 0) throw new IllegalArgumentException(path + " must be positive"); }

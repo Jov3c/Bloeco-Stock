@@ -68,7 +68,7 @@ public final class CompanyCapitalizationService {
         if (result.outcome() != EconomyGateway.Outcome.SUCCESS) return CompletableFuture.runAsync(() -> transition(operation, TreasuryOperationState.PLAYER_WITHDRAWN, TreasuryOperationState.AMBIGUOUS, result.message()), sql);
         return CompletableFuture.runAsync(() -> transition(operation, TreasuryOperationState.PLAYER_WITHDRAWN, TreasuryOperationState.ESCROW_DEPOSITED, "confirmed escrow deposit"), sql)
                 .thenCompose(ignored -> CompletableFuture.runAsync(() -> complete(operation), sql))
-                .exceptionallyCompose(failure -> CompletableFuture.runAsync(() -> { TreasuryOperation current = finance.findById(operation.id()).orElse(operation); if (current.state() == TreasuryOperationState.ESCROW_DEPOSITED) { transition(current, TreasuryOperationState.ESCROW_DEPOSITED, TreasuryOperationState.REFUND_REQUIRED, failure.getMessage()); refund(current); } }, sql));
+                .exceptionallyCompose(failure -> CompletableFuture.runAsync(() -> { TreasuryOperation current = finance.findById(operation.id()).orElse(operation); if (current.state() == TreasuryOperationState.ESCROW_DEPOSITED) transition(current, TreasuryOperationState.ESCROW_DEPOSITED, TreasuryOperationState.AMBIGUOUS, "database completion failed after confirmed escrow deposit: " + failure.getMessage()); }, sql));
     }
     private void complete(TreasuryOperation operation) {
         TreasuryOperation current = finance.findById(operation.id()).orElse(operation);
@@ -77,13 +77,6 @@ public final class CompanyCapitalizationService {
         Money amount = current.amount(); CompanyCashAccount account = new CompanyCashAccount(current.companyId(), amount, amount, Money.zero(), Money.zero());
         ShareHolding holding = new ShareHolding(current.companyId(), current.playerId(), 1_000, 0);
         transactions.inTransaction(c -> { finance.createCapitalization(c, account, holding, current, event(current, TreasuryOperationState.ESCROW_DEPOSITED.name(), TreasuryOperationState.COMPLETED, "")); return null; });
-    }
-    private void refund(TreasuryOperation operation) {
-        EconomyGateway.Result withdrawal = escrow.withdrawEscrow(operation.amount(), operation.id());
-        if (withdrawal.outcome() != EconomyGateway.Outcome.SUCCESS) { transition(operation, TreasuryOperationState.REFUND_REQUIRED, TreasuryOperationState.AMBIGUOUS, withdrawal.message()); return; }
-        EconomyGateway.Result deposit = escrow.refundPlayer(operation.playerId(), operation.amount(), operation.id());
-        if (deposit.outcome() == EconomyGateway.Outcome.SUCCESS) transition(operation, TreasuryOperationState.REFUND_REQUIRED, TreasuryOperationState.REFUNDED, "confirmed founder refund");
-        else transition(operation, TreasuryOperationState.REFUND_REQUIRED, TreasuryOperationState.AMBIGUOUS, deposit.message());
     }
     private void createLegacy(Company company) {
         UUID id = UUID.nameUUIDFromBytes(("legacy-capitalization:" + company.id().value()).getBytes(StandardCharsets.UTF_8));

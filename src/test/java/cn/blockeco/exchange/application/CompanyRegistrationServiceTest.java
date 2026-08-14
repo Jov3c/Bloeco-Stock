@@ -17,7 +17,10 @@ import cn.blockeco.exchange.ports.TransactionRunner;
 import cn.blockeco.exchange.infrastructure.sql.Database;
 import cn.blockeco.exchange.infrastructure.sql.SqlAuditLog;
 import cn.blockeco.exchange.infrastructure.sql.SqlCompanyRepository;
+import cn.blockeco.exchange.infrastructure.sql.SqlCompanyFinanceRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlRegistrationSagaRepository;
+import cn.blockeco.exchange.ports.CompanyFinanceRepository;
+import cn.blockeco.exchange.ports.TreasuryEscrowGateway;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -34,6 +37,70 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
 class CompanyRegistrationServiceTest {
+
+    @Test
+    void registration_withdraws_once_then_escrows_only_capital_before_creating_company_finance() throws Exception {
+        Path file = Files.createTempFile("blockeco-registration-escrow-", ".db");
+        try (Database database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate();
+            Instant now = Instant.parse("2026-08-14T12:00:00Z");
+            ProgrammableEconomy economy = new ProgrammableEconomy();
+            RecordingRegistrationEscrow escrow = new RecordingRegistrationEscrow();
+            CompanyFinanceRepository finance = new SqlCompanyFinanceRepository(database.dataSource());
+            CompanyRegistrationService service = new CompanyRegistrationService(
+                    new SqlCompanyRepository(database.dataSource()), new SqlRegistrationSagaRepository(database.dataSource(), () -> now),
+                    new SqlAuditLog(), database, economy, directMain(), Runnable::run, () -> now,
+                    Money.ofMinor(100), Money.ofMinor(1_000), finance, escrow);
+
+            RegistrationResult result = service.register(new RegistrationRequest(UUID.randomUUID(), "Escrow Guild", Money.ofMinor(1_500), 50)).toCompletableFuture().join();
+
+            assertThat(result.status()).isEqualTo(RegistrationResult.Status.SUCCESS);
+            assertThat(economy.calls).isEqualTo(1);
+            assertThat(economy.withdrawn()).isEqualTo(Money.ofMinor(1_600));
+            assertThat(escrow.deposits).isEqualTo(1);
+            assertThat(escrow.deposited).isEqualTo(Money.ofMinor(1_500));
+            try (Connection c = database.dataSource().getConnection(); var statement = c.prepareStatement("SELECT cash_minor, paid_in_capital_minor FROM company_cash_accounts"); var rows = statement.executeQuery()) {
+                assertThat(rows.next()).isTrue(); assertThat(rows.getLong(1)).isEqualTo(1_500); assertThat(rows.getLong(2)).isEqualTo(1_500);
+            }
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
+    void escrow_failure_leaves_no_company_or_finance_records() throws Exception {
+        Path file = Files.createTempFile("blockeco-registration-escrow-failure-", ".db");
+        try (Database database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate();
+            Instant now = Instant.parse("2026-08-14T12:00:00Z");
+            RecordingRegistrationEscrow escrow = new RecordingRegistrationEscrow(); escrow.depositResult = EconomyGateway.Result.providerFailure("timeout");
+            CompanyRegistrationService service = new CompanyRegistrationService(
+                    new SqlCompanyRepository(database.dataSource()), new SqlRegistrationSagaRepository(database.dataSource(), () -> now),
+                    new SqlAuditLog(), database, new ProgrammableEconomy(), directMain(), Runnable::run, () -> now,
+                    Money.ofMinor(100), Money.ofMinor(1_000), new SqlCompanyFinanceRepository(database.dataSource()), escrow);
+
+            RegistrationResult result = service.register(new RegistrationRequest(UUID.randomUUID(), "Unescrowed Guild", Money.ofMinor(1_500), 50)).toCompletableFuture().join();
+
+            assertThat(result.status()).isEqualTo(RegistrationResult.Status.RECOVERY_REQUIRED);
+            try (Connection c = database.dataSource().getConnection(); var statement = c.prepareStatement("SELECT (SELECT COUNT(*) FROM companies), (SELECT COUNT(*) FROM company_cash_accounts), (SELECT COUNT(*) FROM share_holdings)"); var rows = statement.executeQuery()) {
+                assertThat(rows.next()).isTrue(); assertThat(rows.getInt(1)).isZero(); assertThat(rows.getInt(2)).isZero(); assertThat(rows.getInt(3)).isZero();
+            }
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
+    void safe_registration_rejects_missing_capital_before_vault() throws Exception {
+        Path file = Files.createTempFile("blockeco-registration-missing-capital-", ".db");
+        try (Database database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate();
+            ProgrammableEconomy economy = new ProgrammableEconomy();
+            Instant now = Instant.parse("2026-08-14T12:00:00Z");
+            CompanyRegistrationService service = new CompanyRegistrationService(new SqlCompanyRepository(database.dataSource()), new SqlRegistrationSagaRepository(database.dataSource(), () -> now), new SqlAuditLog(), database, economy, directMain(), Runnable::run, () -> now, Money.ofMinor(100), Money.ofMinor(1_000), new SqlCompanyFinanceRepository(database.dataSource()), new RecordingRegistrationEscrow());
+
+            RegistrationResult result = service.register(new RegistrationRequest(UUID.randomUUID(), "No Capital", Money.zero(), 50)).toCompletableFuture().join();
+
+            assertThat(result.status()).isEqualTo(RegistrationResult.Status.PROVIDER_FAILURE);
+            assertThat(economy.calls).isZero();
+        } finally { Files.deleteIfExists(file); }
+    }
 
     @Test
     void completed_registration_uses_requested_paid_in_capital() {
@@ -351,6 +418,16 @@ class CompanyRegistrationServiceTest {
         RegistrationSaga savedSaga() { return sagas.values().iterator().next(); }
         Company company(String name) { return Company.register(new CompanyId(UUID.randomUUID()), name, UUID.randomUUID(), Money.zero(), cn.blockeco.exchange.domain.company.DividendRate.FIFTY, now); }
         ProgrammableEconomy economy() { return economy; }
+    }
+
+    private static final class RecordingRegistrationEscrow implements TreasuryEscrowGateway {
+        private int deposits;
+        private Money deposited = Money.zero();
+        private EconomyGateway.Result depositResult = EconomyGateway.Result.success("");
+        @Override public EconomyGateway.Result withdrawPlayer(UUID playerId, Money amount, UUID operationId) { throw new AssertionError("registration must not withdraw capital a second time"); }
+        @Override public EconomyGateway.Result depositEscrow(Money amount, UUID operationId) { deposits++; deposited = amount; return depositResult; }
+        @Override public EconomyGateway.Result withdrawEscrow(Money amount, UUID operationId) { throw new AssertionError("automatic compensation is unsafe"); }
+        @Override public EconomyGateway.Result refundPlayer(UUID playerId, Money amount, UUID operationId) { throw new AssertionError("automatic compensation is unsafe"); }
     }
 
     private static final class ProgrammableEconomy implements EconomyGateway {

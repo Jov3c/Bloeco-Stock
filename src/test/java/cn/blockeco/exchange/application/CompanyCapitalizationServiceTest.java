@@ -48,11 +48,10 @@ class CompanyCapitalizationServiceTest {
     }
 
     @Test
-    void database_failure_after_escrow_deposit_refunds_founder_once_and_marks_recovery_when_refund_is_ambiguous() throws Exception {
+    void database_failure_after_escrow_deposit_marks_ambiguous_without_replaying_vault_actions() throws Exception {
         Path file = Files.createTempFile("blockstock-capitalization-refund-", ".db");
         try (Database database = migrated(file)) {
             RecordingEscrow escrow = new RecordingEscrow();
-            escrow.refund = EconomyGateway.Result.providerFailure("timeout");
             CompanyCapitalizationService service = new CompanyCapitalizationService(
                     new FailingFinanceRepository(database.dataSource()), new SqlAuditLog(), database, escrow, directMain(), Runnable::run, () -> Instant.parse("2026-08-14T12:00:00Z"));
 
@@ -61,7 +60,7 @@ class CompanyCapitalizationServiceTest {
 
             assertThat(escrow.playerWithdrawals).isEqualTo(1);
             assertThat(escrow.escrowDeposits).isEqualTo(1);
-            assertThat(escrow.refunds).isEqualTo(1);
+            assertThat(escrow.refunds).isZero();
             assertThat(stringValue(database.dataSource().getConnection(), "SELECT state FROM treasury_operations")).isEqualTo("AMBIGUOUS");
         } finally { Files.deleteIfExists(file); }
     }

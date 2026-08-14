@@ -4,6 +4,8 @@ company:
   registration-fee: '1000.00'
   minimum-capital: '10000.00'
   initial-shares: 1000
+  # A BlockStock-controlled, non-player Vault account. Registration capital is held here before company records become available.
+  treasury-escrow-uuid: '00000000-0000-0000-0000-000000000001'
   allowed-dividend-percent: [30, 50, 70]
 database:
   file: blockeco.db
