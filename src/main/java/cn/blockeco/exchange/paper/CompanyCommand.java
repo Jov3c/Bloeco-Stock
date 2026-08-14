@@ -13,12 +13,7 @@ public final class CompanyCommand implements CommandExecutor {
     private final Set<UUID> inFlight = ConcurrentHashMap.newKeySet();
     private volatile boolean accepting = false;
     public CompanyCommand(CompanyRegistrationService registration, CompanyQueryService queries, Messages messages, MainThreadExecutor mainThread, CompanyCreationRules rules) { this.registration=registration; this.queries=queries; this.messages=messages; this.mainThread=mainThread; this.rules=rules; }
-    public CompanyCommand(CompanyRegistrationService registration, CompanyQueryService queries, Messages messages, MainThreadExecutor mainThread) { this(registration, queries, messages, mainThread, defaultRules()); }
     public void setAccepting(boolean accepting) { this.accepting = accepting; }
-    public static Optional<RegistrationRequest> parseCreate(UUID player, String[] args) {
-        return parseCreate(player, args, defaultRules());
-    }
-    private static CompanyCreationRules defaultRules() { return new CompanyCreationRules(cn.blockeco.exchange.domain.money.Money.zero(), cn.blockeco.exchange.domain.money.Money.zero(), 0, 0, List.of(30, 50, 70)); }
     public static Optional<RegistrationRequest> parseCreate(UUID player, String[] args, CompanyCreationRules rules) {
         if (args.length < 3 || !"create".equalsIgnoreCase(args[0])) return Optional.empty();
         int percent; try { percent = Integer.parseInt(args[args.length - 1]); } catch (NumberFormatException e) { return Optional.empty(); }

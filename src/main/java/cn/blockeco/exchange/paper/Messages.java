@@ -13,7 +13,6 @@ public final class Messages {
     public Component initializing() { return message("initializing", "BlockStock 正在初始化，请稍后再试。"); }
     public Component noPermission() { return message("no-permission", "你没有权限。"); }
     public Component playersOnly() { return message("players-only", "此命令只能由玩家执行。"); }
-    public Component usageCreate() { return message("usage-create", "用法：/company create <名称> <30|50|70>"); }
     public Component usageCreate(CompanyCreationRules rules) { return message("usage-create", "用法：/company create <名称> <DIVIDENDS>").replaceText(b -> b.matchLiteral("DIVIDENDS").replacement(rules.dividendChoices())); }
     public Component usageInfo() { return message("usage-info", "用法：/company info <名称>"); }
     public Component usageRecovery() { return message("usage-recovery", "用法：/company recovery list"); }

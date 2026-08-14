@@ -7,15 +7,19 @@ import static org.mockito.Mockito.*;
 import cn.blockeco.exchange.application.*;
 import cn.blockeco.exchange.paper.*;
 import cn.blockeco.exchange.ports.MainThreadExecutor;
+import cn.blockeco.exchange.domain.money.Money;
+import java.math.BigDecimal;
+import java.util.List;
 import java.util.concurrent.*;
 import org.bukkit.command.Command;
 import org.bukkit.entity.Player;
 import org.junit.jupiter.api.Test;
 
 class PluginRuntimeTest {
+ private static final CompanyCreationRules RULES = new CompanyCreationRules(Money.fromMajor(new BigDecimal("1000.00"), 2), Money.fromMajor(new BigDecimal("10000.00"), 2), 2, 1000, List.of(30, 50, 70));
  @Test void stop_closes_published_database_before_a_blocked_migration_finishes() throws Exception {
   CompanyRegistrationService service=mock(CompanyRegistrationService.class); MainThreadExecutor main=new MainThreadExecutor(){public <T> CompletionStage<T> submit(java.util.function.Supplier<T>w){return CompletableFuture.completedFuture(w.get());}};
-  CompanyCommand command=new CompanyCommand(service,mock(CompanyQueryService.class),new Messages(null),main); ExecutorService migrationExecutor=Executors.newSingleThreadExecutor(); ExecutorService stopper=Executors.newSingleThreadExecutor();
+  CompanyCommand command=new CompanyCommand(service,mock(CompanyQueryService.class),new Messages(null),main,RULES); ExecutorService migrationExecutor=Executors.newSingleThreadExecutor(); ExecutorService stopper=Executors.newSingleThreadExecutor();
   CountDownLatch published=new CountDownLatch(1); CountDownLatch releaseMigration=new CountDownLatch(1); CountDownLatch closed=new CountDownLatch(1); java.util.concurrent.atomic.AtomicInteger closes=new java.util.concurrent.atomic.AtomicInteger(); java.util.concurrent.atomic.AtomicInteger wired=new java.util.concurrent.atomic.AtomicInteger();
   PluginRuntime runtime=new PluginRuntime(command); BootstrapCoordinator<AutoCloseable> bootstrap=new BootstrapCoordinator<>(main, value -> { wired.incrementAndGet(); return runtime.attachReady(command,value); }, failure -> {}, runtime::closeDatabase); runtime.attachBootstrap(bootstrap); runtime.attachExecutor(migrationExecutor);
   CompletableFuture<AutoCloseable> migration=CompletableFuture.supplyAsync(() -> { AutoCloseable database=() -> { closes.incrementAndGet(); closed.countDown(); }; runtime.attachDatabase(database); published.countDown(); try { releaseMigration.await(); } catch (InterruptedException exception) { Thread.currentThread().interrupt(); } return database; }, migrationExecutor);
@@ -26,7 +30,7 @@ class PluginRuntimeTest {
  }
  @Test void stop_during_migration_prevents_wiring_and_closes_completed_database_once() {
   CompanyRegistrationService service=mock(CompanyRegistrationService.class); MainThreadExecutor main=new MainThreadExecutor(){public <T> CompletionStage<T> submit(java.util.function.Supplier<T>w){return CompletableFuture.completedFuture(w.get());}};
-  CompanyCommand command=new CompanyCommand(service,mock(CompanyQueryService.class),new Messages(null),main); command.setAccepting(true);
+  CompanyCommand command=new CompanyCommand(service,mock(CompanyQueryService.class),new Messages(null),main,RULES); command.setAccepting(true);
   CompletableFuture<AutoCloseable> migration=new CompletableFuture<>(); java.util.concurrent.atomic.AtomicInteger wired=new java.util.concurrent.atomic.AtomicInteger(); java.util.concurrent.atomic.AtomicInteger disabled=new java.util.concurrent.atomic.AtomicInteger(); java.util.concurrent.atomic.AtomicInteger closes=new java.util.concurrent.atomic.AtomicInteger(); ExecutorService executor=Executors.newSingleThreadExecutor();
   PluginRuntime runtime=new PluginRuntime(command); BootstrapCoordinator<AutoCloseable> bootstrap=new BootstrapCoordinator<>(main, value -> { wired.incrementAndGet(); return runtime.attachReady(command,value); }, failure -> disabled.incrementAndGet(), runtime::closeDatabase);
   runtime.attachBootstrap(bootstrap); runtime.attachExecutor(executor); bootstrap.coordinate(migration); runtime.stop(); migration.complete(closes::incrementAndGet);
@@ -34,13 +38,13 @@ class PluginRuntimeTest {
  }
  @Test void ready_attach_racing_stop_closes_database_once() throws Exception {
   CompanyRegistrationService service=mock(CompanyRegistrationService.class); MainThreadExecutor main=new MainThreadExecutor(){public <T> CompletionStage<T> submit(java.util.function.Supplier<T>w){return CompletableFuture.completedFuture(w.get());}};
-  CompanyCommand command=new CompanyCommand(service,mock(CompanyQueryService.class),new Messages(null),main); java.util.concurrent.atomic.AtomicInteger closes=new java.util.concurrent.atomic.AtomicInteger(); PluginRuntime runtime=new PluginRuntime(command);
+  CompanyCommand command=new CompanyCommand(service,mock(CompanyQueryService.class),new Messages(null),main,RULES); java.util.concurrent.atomic.AtomicInteger closes=new java.util.concurrent.atomic.AtomicInteger(); PluginRuntime runtime=new PluginRuntime(command);
   ExecutorService callers=Executors.newFixedThreadPool(2); java.util.concurrent.Future<?> attach=callers.submit(() -> runtime.attachReady(command, closes::incrementAndGet)); java.util.concurrent.Future<?> stop=callers.submit(runtime::stop); attach.get(); stop.get(); callers.shutdown();
   Player player=mock(Player.class); when(player.hasPermission("blockeco.company.create")).thenReturn(true); command.onCommand(player,mock(Command.class),"company",new String[]{"create","North","30"}); verifyNoInteractions(service); assertThat(closes).hasValue(1);
  }
  @Test void stop_rejects_real_command_and_closes_once() {
   CompanyRegistrationService service=mock(CompanyRegistrationService.class); MainThreadExecutor main=new MainThreadExecutor(){public <T> CompletionStage<T> submit(java.util.function.Supplier<T>w){return CompletableFuture.completedFuture(w.get());}};
-  CompanyCommand command=new CompanyCommand(service,mock(CompanyQueryService.class),new Messages(null),main); command.setAccepting(true);
+  CompanyCommand command=new CompanyCommand(service,mock(CompanyQueryService.class),new Messages(null),main,RULES); command.setAccepting(true);
   BootstrapCoordinator<String> bootstrap=new BootstrapCoordinator<>(main,v->true,e->{},v->{}); ExecutorService executor=Executors.newSingleThreadExecutor(); java.util.concurrent.atomic.AtomicInteger closes=new java.util.concurrent.atomic.AtomicInteger();
   PluginRuntime runtime=new PluginRuntime(command,bootstrap,executor,closes::incrementAndGet); runtime.stop(); runtime.stop();
   Player player=mock(Player.class); when(player.hasPermission("blockeco.company.create")).thenReturn(true);

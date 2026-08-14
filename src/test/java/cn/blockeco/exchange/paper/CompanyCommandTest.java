@@ -50,28 +50,32 @@ class CompanyCommandTest {
     @Test
     void create_parser_uses_configured_dividend_choices() {
         CompanyCreationRules customRules = new CompanyCreationRules(Money.fromMajor(new BigDecimal("1"), 0), Money.fromMajor(new BigDecimal("2"), 0), 0, 1, List.of(25, 75));
+        Player player = permittedPlayer("blockeco.company.create");
+        CompanyCommand command = new CompanyCommand(mock(CompanyRegistrationService.class), mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN, customRules);
 
         assertThat(CompanyCommand.parseCreate(founder, new String[] {"create", "North", "25"}, customRules)).contains(new RegistrationRequest(founder, "North", 25));
         assertThat(CompanyCommand.parseCreate(founder, new String[] {"create", "North", "30"}, customRules)).isEmpty();
+        command.onCommand(player, mock(Command.class), "company", new String[0]);
+        assertThat(allPlainMessages(player)).contains("/company create <名称> <25|75>");
     }
 
     @Test
     void create_parser_joins_multiword_name_before_final_dividend() {
-        var result = CompanyCommand.parseCreate(founder, new String[] {"create", "North", "Star", "50"});
+        var result = CompanyCommand.parseCreate(founder, new String[] {"create", "North", "Star", "50"}, rules);
 
         assertThat(result).contains(new RegistrationRequest(founder, "North Star", 50));
     }
 
     @Test
     void create_parser_strips_optional_quotes_from_multiword_name() {
-        var result = CompanyCommand.parseCreate(founder, new String[] {"create", "\"North", "Star\"", "70"});
+        var result = CompanyCommand.parseCreate(founder, new String[] {"create", "\"North", "Star\"", "70"}, rules);
 
         assertThat(result).contains(new RegistrationRequest(founder, "North Star", 70));
     }
 
     @Test
     void create_parser_rejects_dividend_outside_supported_choices() {
-        var result = CompanyCommand.parseCreate(founder, new String[] {"create", "North", "40"});
+        var result = CompanyCommand.parseCreate(founder, new String[] {"create", "North", "40"}, rules);
 
         assertThat(result).isEmpty();
     }
@@ -80,7 +84,7 @@ class CompanyCommandTest {
     void create_rejects_console_before_dispatching_registration() {
         CompanyRegistrationService registration = mock(CompanyRegistrationService.class);
         CommandSender console = mock(CommandSender.class);
-        CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN);
+        CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN, rules);
 
         command.onCommand(console, mock(Command.class), "company", new String[] {"create", "North", "30"});
 
@@ -94,7 +98,7 @@ class CompanyCommandTest {
     void create_rejects_player_without_permission() {
         CompanyRegistrationService registration = mock(CompanyRegistrationService.class);
         Player player = mock(Player.class); when(player.hasPermission("blockeco.company.create")).thenReturn(false);
-        CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN);
+        CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN, rules);
 
         command.onCommand(player, mock(Command.class), "company", new String[] {"create", "North", "30"});
 
@@ -106,7 +110,7 @@ class CompanyCommandTest {
     void create_during_initialization_sends_configured_message_without_service_call() {
         CompanyRegistrationService registration = mock(CompanyRegistrationService.class);
         Player player = mock(Player.class); when(player.hasPermission("blockeco.company.create")).thenReturn(true);
-        CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN);
+        CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN, rules);
 
         command.onCommand(player, mock(Command.class), "company", new String[] {"create", "North", "30"});
 
@@ -119,7 +123,7 @@ class CompanyCommandTest {
         CompanyRegistrationService registration = mock(CompanyRegistrationService.class);
         Player player = mock(Player.class); when(player.hasPermission("blockeco.company.create")).thenReturn(true); when(player.getUniqueId()).thenReturn(founder);
         when(registration.register(any())).thenReturn(new CompletableFuture<>());
-        CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN); command.setAccepting(true);
+        CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN, rules); command.setAccepting(true);
 
         command.onCommand(player, mock(Command.class), "company", new String[] {"create", "North", "30"});
         command.onCommand(player, mock(Command.class), "company", new String[] {"create", "North", "30"});
@@ -132,7 +136,7 @@ class CompanyCommandTest {
     void create_completion_sends_result_only_when_main_thread_queue_runs() {
         CompanyRegistrationService registration = mock(CompanyRegistrationService.class); CompletableFuture<cn.blockeco.exchange.application.RegistrationResult> result = new CompletableFuture<>(); when(registration.register(any())).thenReturn(result);
         Player player = mock(Player.class); when(player.hasPermission("blockeco.company.create")).thenReturn(true); when(player.getUniqueId()).thenReturn(founder);
-        QueuedMain main = new QueuedMain(); CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), main); command.setAccepting(true);
+        QueuedMain main = new QueuedMain(); CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), main, rules); command.setAccepting(true);
         command.onCommand(player, mock(Command.class), "company", new String[] {"create", "North", "30"}); result.complete(cn.blockeco.exchange.application.RegistrationResult.of(cn.blockeco.exchange.application.RegistrationResult.Status.SUCCESS, ""));
         verify(player, times(1)).sendMessage(any(net.kyori.adventure.text.Component.class)); main.runAll();
         verify(player, times(2)).sendMessage(any(net.kyori.adventure.text.Component.class));
