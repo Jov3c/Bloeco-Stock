@@ -10,12 +10,9 @@ import java.util.UUID;
 public final class VaultTreasuryEscrowGateway implements TreasuryEscrowGateway {
     private final EconomyGateway economy; private final MainThreadExecutor mainThread; private final UUID escrowId;
     public VaultTreasuryEscrowGateway(EconomyGateway economy, MainThreadExecutor mainThread, UUID escrowId) { this.economy = economy; this.mainThread = mainThread; this.escrowId = escrowId; }
-    @Override public EconomyGateway.Result transferFromPlayer(UUID playerId, Money amount, UUID operationId) {
-        EconomyGateway.Result withdrawal = onMain(() -> economy.withdraw(playerId, amount)); if (withdrawal.outcome() != EconomyGateway.Outcome.SUCCESS) return withdrawal;
-        EconomyGateway.Result deposit = onMain(() -> economy.deposit(escrowId, amount)); if (deposit.outcome() == EconomyGateway.Outcome.SUCCESS) return deposit;
-        EconomyGateway.Result compensation = onMain(() -> economy.deposit(playerId, amount));
-        return compensation.outcome() == EconomyGateway.Outcome.SUCCESS ? EconomyGateway.Result.providerFailure("escrow deposit failed; player compensated: " + deposit.message()) : EconomyGateway.Result.providerFailure("escrow deposit and compensation failed: " + deposit.message() + "; " + compensation.message());
-    }
-    @Override public EconomyGateway.Result refundToPlayer(UUID playerId, Money amount, UUID operationId) { return onMain(() -> economy.withdraw(escrowId, amount)).outcome() == EconomyGateway.Outcome.SUCCESS ? onMain(() -> economy.deposit(playerId, amount)) : EconomyGateway.Result.providerFailure("escrow withdrawal failed"); }
+    @Override public EconomyGateway.Result withdrawPlayer(UUID playerId, Money amount, UUID operationId) { return onMain(() -> economy.withdraw(playerId, amount)); }
+    @Override public EconomyGateway.Result depositEscrow(Money amount, UUID operationId) { return onMain(() -> economy.deposit(escrowId, amount)); }
+    @Override public EconomyGateway.Result withdrawEscrow(Money amount, UUID operationId) { return onMain(() -> economy.withdraw(escrowId, amount)); }
+    @Override public EconomyGateway.Result refundPlayer(UUID playerId, Money amount, UUID operationId) { return onMain(() -> economy.deposit(playerId, amount)); }
     private EconomyGateway.Result onMain(java.util.function.Supplier<EconomyGateway.Result> work) { return mainThread.submit(work).toCompletableFuture().join(); }
 }

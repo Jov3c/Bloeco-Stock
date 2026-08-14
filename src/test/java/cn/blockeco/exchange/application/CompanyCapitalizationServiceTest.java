@@ -36,7 +36,8 @@ class CompanyCapitalizationServiceTest {
 
             service.capitalize(company, company.founderId(), Money.ofMinor(12_345), UUID.randomUUID()).toCompletableFuture().join();
 
-            assertThat(escrow.transfers).isEqualTo(1);
+            assertThat(escrow.playerWithdrawals).isEqualTo(1);
+            assertThat(escrow.escrowDeposits).isEqualTo(1);
             assertThat(escrow.refunds).isZero();
             assertThat(longValue(database.dataSource().getConnection(), "SELECT cash_minor FROM company_cash_accounts")).isEqualTo(12_345);
             assertThat(longValue(database.dataSource().getConnection(), "SELECT available_shares FROM share_holdings")).isEqualTo(1_000);
@@ -58,7 +59,8 @@ class CompanyCapitalizationServiceTest {
             Company company = company(); insertCompany(database, company);
             service.capitalize(company, company.founderId(), Money.ofMinor(99), UUID.randomUUID()).toCompletableFuture().join();
 
-            assertThat(escrow.transfers).isEqualTo(1);
+            assertThat(escrow.playerWithdrawals).isEqualTo(1);
+            assertThat(escrow.escrowDeposits).isEqualTo(1);
             assertThat(escrow.refunds).isEqualTo(1);
             assertThat(stringValue(database.dataSource().getConnection(), "SELECT state FROM treasury_operations")).isEqualTo("AMBIGUOUS");
         } finally { Files.deleteIfExists(file); }
@@ -76,9 +78,51 @@ class CompanyCapitalizationServiceTest {
             service.recoverPendingCapitalizations().toCompletableFuture().join();
             service.recoverPendingCapitalizations().toCompletableFuture().join();
 
-            assertThat(escrow.transfers).isZero();
+            assertThat(escrow.playerWithdrawals).isZero();
             assertThat(longValue(database.dataSource().getConnection(), "SELECT COUNT(*) FROM company_cash_accounts")).isEqualTo(1);
             assertThat(longValue(database.dataSource().getConnection(), "SELECT COUNT(*) FROM treasury_operations")).isEqualTo(1);
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
+    void recovery_marks_crash_ambiguous_prepared_operation_without_repeating_a_player_withdrawal() throws Exception {
+        Path file = Files.createTempFile("blockstock-capitalization-ambiguous-", ".db");
+        try (Database database = migrated(file)) {
+            Company company = company(); insertCompany(database, company);
+            RecordingEscrow escrow = new RecordingEscrow();
+            CompanyCapitalizationService service = service(database, escrow);
+            UUID operationId = UUID.randomUUID();
+            database.inTransaction(c -> { new SqlCompanyFinanceRepository(database.dataSource()).prepare(c,
+                    new cn.blockeco.exchange.domain.finance.TreasuryOperation(operationId, company.id(), company.founderId(), Money.ofMinor(7), operationId.toString(), cn.blockeco.exchange.domain.finance.TreasuryOperationState.PREPARED, Instant.parse("2026-08-14T12:00:00Z"), Instant.parse("2026-08-14T12:00:00Z")),
+                    new cn.blockeco.exchange.domain.audit.AuditEvent(UUID.randomUUID(), java.util.Optional.of(company.id()), java.util.Optional.of(company.founderId()), "COMPANY_CAPITALIZATION_PREPARED", java.util.Map.of("operationId", operationId.toString()), Instant.parse("2026-08-14T12:00:00Z"))); return null; });
+
+            service.recoverPendingCapitalizations().toCompletableFuture().join();
+
+            assertThat(escrow.playerWithdrawals).isZero();
+            assertThat(escrow.escrowDeposits).isZero();
+            assertThat(stringValue(database.dataSource().getConnection(), "SELECT state FROM treasury_operations WHERE id = '" + operationId + "'"))
+                    .isEqualTo("AMBIGUOUS");
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
+    void recovery_marks_player_withdrawn_operation_ambiguous_without_repeating_an_escrow_deposit() throws Exception {
+        Path file = Files.createTempFile("blockstock-capitalization-withdrawn-", ".db");
+        try (Database database = migrated(file)) {
+            Company company = company(); insertCompany(database, company);
+            RecordingEscrow escrow = new RecordingEscrow(); CompanyCapitalizationService service = service(database, escrow);
+            UUID operationId = UUID.randomUUID(); Instant now = Instant.parse("2026-08-14T12:00:00Z");
+            database.inTransaction(c -> { SqlCompanyFinanceRepository repository = new SqlCompanyFinanceRepository(database.dataSource());
+                var operation = new cn.blockeco.exchange.domain.finance.TreasuryOperation(operationId, company.id(), company.founderId(), Money.ofMinor(7), operationId.toString(), cn.blockeco.exchange.domain.finance.TreasuryOperationState.PREPARED, now, now);
+                repository.prepare(c, operation, new cn.blockeco.exchange.domain.audit.AuditEvent(UUID.randomUUID(), java.util.Optional.of(company.id()), java.util.Optional.of(company.founderId()), "COMPANY_CAPITALIZATION_PREPARED", java.util.Map.of("operationId", operationId.toString()), now));
+                repository.transition(c, operationId, cn.blockeco.exchange.domain.finance.TreasuryOperationState.PREPARED, cn.blockeco.exchange.domain.finance.TreasuryOperationState.PLAYER_WITHDRAWN, new cn.blockeco.exchange.domain.audit.AuditEvent(UUID.randomUUID(), java.util.Optional.of(company.id()), java.util.Optional.of(company.founderId()), "COMPANY_CAPITALIZATION_PLAYER_WITHDRAWN", java.util.Map.of("operationId", operationId.toString()), now)); return null; });
+
+            service.recoverPendingCapitalizations().toCompletableFuture().join();
+
+            assertThat(escrow.playerWithdrawals).isZero();
+            assertThat(escrow.escrowDeposits).isZero();
+            assertThat(stringValue(database.dataSource().getConnection(), "SELECT state FROM treasury_operations WHERE id = '" + operationId + "'"))
+                    .isEqualTo("AMBIGUOUS");
         } finally { Files.deleteIfExists(file); }
     }
 
@@ -93,9 +137,11 @@ class CompanyCapitalizationServiceTest {
     private static String stringValue(Connection c, String sql) throws Exception { try (c; PreparedStatement s = c.prepareStatement(sql); var rows = s.executeQuery()) { rows.next(); return rows.getString(1); } }
 
     private static final class RecordingEscrow implements TreasuryEscrowGateway {
-        int transfers; int refunds; EconomyGateway.Result refund = EconomyGateway.Result.success("");
-        @Override public EconomyGateway.Result transferFromPlayer(UUID playerId, Money amount, UUID operationId) { transfers++; return EconomyGateway.Result.success(""); }
-        @Override public EconomyGateway.Result refundToPlayer(UUID playerId, Money amount, UUID operationId) { refunds++; return refund; }
+        int playerWithdrawals; int escrowDeposits; int refunds; EconomyGateway.Result refund = EconomyGateway.Result.success("");
+        @Override public EconomyGateway.Result withdrawPlayer(UUID playerId, Money amount, UUID operationId) { playerWithdrawals++; return EconomyGateway.Result.success(""); }
+        @Override public EconomyGateway.Result depositEscrow(Money amount, UUID operationId) { escrowDeposits++; return EconomyGateway.Result.success(""); }
+        @Override public EconomyGateway.Result withdrawEscrow(Money amount, UUID operationId) { return EconomyGateway.Result.success(""); }
+        @Override public EconomyGateway.Result refundPlayer(UUID playerId, Money amount, UUID operationId) { refunds++; return refund; }
     }
     private static final class FailingFinanceRepository implements CompanyFinanceRepository {
         private final SqlCompanyFinanceRepository delegate;

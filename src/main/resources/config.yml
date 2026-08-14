@@ -8,8 +8,6 @@ company:
 database:
   file: blockeco.db
   pool-size: 2
-treasury:
-  escrow-account: 'b873caf2-274d-4c0b-91f7-f11394515a45'
 messages:
   processing: '公司创建正在处理中。'
   initializing: 'BlockStock 正在初始化，请稍后再试。'
