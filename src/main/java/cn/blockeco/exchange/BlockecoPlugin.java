@@ -24,6 +24,7 @@ public final class BlockecoPlugin extends JavaPlugin {
     private ExecutorService sqlExecutor;
     private Database database;
     private CompanyCommand command;
+    private BootstrapCoordinator<Database> bootstrap;
 
     @Override public void onEnable() {
         saveDefaultConfig();
@@ -32,14 +33,13 @@ public final class BlockecoPlugin extends JavaPlugin {
         catch (RuntimeException failure) { failEnable("Invalid Blockeco configuration: " + failure.getMessage()); return; }
         sqlExecutor = Executors.newSingleThreadExecutor(r -> { Thread thread = new Thread(r, "Blockeco-SQL"); thread.setDaemon(true); return thread; });
         Path file = getDataFolder().toPath().resolve(getConfig().getString("database.file", "blockeco.db"));
-        java.util.concurrent.CompletableFuture.supplyAsync(() -> { Database db = new Database("jdbc:sqlite:" + file); try { db.migrate(); return db; } catch (Exception e) { db.close(); throw new IllegalStateException("SQLite migration failed", e); } }, sqlExecutor)
-                .whenComplete((db, failure) -> getServer().getScheduler().runTask(this, () -> finishEnable(db, failure)));
+        bootstrap = new BootstrapCoordinator<>(new PaperMainThread(this), this::finishEnable, failure -> failEnable("Blockeco initialization failed: " + failure.getMessage()));
+        bootstrap.coordinate(java.util.concurrent.CompletableFuture.supplyAsync(() -> { Database db = new Database("jdbc:sqlite:" + file); try { db.migrate(); return db; } catch (Exception e) { db.close(); throw new IllegalStateException("SQLite migration failed", e); } }, sqlExecutor));
     }
 
-    private void finishEnable(Database db, Throwable failure) {
-        if (failure != null) { failEnable("Blockeco initialization failed: " + failure.getMessage()); return; }
+    private void finishEnable(Database db) {
         var economyRegistration = getServer().getServicesManager().getRegistration(Economy.class);
-        if (economyRegistration == null || economyRegistration.getProvider() == null) { db.close(); failEnable("Vault economy provider is unavailable"); return; }
+        if (!VaultProviderResolver.isAvailable(economyRegistration)) { db.close(); failEnable("Vault economy provider is unavailable"); return; }
         database = db;
         var companies = new SqlCompanyRepository(db.dataSource()); var sagas = new SqlRegistrationSagaRepository(db.dataSource());
         var mainThread = new PaperMainThread(this);
@@ -63,6 +63,7 @@ public final class BlockecoPlugin extends JavaPlugin {
 
     @Override public void onDisable() {
         if (command != null) command.setAccepting(false);
+        if (bootstrap != null) bootstrap.stop();
         if (sqlExecutor != null) { sqlExecutor.shutdown(); try { sqlExecutor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); } }
         if (database != null) database.close();
     }
