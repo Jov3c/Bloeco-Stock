@@ -35,6 +35,7 @@ dependencies {
     }
     testImplementation("org.assertj:assertj-core:3.27.4")
     testImplementation("org.mockito:mockito-core:5.18.0")
+    testImplementation("org.ow2.asm:asm:9.7.1")
 }
 
 java {
