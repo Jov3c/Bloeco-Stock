@@ -5,13 +5,17 @@ import org.junit.jupiter.api.Test;
 import org.objectweb.asm.AnnotationVisitor;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
+import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.FieldVisitor;
 import org.objectweb.asm.Handle;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
+import org.objectweb.asm.TypeReference;
 import org.objectweb.asm.signature.SignatureReader;
 import org.objectweb.asm.signature.SignatureVisitor;
+import org.objectweb.asm.commons.ClassRemapper;
+import org.objectweb.asm.commons.Remapper;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -40,6 +44,14 @@ class DependencyRuleTest {
         assertThat(BytecodeReferenceScanner.findForbiddenReferences(TypeReferenceFixture.class)).contains("org.bukkit");
     }
 
+    @Test void detects_forbidden_code_type_annotation_descriptors() {
+        assertThat(BytecodeReferenceScanner.findForbiddenReferences(codeTypeAnnotationFixture())).contains("org.bukkit");
+    }
+
+    @Test void detects_forbidden_sealed_permitted_subclass_metadata() {
+        assertThat(BytecodeReferenceScanner.findForbiddenReferences(permittedSubclassFixture())).contains("org.bukkit");
+    }
+
     @Test void domain_and_application_compiled_main_classes_have_no_edge_dependencies() throws Exception {
         assertThat(BytecodeReferenceScanner.findForbiddenReferencesInMainClasses()).isEmpty();
     }
@@ -53,6 +65,29 @@ class DependencyRuleTest {
         @BukkitTypeMarker(Server.class) private Server method(Server parameter, Server[] parameters) { return parameter; }
     }
     @Retention(RetentionPolicy.RUNTIME) private @interface BukkitTypeMarker { Class<?> value(); }
+
+    private static byte[] codeTypeAnnotationFixture() {
+        ClassWriter writer = new ClassWriter(0);
+        writer.visit(Opcodes.V21, Opcodes.ACC_PUBLIC, "fixture/CodeTypeAnnotationFixture", null, "java/lang/Object", null);
+        MethodVisitor method = writer.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "value", "()Ljava/lang/Object;", null, null);
+        method.visitCode();
+        method.visitInsn(Opcodes.ACONST_NULL);
+        method.visitTypeInsn(Opcodes.CHECKCAST, "java/lang/Object");
+        method.visitInsnAnnotation(TypeReference.newTypeReference(TypeReference.CAST).getValue(), null, "Lorg/bukkit/Server;", true).visitEnd();
+        method.visitInsn(Opcodes.ARETURN);
+        method.visitMaxs(1, 0);
+        method.visitEnd();
+        writer.visitEnd();
+        return writer.toByteArray();
+    }
+
+    private static byte[] permittedSubclassFixture() {
+        ClassWriter writer = new ClassWriter(0);
+        writer.visit(Opcodes.V21, Opcodes.ACC_PUBLIC | Opcodes.ACC_ABSTRACT | Opcodes.ACC_INTERFACE, "fixture/PermittedFixture", null, "java/lang/Object", null);
+        writer.visitPermittedSubclass("org/bukkit/Server");
+        writer.visitEnd();
+        return writer.toByteArray();
+    }
 
     private static final class BytecodeReferenceScanner {
         private static final List<ForbiddenPrefix> FORBIDDEN_PREFIXES = List.of(
@@ -83,62 +118,20 @@ class DependencyRuleTest {
             return violations;
         }
 
-        private static List<String> findForbiddenReferences(byte[] classBytes) {
+        static List<String> findForbiddenReferences(byte[] classBytes) {
             Set<String> references = new LinkedHashSet<>();
-            new ClassReader(classBytes).accept(new ForbiddenTypeVisitor(references), 0);
+            new ClassReader(classBytes).accept(new ClassRemapper(new ClassWriter(0), new RecordingRemapper(references)), 0);
             return List.copyOf(references);
         }
 
-        private static final class ForbiddenTypeVisitor extends ClassVisitor {
+        private static final class RecordingRemapper extends Remapper {
             private final Set<String> references;
-            private ForbiddenTypeVisitor(Set<String> references) { super(Opcodes.ASM9); this.references = references; }
+            private RecordingRemapper(Set<String> references) { this.references = references; }
 
-            @Override public void visit(int version, int access, String name, String signature, String superName, String[] interfaces) {
-                recordInternalName(superName); if (interfaces != null) for (String anInterface : interfaces) recordInternalName(anInterface); recordSignature(signature);
+            @Override public String map(String internalName) {
+                if (internalName != null) FORBIDDEN_PREFIXES.stream().filter(prefix -> internalName.startsWith(prefix.internalNamePrefix())).map(ForbiddenPrefix::displayName).forEach(references::add);
+                return internalName;
             }
-            @Override public AnnotationVisitor visitAnnotation(String descriptor, boolean visible) { recordDescriptor(descriptor); return annotationVisitor(); }
-            @Override public AnnotationVisitor visitTypeAnnotation(int typeRef, org.objectweb.asm.TypePath typePath, String descriptor, boolean visible) { recordDescriptor(descriptor); return annotationVisitor(); }
-            @Override public FieldVisitor visitField(int access, String name, String descriptor, String signature, Object value) {
-                recordDescriptor(descriptor); recordSignature(signature); recordValue(value);
-                return new FieldVisitor(Opcodes.ASM9) {
-                    @Override public AnnotationVisitor visitAnnotation(String descriptor, boolean visible) { recordDescriptor(descriptor); return annotationVisitor(); }
-                    @Override public AnnotationVisitor visitTypeAnnotation(int typeRef, org.objectweb.asm.TypePath typePath, String descriptor, boolean visible) { recordDescriptor(descriptor); return annotationVisitor(); }
-                };
-            }
-            @Override public MethodVisitor visitMethod(int access, String name, String descriptor, String signature, String[] exceptions) {
-                recordDescriptor(descriptor); recordSignature(signature); if (exceptions != null) for (String exception : exceptions) recordInternalName(exception);
-                return new MethodVisitor(Opcodes.ASM9) {
-                    @Override public AnnotationVisitor visitAnnotation(String descriptor, boolean visible) { recordDescriptor(descriptor); return annotationVisitor(); }
-                    @Override public AnnotationVisitor visitTypeAnnotation(int typeRef, org.objectweb.asm.TypePath typePath, String descriptor, boolean visible) { recordDescriptor(descriptor); return annotationVisitor(); }
-                    @Override public AnnotationVisitor visitParameterAnnotation(int parameter, String descriptor, boolean visible) { recordDescriptor(descriptor); return annotationVisitor(); }
-                    @Override public void visitTypeInsn(int opcode, String type) { recordInternalName(type); }
-                    @Override public void visitFieldInsn(int opcode, String owner, String name, String descriptor) { recordInternalName(owner); recordDescriptor(descriptor); }
-                    @Override public void visitMethodInsn(int opcode, String owner, String name, String descriptor, boolean isInterface) { recordInternalName(owner); recordDescriptor(descriptor); }
-                    @Override public void visitInvokeDynamicInsn(String name, String descriptor, Handle bootstrapMethodHandle, Object... bootstrapMethodArguments) { recordDescriptor(descriptor); recordHandle(bootstrapMethodHandle); for (Object argument : bootstrapMethodArguments) recordValue(argument); }
-                    @Override public void visitLdcInsn(Object value) { recordValue(value); }
-                    @Override public void visitMultiANewArrayInsn(String descriptor, int numDimensions) { recordDescriptor(descriptor); }
-                    @Override public void visitTryCatchBlock(org.objectweb.asm.Label start, org.objectweb.asm.Label end, org.objectweb.asm.Label handler, String type) { recordInternalName(type); }
-                    @Override public void visitLocalVariable(String name, String descriptor, String signature, org.objectweb.asm.Label start, org.objectweb.asm.Label end, int index) { recordDescriptor(descriptor); recordSignature(signature); }
-                };
-            }
-            private AnnotationVisitor annotationVisitor() {
-                return new AnnotationVisitor(Opcodes.ASM9) {
-                    @Override public void visit(String name, Object value) { recordValue(value); }
-                    @Override public void visitEnum(String name, String descriptor, String value) { recordDescriptor(descriptor); }
-                    @Override public AnnotationVisitor visitAnnotation(String name, String descriptor) { recordDescriptor(descriptor); return annotationVisitor(); }
-                    @Override public AnnotationVisitor visitArray(String name) { return annotationVisitor(); }
-                };
-            }
-            private void recordHandle(Handle handle) { if (handle != null) { recordInternalName(handle.getOwner()); recordDescriptor(handle.getDesc()); } }
-            private void recordValue(Object value) { if (value instanceof Type type) recordType(type); else if (value instanceof Handle handle) recordHandle(handle); }
-            private void recordDescriptor(String descriptor) {
-                if (descriptor == null) return;
-                if (descriptor.startsWith("(")) { for (Type argument : Type.getArgumentTypes(descriptor)) recordType(argument); recordType(Type.getReturnType(descriptor)); }
-                else recordType(Type.getType(descriptor));
-            }
-            private void recordSignature(String signature) { if (signature != null) new SignatureReader(signature).accept(new SignatureVisitor(Opcodes.ASM9) { @Override public void visitClassType(String name) { recordInternalName(name); } }); }
-            private void recordType(Type type) { if (type.getSort() == Type.ARRAY) recordType(type.getElementType()); else if (type.getSort() == Type.OBJECT) recordInternalName(type.getInternalName()); else if (type.getSort() == Type.METHOD) recordDescriptor(type.getDescriptor()); }
-            private void recordInternalName(String internalName) { if (internalName != null) FORBIDDEN_PREFIXES.stream().filter(prefix -> internalName.startsWith(prefix.internalNamePrefix())).map(ForbiddenPrefix::displayName).forEach(references::add); }
         }
         private record ForbiddenPrefix(String internalNamePrefix, String displayName) { }
     }
