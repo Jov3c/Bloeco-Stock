@@ -83,14 +83,15 @@ Paper 完成保存，再让 BlockStock 的下一次启动完成迁移。
 `30`、`50`、`70`；在 `/company recovery ` 后，管理员会获得 `list`。这些候选项
 不替代实际命令权限检查。
 
-### 本次本地验收的限制（2026-08-14）
+### 本次本地验收状态（2026-08-14）
 
-这不是一次已完成的 BlockStock 实机迁移。当前旧 Paper 的控制台输入没有消费自动化会话
-写入的 `stop`，所以为避免强制终止 JVM，BlockStock **没有启动**，旧
-`plugins/BlockecoExchange/` 目录**没有迁移**。因此本次没有验证 BlockStock 的端口监听、
-Vault/Essentials 挂钩或新的 BlockStock 启动日志。
+首次自动化尝试时，旧 Paper 的控制台输入没有消费写入的 `stop`，因此没有强制终止 JVM。
+在随后经外部操作者确认优雅停服后，BlockStock 已实际启动：旧
+`plugins/BlockecoExchange/` 目录由插件迁移为 `plugins/BlockStock/`，并验证了
+`127.0.0.1:25565` 监听、Vault 的 Essentials Economy 挂钩以及 `BlockStock ready` 启动日志。
+启动窗口未出现 BlockStock `ERROR`、`Exception` 或 `SEVERE`。
 
-同样，Aoozzz 的原版客户端 `/company` 聊天输出，以及以下三条 Tab 路径均**未执行**：
+但 Aoozzz 的原版客户端 `/company` 聊天输出，以及以下三条 Tab 路径仍**未执行**：
 `/company `、`/company create 红石工坊 `、`/company recovery `。上文描述的是实现的预期
 行为；在可优雅停服并启动 BlockStock 后，仍须由 Aoozzz 实机验证并记录结果。
 
