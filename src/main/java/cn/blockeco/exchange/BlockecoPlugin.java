@@ -45,7 +45,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         var mainThread = new PaperMainThread(this);
         int scale = getConfig().getInt("currency.scale");
         var registration = new CompanyRegistrationService(companies, sagas, new SqlAuditLog(), db, new VaultEconomyGateway(getServer(), scale), mainThread, sqlExecutor, Instant::now, configuredMoney("company.registration-fee", scale), configuredMoney("company.minimum-capital", scale));
-        command = new CompanyCommand(registration, new CompanyQueryService(companies, sagas, sqlExecutor), new Messages(getConfig().getConfigurationSection("messages")), this);
+        command = new CompanyCommand(registration, new CompanyQueryService(companies, sagas, sqlExecutor), new Messages(getConfig().getConfigurationSection("messages")), mainThread);
         var companyCommand = getCommand("company");
         if (companyCommand == null) { failEnable("company command is missing from plugin.yml"); return false; }
         companyCommand.setExecutor(command);

@@ -5,18 +5,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 import cn.blockeco.exchange.application.RegistrationRequest;
 import cn.blockeco.exchange.application.CompanyQueryService;
 import cn.blockeco.exchange.application.CompanyRegistrationService;
+import cn.blockeco.exchange.ports.MainThreadExecutor;
 import java.util.concurrent.CompletableFuture;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import java.util.UUID;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
-import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import static org.mockito.Mockito.*;
 
 class CompanyCommandTest {
+    private static final MainThreadExecutor DIRECT_MAIN = new MainThreadExecutor() { @Override public <T> java.util.concurrent.CompletionStage<T> submit(java.util.function.Supplier<T> work) { return CompletableFuture.completedFuture(work.get()); } };
     private final UUID founder = UUID.fromString("11111111-1111-1111-1111-111111111111");
 
     @Test
@@ -44,7 +45,7 @@ class CompanyCommandTest {
     void create_rejects_console_before_dispatching_registration() {
         CompanyRegistrationService registration = mock(CompanyRegistrationService.class);
         CommandSender console = mock(CommandSender.class);
-        CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), mock(Plugin.class));
+        CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN);
 
         command.onCommand(console, mock(Command.class), "company", new String[] {"create", "North", "30"});
 
@@ -58,7 +59,7 @@ class CompanyCommandTest {
     void create_rejects_player_without_permission() {
         CompanyRegistrationService registration = mock(CompanyRegistrationService.class);
         Player player = mock(Player.class); when(player.hasPermission("blockeco.company.create")).thenReturn(false);
-        CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), mock(Plugin.class));
+        CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN);
 
         command.onCommand(player, mock(Command.class), "company", new String[] {"create", "North", "30"});
 
@@ -70,7 +71,7 @@ class CompanyCommandTest {
     void create_during_initialization_sends_configured_message_without_service_call() {
         CompanyRegistrationService registration = mock(CompanyRegistrationService.class);
         Player player = mock(Player.class); when(player.hasPermission("blockeco.company.create")).thenReturn(true);
-        CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), mock(Plugin.class));
+        CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN);
 
         command.onCommand(player, mock(Command.class), "company", new String[] {"create", "North", "30"});
 
@@ -83,12 +84,28 @@ class CompanyCommandTest {
         CompanyRegistrationService registration = mock(CompanyRegistrationService.class);
         Player player = mock(Player.class); when(player.hasPermission("blockeco.company.create")).thenReturn(true); when(player.getUniqueId()).thenReturn(founder);
         when(registration.register(any())).thenReturn(new CompletableFuture<>());
-        CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), mock(Plugin.class)); command.setAccepting(true);
+        CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN); command.setAccepting(true);
 
         command.onCommand(player, mock(Command.class), "company", new String[] {"create", "North", "30"});
         command.onCommand(player, mock(Command.class), "company", new String[] {"create", "North", "30"});
 
         verify(registration, times(1)).register(new RegistrationRequest(founder, "North", 30));
         verify(player, times(2)).sendMessage(any(net.kyori.adventure.text.Component.class));
+    }
+
+    @Test
+    void create_completion_sends_result_only_when_main_thread_queue_runs() {
+        CompanyRegistrationService registration = mock(CompanyRegistrationService.class); CompletableFuture<cn.blockeco.exchange.application.RegistrationResult> result = new CompletableFuture<>(); when(registration.register(any())).thenReturn(result);
+        Player player = mock(Player.class); when(player.hasPermission("blockeco.company.create")).thenReturn(true); when(player.getUniqueId()).thenReturn(founder);
+        QueuedMain main = new QueuedMain(); CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), main); command.setAccepting(true);
+        command.onCommand(player, mock(Command.class), "company", new String[] {"create", "North", "30"}); result.complete(cn.blockeco.exchange.application.RegistrationResult.of(cn.blockeco.exchange.application.RegistrationResult.Status.SUCCESS, ""));
+        verify(player, times(1)).sendMessage(any(net.kyori.adventure.text.Component.class)); main.runAll();
+        verify(player, times(2)).sendMessage(any(net.kyori.adventure.text.Component.class));
+    }
+
+    private static final class QueuedMain implements MainThreadExecutor {
+        private final java.util.List<java.util.function.Supplier<?>> queue = new java.util.ArrayList<>();
+        @Override public <T> java.util.concurrent.CompletionStage<T> submit(java.util.function.Supplier<T> work) { queue.add(work); return new CompletableFuture<>(); }
+        void runAll() { while (!queue.isEmpty()) queue.remove(0).get(); }
     }
 }
