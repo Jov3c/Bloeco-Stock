@@ -288,7 +288,7 @@ CREATE TABLE companies (
   founder_uuid TEXT NOT NULL,
   status TEXT NOT NULL,
   treasury_minor INTEGER NOT NULL CHECK (treasury_minor >= 0),
-  total_shares INTEGER NOT NULL CHECK (total_shares = 1000),
+  total_shares INTEGER NOT NULL CHECK (total_shares >= 1000),
   dividend_basis_points INTEGER NOT NULL CHECK (dividend_basis_points IN (3000, 5000, 7000)),
   created_at TEXT NOT NULL,
   version INTEGER NOT NULL DEFAULT 0
