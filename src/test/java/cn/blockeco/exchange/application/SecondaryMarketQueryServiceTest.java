@@ -67,6 +67,15 @@ class SecondaryMarketQueryServiceTest {
             assertThat(view.availableCash()).isEqualTo(Money.zero());assertThat(view.reservedCash()).isEqualTo(Money.zero());assertThat(view.holdings()).singleElement().satisfies(h->assertThat(h.latestPrice()).isEqualTo(Money.ofMinor(12)));
         }finally{Files.deleteIfExists(file);}
     }
+    @Test void portfolio_and_public_market_share_canonical_uuid_tie_break() throws Exception {
+        Path file=Files.createTempFile("secondary-latest-tie-", ".db");
+        try(Database db=new Database("jdbc:sqlite:"+file)){db.migrate();CompanyId company=Fixtures.company(db,100);UUID holder=UUID.randomUUID(),buyer=UUID.randomUUID(),seller=UUID.randomUUID();seedListed(db,company);seedHolding(db,company,holder,1);
+            db.inTransaction(c->{UUID b1=UUID.randomUUID(),s1=UUID.randomUUID(),b2=UUID.randomUUID(),s2=UUID.randomUUID();insertFilledOrder(c,b1,company,buyer,"BUY",20);insertFilledOrder(c,s1,company,seller,"SELL",21);insertFilledOrder(c,b2,company,buyer,"BUY",22);insertFilledOrder(c,s2,company,seller,"SELL",23);insertTrade(c,UUID.fromString("70000000-0000-0000-0000-000000000000"),company,b1,s1,7,1,0,"2026-08-22T10:00:00Z");insertTrade(c,UUID.fromString("80000000-0000-0000-0000-000000000000"),company,b2,s2,8,1,0,"2026-08-22T10:00:00Z");return null;});
+            var portfolioRepository=new SqlSecondaryTradingRepository(db.dataSource(),new SqlSecuritiesCashRepository(db.dataSource()));var publicRepository=new SqlPublicStockRepository(db.dataSource());
+            assertThat(portfolioRepository.portfolio(holder).holdings()).singleElement().extracting(SecondaryMarketRow::latestPrice).isEqualTo(Money.ofMinor(8));
+            assertThat(publicRepository.market(Instant.parse("2026-08-22T00:00:00Z"),Instant.parse("2026-08-23T00:00:00Z"))).singleElement().extracting(PublicMarketRow::latestPrice).isEqualTo(Money.ofMinor(8));
+        }finally{Files.deleteIfExists(file);}
+    }
     @Test void book_aggregates_both_sides_limits_to_five_and_hides_unlisted_companies() throws Exception {
         Path file=Files.createTempFile("secondary-book-complete-", ".db");try(Database db=new Database("jdbc:sqlite:"+file)){db.migrate();CompanyId company=Fixtures.company(db,100);seedListed(db,company);UUID player=UUID.randomUUID();
             db.inTransaction(c->{long sequence=1;for(long price=10;price<=15;price++)insertOpenOrder(c,UUID.randomUUID(),company,player,"BUY",price,1,sequence++);insertOpenOrder(c,UUID.randomUUID(),company,player,"BUY",15,4,sequence++);for(long price=20;price<=25;price++)insertOpenOrder(c,UUID.randomUUID(),company,player,"SELL",price,1,sequence++);insertOpenOrder(c,UUID.randomUUID(),company,player,"SELL",20,8,sequence);return null;});
