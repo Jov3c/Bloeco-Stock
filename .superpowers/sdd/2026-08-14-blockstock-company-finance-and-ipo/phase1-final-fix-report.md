@@ -19,3 +19,9 @@
 - A definitive Vault withdrawal failure transitions the durable `PREPARED` operation to terminal `REFUNDED`, so it no longer reserves capacity or gets converted to ambiguous. The command maps typed results to Chinese player messages and returns completion on the Paper main thread.
 - Added `blockeco.company.ipo.subscribe` as a default-true player permission and permission-aware IPO tab candidate. Authenticated Paper smoke remains unperformed.
 - Remaining work: public `ipo list` / `ipo info` SQL projections and their command presentation were not completed in this commit.
+
+## Round 4: external-failure boundary
+
+- Vault exceptions and each post-Vault SQL boundary now return `RECOVERY_REQUIRED` after a best-effort durable ambiguous transition; failure to persist that marker does not downgrade the player result.
+- Only a definite non-success withdrawal outcome is terminally released (`PREPARED` to `REFUNDED`). Retrying a terminal deterministic id returns its stable provider-failure result; nonterminal persisted ids never replay Vault.
+- Capacity now excludes `REFUNDED`, while early close counts only `COMPLETED` subscriptions. Configuration includes every IPO subscription Chinese message key.
