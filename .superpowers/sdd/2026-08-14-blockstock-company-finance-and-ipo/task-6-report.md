@@ -41,3 +41,26 @@ Full suite passed:
 ## Not performed
 
 No real Paper/Vault server operation was performed. In particular, live console/player permission behavior, config file persistence, and asynchronous SQLite audit writes still require a controlled Paper server verification with Vault available.
+
+## Fix round 1 — failure-aware config persistence
+
+### RED
+
+`FileConfigStoreTest` was added for successful exact persistence with unrelated keys retained, plus injected save and move failures retaining both the target file and live `FileConfiguration` value. `StockAdminConfigCommandTest` now makes `ConfigStore.persistMinimumCapital` fail and verifies there is no live-rule publication, audit, or success message.
+
+The first run failed because the production persistence type and single failure-reporting method did not exist. A subsequent test run exposed that copying nested Bukkit configuration sections into the staged config shared mutable section objects and changed live memory before saving.
+
+### GREEN / design
+
+- `ConfigStore` is now one checked-failure operation: `persistMinimumCapital(String)`.
+- `FileConfigStore` stages by serializing and reloading the complete live configuration into a separate `YamlConfiguration`, modifies only `company.minimum-capital`, saves to a sibling temporary file using `FileConfiguration.save(File)`, then uses `ATOMIC_MOVE + REPLACE_EXISTING`.
+- If the filesystem does not support atomic moves, it explicitly falls back to a replace move. On save/move failure, `finally` removes the temporary file and neither the target file nor the live `FileConfiguration` value changes.
+- Only after replacement does it update live memory. The command then publishes the mutable creation rule, sends success, and queues audit. `JavaPlugin.saveConfig()` is not used for this path.
+- Basis recorded for review: Paper `JavaPlugin.saveConfig()` catches `IOException`; Bukkit `FileConfiguration.save(File)` propagates `IOException`.
+
+Focused verification for this round:
+
+```powershell
+.\gradlew.bat test --tests cn.blockeco.exchange.paper.FileConfigStoreTest --tests cn.blockeco.exchange.paper.StockAdminConfigCommandTest
+.\gradlew.bat test --tests cn.blockeco.exchange.application.CompanyRegistrationServiceTest --tests cn.blockeco.exchange.paper.FileConfigStoreTest --tests cn.blockeco.exchange.paper.StockAdminConfigCommandTest --tests cn.blockeco.exchange.paper.CompanyCommandTest --tests cn.blockeco.exchange.paper.CompanyTabCompleterTest
+```

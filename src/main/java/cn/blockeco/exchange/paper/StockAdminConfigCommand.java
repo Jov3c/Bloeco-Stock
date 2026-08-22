@@ -22,7 +22,7 @@ import org.bukkit.entity.Player;
 public final class StockAdminConfigCommand implements CommandExecutor, TabCompleter {
     static final String PERMISSION = "blockstock.admin.config";
     private final MutableCompanyCreationRules rules; private final ConfigStore config; private final AuditLog audit;
-    public interface ConfigStore { void setMinimumCapital(String value); void save(); }
+    public interface ConfigStore { void persistMinimumCapital(String value) throws java.io.IOException; }
     private final TransactionRunner transactions; private final Executor sql; private final AppClock clock; private final Messages messages; private final MainThreadExecutor main;
     public StockAdminConfigCommand(MutableCompanyCreationRules rules, ConfigStore config, AuditLog audit, TransactionRunner transactions, Executor sql, AppClock clock, Messages messages) { this(rules, config, audit, transactions, sql, clock, messages, new MainThreadExecutor() { @Override public <T> java.util.concurrent.CompletionStage<T> submit(java.util.function.Supplier<T> work) { return java.util.concurrent.CompletableFuture.completedFuture(work.get()); } }); }
     public StockAdminConfigCommand(MutableCompanyCreationRules rules, ConfigStore config, AuditLog audit, TransactionRunner transactions, Executor sql, AppClock clock, Messages messages, MainThreadExecutor main) { this.rules=rules; this.config=config; this.audit=audit; this.transactions=transactions; this.sql=sql; this.clock=clock; this.messages=messages; this.main=main; }
@@ -33,8 +33,8 @@ public final class StockAdminConfigCommand implements CommandExecutor, TabComple
         CompanyCreationRules before = rules.current(); Money next;
         try { next = Money.fromMajor(new BigDecimal(args[2]), before.scale()); } catch (RuntimeException failure) { sender.sendMessage(messages.invalidMinimumCapital()); return true; }
         if (next.minorUnits() <= 0) { sender.sendMessage(messages.invalidMinimumCapital()); return true; }
-        try { config.setMinimumCapital(next.toMajor(before.scale()).toPlainString()); config.save(); }
-        catch (RuntimeException failure) { sender.sendMessage(messages.minimumCapitalSaveFailed()); return true; }
+        try { config.persistMinimumCapital(next.toMajor(before.scale()).toPlainString()); }
+        catch (Exception failure) { sender.sendMessage(messages.minimumCapitalSaveFailed()); return true; }
         rules.replaceMinimumCapital(next);
         sender.sendMessage(messages.minimumCapitalSaved(next.toMajor(before.scale()).toPlainString()));
         UUID actor = sender instanceof Player player ? player.getUniqueId() : null;

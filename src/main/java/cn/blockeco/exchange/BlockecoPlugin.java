@@ -20,6 +20,7 @@ import cn.blockeco.exchange.paper.CompanyCommand;
 import cn.blockeco.exchange.paper.CompanyCreationRules;
 import cn.blockeco.exchange.paper.MutableCompanyCreationRules;
 import cn.blockeco.exchange.paper.StockAdminConfigCommand;
+import cn.blockeco.exchange.paper.FileConfigStore;
 import cn.blockeco.exchange.paper.CompanyTabCompleter;
 import cn.blockeco.exchange.paper.Messages;
 import cn.blockeco.exchange.paper.PaperMainThread;
@@ -97,10 +98,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         var adminCommand = getCommand("stockadmin");
         if (adminCommand == null) throw new IllegalStateException("BlockStock 命令注册失败：未在 plugin.yml 中声明 stockadmin 命令");
         var messages = new Messages(getConfig().getConfigurationSection("messages"));
-        var adminConfig = new StockAdminConfigCommand(creationRules, new StockAdminConfigCommand.ConfigStore() {
-            @Override public void setMinimumCapital(String value) { getConfig().set("company.minimum-capital", value); }
-            @Override public void save() { saveConfig(); }
-        }, new SqlAuditLog(), db, sqlExecutor, clock, messages, mainThread);
+        var adminConfig = new StockAdminConfigCommand(creationRules, new FileConfigStore(getConfig(), getDataFolder().toPath().resolve("config.yml")), new SqlAuditLog(), db, sqlExecutor, clock, messages, mainThread);
         adminCommand.setExecutor(adminConfig); adminCommand.setTabCompleter(adminConfig);
         var capitalizations = new CompanyCapitalizationService(finance, new SqlAuditLog(), db, escrow, mainThread, sqlExecutor, clock);
         new StartupRecoveryGate(failure -> getServer().getScheduler().runTask(this, () -> failEnable(startupFailureMessage(new IllegalStateException(failure))))).start(escrowFailure, capitalizations::recoverPendingCapitalizations, recovered -> getServer().getScheduler().runTask(this, () -> {

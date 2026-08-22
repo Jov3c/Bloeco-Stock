@@ -9,6 +9,7 @@ import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.ports.AuditLog;
 import cn.blockeco.exchange.ports.TransactionRunner;
 import java.math.BigDecimal;
+import java.io.IOException;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -25,14 +26,14 @@ class StockAdminConfigCommandTest {
     private final MutableCompanyCreationRules live = new MutableCompanyCreationRules(rules("10000.00"));
 
     @Test
-    void op_can_read_and_set_a_precise_minimum_capital_and_persists_config() {
+    void op_can_read_and_set_a_precise_minimum_capital_and_persists_config() throws Exception {
         ConfigStore config = mock(ConfigStore.class);
         StockAdminConfigCommand command = command(config, (connection, event) -> { });
         Player op = mock(Player.class); when(op.hasPermission("blockstock.admin.config")).thenReturn(true); when(op.getUniqueId()).thenReturn(UUID.fromString("11111111-1111-1111-1111-111111111111"));
 
         assertThat(command.onCommand(op, mock(Command.class), "stockadmin", new String[] {"config", "min-capital", "25000.50"})).isTrue();
 
-        verify(config).setMinimumCapital("25000.50"); verify(config).save();
+        verify(config).persistMinimumCapital("25000.50");
         assertThat(live.current().minimumCapital()).isEqualTo(Money.fromMajor(new BigDecimal("25000.50"), 2));
         command.onCommand(op, mock(Command.class), "stockadmin", new String[] {"config"});
         assertThat(messages(op)).anyMatch(message -> message.contains("25000.50"));
@@ -77,11 +78,12 @@ class StockAdminConfigCommandTest {
     }
 
     @Test
-    void save_failure_does_not_publish_or_audit_and_audit_failure_is_reported_in_chinese() {
-        ConfigStore config = mock(ConfigStore.class); doThrow(new IllegalStateException("disk full")).when(config).save(); AuditLog audit = mock(AuditLog.class);
+    void save_failure_does_not_publish_or_audit_or_a_success_message() throws Exception {
+        ConfigStore config = mock(ConfigStore.class); doThrow(new IOException("disk full")).when(config).persistMinimumCapital("25000.50"); AuditLog audit = mock(AuditLog.class);
         CommandSender op = mock(CommandSender.class); when(op.hasPermission("blockstock.admin.config")).thenReturn(true);
         command(config, audit).onCommand(op, mock(Command.class), "stockadmin", new String[] {"config", "min-capital", "25000.50"});
         assertThat(live.current().minimumCapital()).isEqualTo(Money.fromMajor(new BigDecimal("10000.00"), 2)); verifyNoInteractions(audit);
+        assertThat(messages(op)).containsExactly("最低注册资本保存失败，当前规则未改变。");
     }
 
     @Test
