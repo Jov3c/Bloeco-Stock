@@ -36,6 +36,14 @@ class PrimaryOfferingServiceTest {
    clock.now=offer.opensAt(); service.subscribe(buyer,offer.id(),2).toCompletableFuture().join();
    clock.now=offer.closesAt(); assertThatThrownBy(()->service.subscribe(UUID.randomUUID(),offer.id(),1).toCompletableFuture().join()).hasCauseInstanceOf(IllegalStateException.class);
   } finally {Files.deleteIfExists(file);} }
+ @Test void subscription_does_not_list_company_until_the_offering_closes() throws Exception {
+  Path file=Files.createTempFile("ipo-list-on-close-", ".db"); try(Database db=new Database("jdbc:sqlite:"+file)) { db.migrate(); CompanyId c=Fixtures.company(db,100); UUID founder=Fixtures.founder(db,c); Fixtures.activeAsset(db,c,founder); MutableClock clock=new MutableClock(); SqlPrimaryOfferingRepository repo=new SqlPrimaryOfferingRepository(db.dataSource()); PrimaryOfferingService service=new PrimaryOfferingService(repo,db,new Escrow(),Runnable::run,clock);
+   var offer=service.announce(c,founder,Money.ofMinor(100),Money.ofMinor(10)).toCompletableFuture().join(); clock.now=offer.opensAt(); service.subscribe(UUID.randomUUID(),offer.id(),1).toCompletableFuture().join();
+   assertThat(companyStatus(db,c)).isEqualTo("PENDING_ASSET_BINDING");
+   clock.now=offer.closesAt(); service.closeExpired(clock.now).toCompletableFuture().join();
+   assertThat(companyStatus(db,c)).isEqualTo("LISTED");
+  } finally {Files.deleteIfExists(file);} }
+ private static String companyStatus(Database db,CompanyId company){try(var c=db.dataSource().getConnection();var s=c.prepareStatement("SELECT status FROM companies WHERE id=?")){s.setString(1,company.value().toString());try(var r=s.executeQuery()){r.next();return r.getString(1);}}catch(Exception e){throw new RuntimeException(e);}}
  static final class MutableClock implements AppClock { Instant now=Instant.parse("2026-08-14T12:00:00Z"); public Instant now(){return now;} }
  static final class Escrow implements TreasuryEscrowGateway { public EconomyGateway.Result withdrawPlayer(UUID p,Money m,UUID i){return EconomyGateway.Result.success("");} public EconomyGateway.Result depositEscrow(Money m,UUID i){return EconomyGateway.Result.success("");} public EconomyGateway.Result withdrawEscrow(Money m,UUID i){return EconomyGateway.Result.success("");} public EconomyGateway.Result refundPlayer(UUID p,Money m,UUID i){return EconomyGateway.Result.success("");} }
  static long auditCount(Database db,UUID offering,String to){try(var c=db.dataSource().getConnection();var s=c.prepareStatement("SELECT COUNT(*) FROM audit_events WHERE event_type='IPO_STATE_CHANGED' AND payload_json LIKE ? AND payload_json LIKE ?")){s.setString(1,"%"+offering+"%");s.setString(2,"%\"to\":\""+to+"\"%");try(var r=s.executeQuery()){r.next();return r.getLong(1);}}catch(Exception e){throw new RuntimeException(e);}}
