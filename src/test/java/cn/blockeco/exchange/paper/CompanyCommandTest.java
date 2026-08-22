@@ -159,10 +159,13 @@ class CompanyCommandTest {
         CompanyCommand command = new CompanyCommand(registration, queries, new Messages(null), DIRECT_MAIN, rules, assets, offerings);
 
         for (String[] args : List.of(new String[] {"create", "North", "10000.00", "50"}, new String[] {"info", "North"}, new String[] {"recovery", "list"}, new String[] {"asset", "bind", "adapter", "key"}, new String[] {"ipo", "announce", "10000.00", "10.00"}, new String[] {"unknown"})) {
-            command.onCommand(sender, mock(Command.class), "company", args);
+            assertThat(command.onCommand(sender, mock(Command.class), "company", args)).isTrue();
         }
 
-        assertThat(allPlainMessages(sender)).containsOnly("BlockStock 正在初始化，请稍后再试。");
+        assertThat(allPlainMessages(sender)).containsExactly(
+                "BlockStock 正在初始化，请稍后再试。", "BlockStock 正在初始化，请稍后再试。",
+                "BlockStock 正在初始化，请稍后再试。", "BlockStock 正在初始化，请稍后再试。",
+                "BlockStock 正在初始化，请稍后再试。", "BlockStock 正在初始化，请稍后再试。");
         verifyNoInteractions(registration, queries, assets, offerings);
     }
 

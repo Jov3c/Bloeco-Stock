@@ -39,3 +39,8 @@
 - RED: the focused `BlockecoPluginTest`/`CompanyCommandTest` command failed at test compilation because `configurationFailureMessage` and `missingCompanyCommandMessage` did not exist.
 - GREEN: `Invalid BlockStock configuration: ...` is now emitted as `BlockStock 配置无效（附加信息：...）`; both early and post-bootstrap missing-`company` command paths use `BlockStock 命令注册失败：未在 plugin.yml 中声明 company 命令`. These are Chinese administrator-facing primary diagnostics; validation/third-party detail remains only in parentheses.
 - Exhaustive command boundary evidence: a single real `CompanyCommand` test invokes `create`, `info`, `recovery list`, `asset bind`, `ipo announce`, and an unknown non-empty command with `accepting=false`. Every invocation returns exactly the Chinese initializing message and has zero interactions with registration, query, asset, and IPO services. A companion zero-argument test confirms help is still readable and has zero service interactions.
+
+## Fix round 4/5 — command-gate assertion strength
+
+- RED/expectation strengthening: the existing six-branch initialization test was changed from a weak `containsOnly` message assertion to an assertion that each `onCommand` call returns `true` and that the sender receives **exactly six** initializing messages in branch order. This is intentionally a test-only change; a silent/false-return branch or a missing/extra message now fails deterministically.
+- GREEN: the focused `CompanyCommandTest` passed immediately because the round-2 production gate already satisfies the strengthened contract. No production code was changed.
