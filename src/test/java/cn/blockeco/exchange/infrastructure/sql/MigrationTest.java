@@ -10,6 +10,8 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.security.MessageDigest;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 class MigrationTest {
@@ -122,6 +124,75 @@ class MigrationTest {
         }
     }
 
+    @Test
+    void v006_preflight_fails_before_schema_history_or_tables_change() throws Exception {
+        Path databaseFile = Files.createTempFile("blockeco-v006-preflight-", ".db");
+        try (Database database = new Database("jdbc:sqlite:" + databaseFile)) {
+            applyMigrationsThroughV005(database);
+            try (Connection connection = database.dataSource().getConnection()) {
+                insertCompany(connection, "00000000-0000-0000-0000-000000000001", "LISTED");
+            }
+
+            assertThatThrownBy(database::migrate)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("listed company lacks closed successful IPO");
+            try (Connection connection = database.dataSource().getConnection()) {
+                assertThat(historyRows(connection, "V006")).isZero();
+                assertThat(tableExists(connection, "stock_listings")).isFalse();
+            }
+        } finally {
+            Files.deleteIfExists(databaseFile);
+        }
+    }
+
+    @Test
+    void v006_backfills_listed_companies_in_company_id_order_and_enforces_bounded_codes() throws Exception {
+        Path databaseFile = Files.createTempFile("blockeco-v006-backfill-", ".db");
+        try (Database database = new Database("jdbc:sqlite:" + databaseFile)) {
+            applyMigrationsThroughV005(database);
+            try (Connection connection = database.dataSource().getConnection()) {
+                insertListedCompanyWithSuccessfulClosedOffering(connection,
+                        "00000000-0000-0000-0000-000000000002", "offering-2", 300, 7,
+                        Instant.parse("2026-08-15T00:00:00Z"));
+                insertListedCompanyWithSuccessfulClosedOffering(connection,
+                        "00000000-0000-0000-0000-000000000001", "offering-1", 250, 5,
+                        Instant.parse("2026-08-14T00:00:00Z"));
+            }
+
+            database.migrate();
+
+            try (Connection connection = database.dataSource().getConnection()) {
+                assertThat(historyRows(connection, "V006")).isEqualTo(1);
+                assertThat(listingCode(connection, "00000000-0000-0000-0000-000000000001")).isEqualTo("BS000001");
+                assertThat(listingCode(connection, "00000000-0000-0000-0000-000000000002")).isEqualTo("BS000002");
+                assertThat(listingPrice(connection, "00000000-0000-0000-0000-000000000001")).isEqualTo(250);
+                assertThat(listingShares(connection, "00000000-0000-0000-0000-000000000002")).isEqualTo(7);
+                assertThat(sequenceValue(connection)).isEqualTo(2);
+                assertThat(auditPayload(connection, "00000000-0000-0000-0000-000000000001"))
+                        .contains("IPO_LISTING_BACKFILLED", "BS000001", "offering-1", "BACKFILL");
+
+                try (PreparedStatement duplicate = connection.prepareStatement(
+                        "INSERT INTO stock_listings VALUES (?, 'BS000001', 1, 1, ? )")) {
+                    duplicate.setString(1, "00000000-0000-0000-0000-000000000003");
+                    duplicate.setString(2, Instant.now().toString());
+                    assertThatThrownBy(duplicate::executeUpdate).isInstanceOf(Exception.class);
+                }
+                try (PreparedStatement invalid = connection.prepareStatement(
+                        "INSERT INTO stock_listings VALUES (?, 'BS000000', 1, 1, ? )")) {
+                    invalid.setString(1, "00000000-0000-0000-0000-000000000004");
+                    invalid.setString(2, Instant.now().toString());
+                    assertThatThrownBy(invalid::executeUpdate).isInstanceOf(Exception.class);
+                }
+                try (PreparedStatement exhausted = connection.prepareStatement(
+                        "UPDATE stock_code_sequence SET last_value = 1000000 WHERE singleton = 1")) {
+                    assertThatThrownBy(exhausted::executeUpdate).isInstanceOf(Exception.class);
+                }
+            }
+        } finally {
+            Files.deleteIfExists(databaseFile);
+        }
+    }
+
     private boolean tableExists(Connection connection, String tableName) throws Exception {
         try (PreparedStatement statement = connection.prepareStatement(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")) {
@@ -148,10 +219,59 @@ class MigrationTest {
     }
 
     private void insertCompany(Connection connection, String id) throws Exception {
+        insertCompany(connection, id, "PENDING_ASSET_BINDING");
+    }
+
+    private void insertCompany(Connection connection, String id, String status) throws Exception {
         try (PreparedStatement company = connection.prepareStatement("INSERT INTO companies VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
-            company.setString(1, id); company.setString(2, id); company.setString(3, "Test Company"); company.setString(4, "founder-1"); company.setString(5, "PENDING_ASSET_BINDING"); company.setLong(6, 0); company.setLong(7, 1000); company.setInt(8, 5000); company.setString(9, "2026-08-14T12:00:00Z"); company.setInt(10, 0); company.executeUpdate();
+            company.setString(1, id); company.setString(2, id); company.setString(3, "Test Company"); company.setString(4, "founder-1"); company.setString(5, status); company.setLong(6, 0); company.setLong(7, 1000); company.setInt(8, 5000); company.setString(9, "2026-08-14T12:00:00Z"); company.setInt(10, 0); company.executeUpdate();
         }
     }
+
+    private void applyMigrationsThroughV005(Database database) throws Exception {
+        try (Connection connection = database.dataSource().getConnection()) {
+            try (PreparedStatement history = connection.prepareStatement("CREATE TABLE schema_history (version TEXT PRIMARY KEY, checksum TEXT NOT NULL)")) {
+                history.execute();
+            }
+            for (int version = 1; version <= 5; version++) {
+                String name = "V00" + version;
+                byte[] script = MigrationTest.class.getResourceAsStream("/db/migration/" + name + ".sql").readAllBytes();
+                for (String sql : Database.splitStatements(new String(script, StandardCharsets.UTF_8))) {
+                    if (!sql.isBlank()) try (PreparedStatement statement = connection.prepareStatement(sql)) { statement.execute(); }
+                }
+                try (PreparedStatement history = connection.prepareStatement("INSERT INTO schema_history(version, checksum) VALUES (?, ?)")) {
+                    history.setString(1, name); history.setString(2, sha256(script)); history.executeUpdate();
+                }
+            }
+        }
+    }
+
+    private void insertListedCompanyWithSuccessfulClosedOffering(Connection connection, String companyId, String offeringId,
+            long price, long shares, Instant closedAt) throws Exception {
+        insertCompany(connection, companyId, "LISTED");
+        try (PreparedStatement offering = connection.prepareStatement("INSERT INTO primary_offerings VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CLOSED')")) {
+            offering.setString(1, offeringId); offering.setString(2, companyId); offering.setLong(3, price * shares); offering.setLong(4, price); offering.setLong(5, shares);
+            offering.setString(6, "2026-08-12T00:00:00Z"); offering.setString(7, "2026-08-13T00:00:00Z"); offering.setString(8, closedAt.toString()); offering.executeUpdate();
+        }
+        String subscriptionId = UUID.nameUUIDFromBytes((offeringId + "-subscription").getBytes(StandardCharsets.UTF_8)).toString();
+        try (PreparedStatement subscription = connection.prepareStatement("INSERT INTO primary_subscriptions VALUES (?, ?, ?, ?, ?, ?, ?, ?)")) {
+            subscription.setString(1, subscriptionId); subscription.setString(2, offeringId); subscription.setString(3, companyId); subscription.setString(4, "player-1"); subscription.setLong(5, shares); subscription.setLong(6, price * shares); subscription.setString(7, subscriptionId); subscription.setString(8, closedAt.toString()); subscription.executeUpdate();
+        }
+        try (PreparedStatement operation = connection.prepareStatement("INSERT INTO treasury_operations VALUES (?, ?, ?, ?, ?, 'COMPLETED', ?, ?)")) {
+            operation.setString(1, subscriptionId); operation.setString(2, companyId); operation.setString(3, "player-1"); operation.setLong(4, price * shares); operation.setString(5, subscriptionId); operation.setString(6, closedAt.toString()); operation.setString(7, closedAt.toString()); operation.executeUpdate();
+        }
+    }
+
+    private String listingCode(Connection connection, String companyId) throws Exception { return listingValue(connection, companyId, "stock_code"); }
+    private long listingPrice(Connection connection, String companyId) throws Exception { return Long.parseLong(listingValue(connection, companyId, "issue_reference_price_minor")); }
+    private long listingShares(Connection connection, String companyId) throws Exception { return Long.parseLong(listingValue(connection, companyId, "issued_shares")); }
+    private String listingValue(Connection connection, String companyId, String column) throws Exception {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT " + column + " FROM stock_listings WHERE company_id = ?")) {
+            statement.setString(1, companyId); try (ResultSet rows = statement.executeQuery()) { rows.next(); return rows.getString(1); }
+        }
+    }
+    private long sequenceValue(Connection connection) throws Exception { try (PreparedStatement statement = connection.prepareStatement("SELECT last_value FROM stock_code_sequence WHERE singleton = 1"); ResultSet rows = statement.executeQuery()) { rows.next(); return rows.getLong(1); } }
+    private String auditPayload(Connection connection, String companyId) throws Exception { try (PreparedStatement statement = connection.prepareStatement("SELECT event_type || payload_json FROM audit_events WHERE company_id = ?")) { statement.setString(1, companyId); try (ResultSet rows = statement.executeQuery()) { rows.next(); return rows.getString(1); } } }
 
     private void applyOldV001(Database database) throws Exception {
         byte[] script = MigrationTest.class.getResourceAsStream("/legacy/V001-published.sql").readAllBytes();

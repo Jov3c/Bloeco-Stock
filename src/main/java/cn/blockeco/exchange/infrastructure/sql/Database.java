@@ -14,18 +14,25 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 public final class Database implements AutoCloseable, TransactionRunner {
 
-    private static final String[] MIGRATIONS = {"V001", "V002", "V003", "V004", "V005"};
+    private static final String[] MIGRATIONS = {"V001", "V002", "V003", "V004", "V005", "V006"};
     private final HikariDataSource dataSource;
+    private final MigrationPrecondition precondition;
 
     public Database(String jdbcUrl) {
+        this(jdbcUrl, Database::verifyMigrationPrecondition);
+    }
+
+    public Database(String jdbcUrl, MigrationPrecondition precondition) {
         HikariConfig configuration = new HikariConfig();
         configuration.setJdbcUrl(jdbcUrl);
         configuration.setMaximumPoolSize(1);
         configuration.setConnectionInitSql("PRAGMA foreign_keys=ON");
         this.dataSource = new HikariDataSource(configuration);
+        this.precondition = Objects.requireNonNull(precondition, "precondition");
     }
 
     public HikariDataSource dataSource() {
@@ -40,6 +47,7 @@ public final class Database implements AutoCloseable, TransactionRunner {
                 byte[] script = readMigration(version);
                 String checksum = checksum(script);
                 if (isApplied(connection, version, checksum)) continue;
+                precondition.verify(connection, version);
                 boolean originalAutoCommit = connection.getAutoCommit();
                 connection.setAutoCommit(false);
                 try {
@@ -200,5 +208,38 @@ public final class Database implements AutoCloseable, TransactionRunner {
     private static boolean isActiveSagaReservationConflict(SQLException exception) {
         String message = exception.getMessage();
         return message != null && message.contains("registration_sagas.company_normalized_name");
+    }
+
+    private static void verifyMigrationPrecondition(Connection connection, String version) throws SQLException {
+        if (!"V006".equals(version)) {
+            return;
+        }
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT c.id
+                FROM companies c
+                WHERE c.status = 'LISTED'
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM primary_offerings po
+                    JOIN primary_subscriptions ps ON ps.offering_id = po.id
+                    JOIN treasury_operations t ON t.id = ps.id AND t.state = 'COMPLETED'
+                    WHERE po.company_id = c.id AND po.state = 'CLOSED'
+                  )
+                LIMIT 1
+                """)) {
+            try (ResultSet rows = statement.executeQuery()) {
+                if (rows.next()) {
+                    throw new IllegalStateException("listed company lacks closed successful IPO: " + rows.getString(1));
+                }
+            }
+        }
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT COUNT(*) FROM companies WHERE status = 'LISTED'")) {
+            try (ResultSet rows = statement.executeQuery()) {
+                if (rows.next() && rows.getLong(1) > 999999) {
+                    throw new IllegalStateException("stock code sequence exhausted during V006 backfill");
+                }
+            }
+        }
     }
 }

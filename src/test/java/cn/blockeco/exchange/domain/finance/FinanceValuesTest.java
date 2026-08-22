@@ -77,4 +77,20 @@ class FinanceValuesTest {
         assertThatThrownBy(() -> grownCompany.withTotalShares(1_004L))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void listing_accepts_the_bounded_six_digit_stock_code_range() {
+        assertThat(new StockListing(COMPANY_ID, "BS000001", Money.ofMinor(250), 1, ANNOUNCED_AT).stockCode())
+                .isEqualTo("BS000001");
+        assertThat(new StockListing(COMPANY_ID, "BS999999", Money.ofMinor(250), 1, ANNOUNCED_AT).stockCode())
+                .isEqualTo("BS999999");
+    }
+
+    @Test
+    void listing_rejects_zero_or_seven_digit_code() {
+        assertThatThrownBy(() -> new StockListing(COMPANY_ID, "BS000000", Money.ofMinor(1), 1, ANNOUNCED_AT))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new StockListing(COMPANY_ID, "BS1000000", Money.ofMinor(1), 1, ANNOUNCED_AT))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }
