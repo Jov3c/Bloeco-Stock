@@ -11,8 +11,8 @@ import java.util.UUID;
 
 /** SQL facts for reservations and fills. Every write is part of the caller's transaction. */
 public interface SecondaryTradingRepository {
-    void reserveBuy(Connection connection, LimitOrder order) throws SQLException;
-    void reserveSell(Connection connection, LimitOrder order) throws SQLException;
+    LimitOrder reserveBuy(Connection connection, LimitOrder order) throws SQLException;
+    LimitOrder reserveSell(Connection connection, LimitOrder order) throws SQLException;
     Settlement settleTrade(Connection connection, Trade trade) throws SQLException;
     void releaseOrder(Connection connection, UUID orderId, LimitOrder.State terminalState) throws SQLException;
     void cancelTakerForSelfTrade(Connection connection, UUID orderId) throws SQLException;
