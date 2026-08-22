@@ -7,6 +7,7 @@ import cn.blockeco.exchange.domain.company.Company;
 import cn.blockeco.exchange.domain.company.CompanyId;
 import cn.blockeco.exchange.domain.company.DividendRate;
 import cn.blockeco.exchange.domain.money.Money;
+import cn.blockeco.exchange.domain.trading.LimitOrder;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
@@ -92,5 +93,23 @@ class FinanceValuesTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new StockListing(COMPANY_ID, "BS1000000", Money.ofMinor(1), 1, ANNOUNCED_AT))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void securities_cash_account_rejects_negative_reserved_cash() {
+        assertThatThrownBy(() -> new SecuritiesCashAccount(
+                        UUID.randomUUID(), Money.ofMinor(10), Money.ofMinor(-1)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("reserved");
+    }
+
+    @Test
+    void limit_order_rejects_remaining_shares_above_original_shares() {
+        assertThatThrownBy(() -> new LimitOrder(
+                        UUID.randomUUID(), COMPANY_ID, "BS000001", UUID.randomUUID(), LimitOrder.Side.BUY,
+                        Money.ofMinor(10), 10, 11, 1, Money.ofMinor(110), Money.zero(), Money.zero(), 100,
+                        ANNOUNCED_AT, LimitOrder.State.OPEN))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("remainingShares");
     }
 }

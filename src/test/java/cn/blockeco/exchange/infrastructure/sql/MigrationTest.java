@@ -223,12 +223,93 @@ class MigrationTest {
         }
     }
 
+    @Test
+    void v007_upgrades_a_real_v006_fixture_once_with_segregated_market_tables_and_opening_company_ledger() throws Exception {
+        Path databaseFile = Files.createTempFile("blockeco-v007-migration-", ".db");
+        try (Database database = new Database("jdbc:sqlite:" + databaseFile)) {
+            applyMigrationsThroughV006(database);
+            java.util.Map<String, String> publishedChecksums = new java.util.LinkedHashMap<>();
+            try (Connection connection = database.dataSource().getConnection()) {
+                for (int version = 1; version <= 6; version++) {
+                    String name = "V00" + version;
+                    publishedChecksums.put(name, checksum(connection, name));
+                }
+                insertCompany(connection, "00000000-0000-0000-0000-000000000007");
+                try (PreparedStatement cash = connection.prepareStatement(
+                        "INSERT INTO company_cash_accounts VALUES (?, ?, ?, ?, ?)")) {
+                    cash.setString(1, "00000000-0000-0000-0000-000000000007");
+                    cash.setLong(2, 1234); cash.setLong(3, 1234); cash.setLong(4, 0); cash.setLong(5, 0);
+                    cash.executeUpdate();
+                }
+            }
+
+            database.migrate();
+            database.migrate();
+
+            try (Connection connection = database.dataSource().getConnection()) {
+                assertThat(historyRows(connection, "V007")).isEqualTo(1);
+                for (java.util.Map.Entry<String, String> publishedChecksum : publishedChecksums.entrySet()) {
+                    assertThat(checksum(connection, publishedChecksum.getKey()))
+                            .isEqualTo(publishedChecksum.getValue());
+                }
+                for (String table : java.util.List.of("securities_cash_accounts", "compensation_fund",
+                        "escrow_ledger_entries", "securities_cash_operations", "stock_order_sequence",
+                        "stock_orders", "stock_trades")) {
+                    assertThat(tableExists(connection, table)).as(table).isTrue();
+                }
+                for (String index : java.util.List.of("stock_orders_book", "stock_orders_player",
+                        "stock_trades_time", "securities_cash_operations_player_active")) {
+                    assertThat(indexExists(connection, index)).as(index).isTrue();
+                }
+                assertThat(singleLong(connection, "SELECT balance_minor FROM compensation_fund WHERE singleton = 1"))
+                        .isZero();
+                assertThat(singleLong(connection, "SELECT amount_minor FROM escrow_ledger_entries "
+                        + "WHERE liability_kind = 'COMPANY_TREASURY' AND company_id = "
+                        + "'00000000-0000-0000-0000-000000000007'"))
+                        .isEqualTo(1234);
+                assertThat(singleLong(connection, "SELECT COUNT(*) FROM escrow_ledger_entries "
+                        + "WHERE liability_kind = 'COMPANY_TREASURY'"))
+                        .isEqualTo(1);
+            }
+        } finally {
+            Files.deleteIfExists(databaseFile);
+        }
+    }
+
     private boolean tableExists(Connection connection, String tableName) throws Exception {
         try (PreparedStatement statement = connection.prepareStatement(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")) {
             statement.setString(1, tableName);
             try (ResultSet resultSet = statement.executeQuery()) {
                 return resultSet.next();
+            }
+        }
+    }
+
+    private boolean indexExists(Connection connection, String indexName) throws Exception {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?")) {
+            statement.setString(1, indexName);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                return resultSet.next();
+            }
+        }
+    }
+
+    private long singleLong(Connection connection, String sql) throws Exception {
+        try (PreparedStatement statement = connection.prepareStatement(sql); ResultSet rows = statement.executeQuery()) {
+            rows.next();
+            return rows.getLong(1);
+        }
+    }
+
+    private String checksum(Connection connection, String version) throws Exception {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT checksum FROM schema_history WHERE version = ?")) {
+            statement.setString(1, version);
+            try (ResultSet rows = statement.executeQuery()) {
+                rows.next();
+                return rows.getString(1);
             }
         }
     }
@@ -268,6 +349,24 @@ class MigrationTest {
                 history.execute();
             }
             for (int version = 1; version <= 5; version++) {
+                String name = "V00" + version;
+                byte[] script = MigrationTest.class.getResourceAsStream("/db/migration/" + name + ".sql").readAllBytes();
+                for (String sql : Database.splitStatements(new String(script, StandardCharsets.UTF_8))) {
+                    if (!sql.isBlank()) try (PreparedStatement statement = connection.prepareStatement(sql)) { statement.execute(); }
+                }
+                try (PreparedStatement history = connection.prepareStatement("INSERT INTO schema_history(version, checksum) VALUES (?, ?)")) {
+                    history.setString(1, name); history.setString(2, sha256(script)); history.executeUpdate();
+                }
+            }
+        }
+    }
+
+    private void applyMigrationsThroughV006(Database database) throws Exception {
+        try (Connection connection = database.dataSource().getConnection()) {
+            try (PreparedStatement history = connection.prepareStatement("CREATE TABLE schema_history (version TEXT PRIMARY KEY, checksum TEXT NOT NULL)")) {
+                history.execute();
+            }
+            for (int version = 1; version <= 6; version++) {
                 String name = "V00" + version;
                 byte[] script = MigrationTest.class.getResourceAsStream("/db/migration/" + name + ".sql").readAllBytes();
                 for (String sql : Database.splitStatements(new String(script, StandardCharsets.UTF_8))) {
