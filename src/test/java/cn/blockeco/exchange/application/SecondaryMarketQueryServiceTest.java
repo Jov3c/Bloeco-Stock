@@ -43,6 +43,16 @@ class SecondaryMarketQueryServiceTest {
             assertThat(service.orders(owner, 50).toCompletableFuture().join()).extracting(OrderView::id).doesNotContain(otherOrder.id());
         } finally { Files.deleteIfExists(file); }
     }
+    @Test void personal_history_orders_by_instant_before_applying_limit() throws Exception {
+        Path file=Files.createTempFile("secondary-history-", ".db");
+        try(Database db=new Database("jdbc:sqlite:"+file)) { db.migrate(); CompanyId company=Fixtures.company(db,100); UUID owner=UUID.randomUUID(); seedListed(db,company);
+            UUID whole=UUID.fromString("00000000-0000-0000-0000-000000000001"); UUID fractional=UUID.fromString("00000000-0000-0000-0000-000000000002");
+            db.inTransaction(c->{insertSellOrder(c,whole,company,owner,"2026-08-22T10:00:00Z",1);insertSellOrder(c,fractional,company,owner,"2026-08-22T10:00:00.500Z",2);return null;});
+            SqlSecuritiesCashRepository cash=new SqlSecuritiesCashRepository(db.dataSource()); SqlSecondaryTradingRepository repo=new SqlSecondaryTradingRepository(db.dataSource(),cash);
+            assertThat(repo.orders(owner,1)).extracting(OrderView::id).containsExactly(fractional);
+        } finally { Files.deleteIfExists(file); }
+    }
+    private static void insertSellOrder(java.sql.Connection c,UUID id,CompanyId company,UUID player,String acceptedAt,long priority)throws java.sql.SQLException {try(var s=c.prepareStatement("INSERT INTO stock_orders (id,company_id,stock_code,player_uuid,side,limit_price_minor,original_shares,remaining_shares,priority_sequence,reserved_cash_minor,filled_notional_minor,fee_charged_minor,fee_bps,accepted_at,state) VALUES (?,?,?,?, 'SELL',10,1,1,?,0,0,0,0,?,'OPEN')")){s.setString(1,id.toString());s.setString(2,company.value().toString());s.setString(3,"BS000001");s.setString(4,player.toString());s.setLong(5,priority);s.setString(6,acceptedAt);s.executeUpdate();}}
     private static LimitOrder order(CompanyId c, UUID p, LimitOrder.Side side, long price, long shares) { return new LimitOrder(UUID.randomUUID(),c,"BS000001",p,side,Money.ofMinor(price),shares,shares,1,side==LimitOrder.Side.BUY?Money.ofMinor(price*shares):Money.zero(),Money.zero(),Money.zero(),0,Instant.EPOCH,LimitOrder.State.OPEN); }
     private static void seedListed(Database db,CompanyId c){db.inTransaction(x->{try(var s=x.prepareStatement("UPDATE companies SET status='LISTED' WHERE id=?")){s.setString(1,c.value().toString());s.executeUpdate();}try(var s=x.prepareStatement("INSERT INTO stock_listings VALUES (?,?,?,?,?)")){s.setString(1,c.value().toString());s.setString(2,"BS000001");s.setLong(3,10);s.setLong(4,1000);s.setString(5,Instant.EPOCH.toString());s.executeUpdate();}return null;});}
     private static void seedCash(Database db,UUID p,long v){db.inTransaction(x->{try(var s=x.prepareStatement("INSERT INTO securities_cash_accounts VALUES (?,?,0)")){s.setString(1,p.toString());s.setLong(2,v);s.executeUpdate();}return null;});}
