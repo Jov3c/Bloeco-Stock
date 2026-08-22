@@ -55,6 +55,15 @@ class VaultEconomyGatewayTest {
         when(fixture.economy.withdrawPlayer(fixture.player, 11.0)).thenThrow(new IllegalStateException("offline"));
         assertThat(fixture.gateway.withdraw(fixture.id, Money.ofMinor(1100)).outcome()).isEqualTo(EconomyGateway.Outcome.PROVIDER_FAILURE);
     }
+    @Test void balance_rejects_non_finite_provider_values_and_preserves_exact_minor_units() {
+        Fixture fixture=Fixture.withProvider();
+        when(fixture.economy.getBalance(fixture.player)).thenReturn(12.34d);
+        assertThat(fixture.gateway.balance(fixture.id)).isEqualTo(Money.ofMinor(1234));
+        when(fixture.economy.getBalance(fixture.player)).thenReturn(Double.NaN);
+        org.assertj.core.api.Assertions.assertThatThrownBy(()->fixture.gateway.balance(fixture.id)).isInstanceOf(IllegalStateException.class);
+        when(fixture.economy.getBalance(fixture.player)).thenReturn(12.345d);
+        org.assertj.core.api.Assertions.assertThatThrownBy(()->fixture.gateway.balance(fixture.id)).isInstanceOf(IllegalStateException.class);
+    }
     private static EconomyResponse response(EconomyResponse.ResponseType type, String message) { return new EconomyResponse(11.0, 0, type, message); }
     private static final class Fixture {
         final UUID id=UUID.randomUUID(); final Economy economy=mock(Economy.class); final OfflinePlayer player=mock(OfflinePlayer.class); final VaultEconomyGateway gateway;

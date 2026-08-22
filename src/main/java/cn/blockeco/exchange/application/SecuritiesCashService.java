@@ -41,28 +41,30 @@ public final class SecuritiesCashService {
         transactions.inTransaction(c->{ if(direction==SecuritiesCashDirection.WITHDRAW) repository.reserve(c,player,amount); repository.prepareOperation(c,operation); return null; }); return operation;
     }
     private CompletionStage<SecuritiesCashResult> depositLegOne(SecuritiesCashOperation o) {
-        return external(gateway.withdrawPlayer(o.playerId(),o.amount())).thenCompose(x -> {
+        return external(() -> gateway.withdrawPlayer(o.playerId(),o.amount())).thenCompose(x -> {
             if(!success(x)) return afterFailure(o,SecuritiesCashOperationState.PREPARED,null,x,false);
             return durable(o,SecuritiesCashOperationState.PREPARED,SecuritiesCashOperationState.PLAYER_WITHDRAWN,SecuritiesCashOperationState.PLAYER_WITHDRAWN,"player withdrawal confirmed")
-                .thenCompose(v -> external(gateway.depositEscrow(o.amount())))
+                .thenCompose(v -> external(() -> gateway.depositEscrow(o.amount())))
                 .thenCompose(y -> { if(!success(y)) return afterFailure(o,SecuritiesCashOperationState.PLAYER_WITHDRAWN,SecuritiesCashOperationState.PLAYER_WITHDRAWN,y,true);
                     return durable(o,SecuritiesCashOperationState.PLAYER_WITHDRAWN,SecuritiesCashOperationState.ESCROW_DEPOSITED,SecuritiesCashOperationState.ESCROW_DEPOSITED,"escrow deposit confirmed")
                         .thenCompose(v -> sql(() -> { transactions.inTransaction(c->{repository.completeDeposit(c,require(o.id()),clock.now());return null;}); return new SecuritiesCashResult(o.id(),SecuritiesCashOperationState.COMPLETED,"completed"); })); });
         });
     }
     private CompletionStage<SecuritiesCashResult> withdrawLegOne(SecuritiesCashOperation o) {
-        return external(gateway.withdrawEscrow(o.amount())).thenCompose(x -> {
+        return external(() -> gateway.withdrawEscrow(o.amount())).thenCompose(x -> {
             if(!success(x)) return afterFailure(o,SecuritiesCashOperationState.PREPARED,null,x,false);
             return durable(o,SecuritiesCashOperationState.PREPARED,SecuritiesCashOperationState.ESCROW_WITHDRAWN,SecuritiesCashOperationState.ESCROW_WITHDRAWN,"escrow withdrawal confirmed")
-                .thenCompose(v -> external(gateway.depositPlayer(o.playerId(),o.amount())))
+                .thenCompose(v -> external(() -> gateway.depositPlayer(o.playerId(),o.amount())))
                 .thenCompose(y -> { if(!success(y)) return afterFailure(o,SecuritiesCashOperationState.ESCROW_WITHDRAWN,SecuritiesCashOperationState.ESCROW_WITHDRAWN,y,true);
                     return durable(o,SecuritiesCashOperationState.ESCROW_WITHDRAWN,SecuritiesCashOperationState.PLAYER_DEPOSITED,SecuritiesCashOperationState.PLAYER_DEPOSITED,"player deposit confirmed")
                         .thenCompose(v -> sql(() -> { transactions.inTransaction(c->{repository.completeWithdrawal(c,require(o.id()),clock.now());return null;});return new SecuritiesCashResult(o.id(),SecuritiesCashOperationState.COMPLETED,"completed"); })); });
         });
     }
     private CompletionStage<SecuritiesCashResult> afterFailure(SecuritiesCashOperation o,SecuritiesCashOperationState expected,SecuritiesCashOperationState last,External external,boolean priorExternalEffect) {
-        boolean called=external.result!=null && external.result.providerWasCalled();
-        if(external.failure!=null) called=true; // a thrown completion has crossed invocation boundary
+        // A gateway result can prove the provider was *not* called.  Every other
+        // path (null result/stage, throw, timeout, or providerWasCalled=true) has
+        // crossed an invocation boundary and is deliberately unretryable.
+        boolean called=external.invocationAttempted && (external.result==null || external.result.providerWasCalled());
         boolean ambiguous=called || priorExternalEffect;
         String detail=external.detail();
         return sql(() -> { transactions.inTransaction(c->{ if(ambiguous) repository.transitionOperation(c,o.id(),expected,SecuritiesCashOperationState.AMBIGUOUS,last,detail,clock.now()); else { if(o.direction()==SecuritiesCashDirection.WITHDRAW) repository.release(c,o.playerId(),o.amount()); repository.transitionOperation(c,o.id(),expected,SecuritiesCashOperationState.FAILED,null,detail,clock.now()); } return null;}); return new SecuritiesCashResult(o.id(),ambiguous?SecuritiesCashOperationState.AMBIGUOUS:SecuritiesCashOperationState.FAILED,detail); });
@@ -74,8 +76,22 @@ public final class SecuritiesCashService {
     private SecuritiesCashOperation require(UUID id){return repository.findOperation(id).orElseThrow(()->new IllegalStateException("cash operation disappeared: "+id));}
     private <T> CompletionStage<T> sql(java.util.concurrent.Callable<T> work){return CompletableFuture.supplyAsync(()->{try{return work.call();}catch(Exception e){throw new java.util.concurrent.CompletionException(e);}},sql);}
     private static boolean success(External external){return external.failure==null&&external.result!=null&&external.result.outcome()== EconomyGateway.Outcome.SUCCESS;}
-    private CompletionStage<External> external(CompletionStage<EconomyGateway.Result> stage){return stage.toCompletableFuture().orTimeout(externalTimeout.toMillis(),java.util.concurrent.TimeUnit.MILLISECONDS).handle(External::new);}
+    /**
+     * The gateway boundary is deliberately total: an adapter may throw before it
+     * returns a stage, or (incorrectly) return null.  Both cases happen after this
+     * service has attempted to invoke the external leg, so must be ambiguous rather
+     * than escaping the saga and leaving a PREPARED intent orphaned.
+     */
+    private CompletionStage<External> external(java.util.function.Supplier<CompletionStage<EconomyGateway.Result>> invoke){
+        try {
+            CompletionStage<EconomyGateway.Result> stage=invoke.get();
+            if(stage==null)return CompletableFuture.completedFuture(new External(null,new IllegalStateException("gateway returned null stage"),true));
+            return stage.toCompletableFuture().orTimeout(externalTimeout.toMillis(),java.util.concurrent.TimeUnit.MILLISECONDS).handle((result,failure)->new External(result,failure,true));
+        } catch(RuntimeException failure) {
+            return CompletableFuture.completedFuture(new External(null,failure,true));
+        }
+    }
     private static SecuritiesCashResult result(SecuritiesCashOperation o){return new SecuritiesCashResult(o.id(),o.state(),o.detail());}
     private static void requireAmount(Money amount){Objects.requireNonNull(amount);if(amount.minorUnits()<=0)throw new IllegalArgumentException("amount must be positive");}
-    private record External(EconomyGateway.Result result,Throwable failure){String detail(){return failure!=null?failure.toString():result==null?"provider returned null":result.message();}}
+    private record External(EconomyGateway.Result result,Throwable failure,boolean invocationAttempted){String detail(){return failure!=null?failure.toString():result==null?"provider returned null":result.message();}}
 }
