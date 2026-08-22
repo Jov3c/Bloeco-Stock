@@ -64,3 +64,11 @@ Focused verification for this round:
 .\gradlew.bat test --tests cn.blockeco.exchange.paper.FileConfigStoreTest --tests cn.blockeco.exchange.paper.StockAdminConfigCommandTest
 .\gradlew.bat test --tests cn.blockeco.exchange.application.CompanyRegistrationServiceTest --tests cn.blockeco.exchange.paper.FileConfigStoreTest --tests cn.blockeco.exchange.paper.StockAdminConfigCommandTest --tests cn.blockeco.exchange.paper.CompanyCommandTest --tests cn.blockeco.exchange.paper.CompanyTabCompleterTest
 ```
+
+## Fix round 2 — atomic replacement required
+
+### RED/GREEN
+
+Added an injected `AtomicMoveNotSupportedException` test whose non-atomic fallback operation would succeed. It initially failed because the store treated that fallback as a successful persistence. The store now propagates the atomic-move exception, deletes the temporary file, and leaves both target file and live configuration unchanged.
+
+The production `FileOperations` contract no longer exposes non-atomic `replace`; the only publish path is sibling temporary save followed by `ATOMIC_MOVE + REPLACE_EXISTING`. Filesystems that cannot supply that operation cause the command persistence contract to fail, so the command cannot publish rules, success output, or audit.

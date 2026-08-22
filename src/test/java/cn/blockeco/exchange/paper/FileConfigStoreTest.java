@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.AtomicMoveNotSupportedException;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.Test;
 
@@ -34,11 +35,26 @@ class FileConfigStoreTest {
             FileConfigStore failingMove = new FileConfigStore(configuration, target, FileConfigStore.SYSTEM_WRITER, new FileConfigStore.FileOperations() {
                 @Override public Path createTempFile(Path parent, String prefix) throws IOException { return Files.createTempFile(parent, prefix, ".tmp"); }
                 @Override public void atomicReplace(Path source, Path destination) throws IOException { throw new IOException("move blocked"); }
-                @Override public void replace(Path source, Path destination) throws IOException { throw new IOException("move blocked"); }
                 @Override public void deleteIfExists(Path path) throws IOException { Files.deleteIfExists(path); }
             });
             assertThatThrownBy(() -> failingMove.persistMinimumCapital("25000.50")).isInstanceOf(IOException.class);
             assertThat(Files.readString(target)).isEqualTo(original); assertThat(configuration.getString("company.minimum-capital")).isEqualTo("10000.00");
+        } finally { Files.deleteIfExists(target); Files.deleteIfExists(directory); }
+    }
+
+    @Test void unsupported_atomic_replace_rejects_the_change_without_non_atomic_fallback() throws Exception {
+        Path directory = Files.createTempDirectory("blockstock-config-store-"); Path target = directory.resolve("config.yml");
+        try {
+            String original = "company:\n  minimum-capital: '10000.00'\n"; Files.writeString(target, original);
+            YamlConfiguration configuration = YamlConfiguration.loadConfiguration(target.toFile());
+            FileConfigStore store = new FileConfigStore(configuration, target, FileConfigStore.SYSTEM_WRITER, new FileConfigStore.FileOperations() {
+                @Override public Path createTempFile(Path parent, String prefix) throws IOException { return Files.createTempFile(parent, prefix, ".tmp"); }
+                @Override public void atomicReplace(Path source, Path destination) throws IOException { throw new AtomicMoveNotSupportedException(source.toString(), destination.toString(), "unsupported"); }
+                @Override public void deleteIfExists(Path path) throws IOException { Files.deleteIfExists(path); }
+            });
+            assertThatThrownBy(() -> store.persistMinimumCapital("25000.50")).isInstanceOf(AtomicMoveNotSupportedException.class);
+            assertThat(Files.readString(target)).isEqualTo(original); assertThat(configuration.getString("company.minimum-capital")).isEqualTo("10000.00");
+            try (var entries = Files.list(directory)) { assertThat(entries.map(Path::getFileName).map(Path::toString)).containsExactly("config.yml"); }
         } finally { Files.deleteIfExists(target); Files.deleteIfExists(directory); }
     }
 }

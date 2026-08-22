@@ -1,7 +1,6 @@
 package cn.blockeco.exchange.paper;
 
 import java.io.IOException;
-import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -14,7 +13,6 @@ public final class FileConfigStore implements StockAdminConfigCommand.ConfigStor
     static final FileOperations SYSTEM_FILES = new FileOperations() {
         @Override public Path createTempFile(Path parent, String prefix) throws IOException { return Files.createTempFile(parent, prefix, ".tmp"); }
         @Override public void atomicReplace(Path source, Path destination) throws IOException { Files.move(source, destination, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE); }
-        @Override public void replace(Path source, Path destination) throws IOException { Files.move(source, destination, StandardCopyOption.REPLACE_EXISTING); }
         @Override public void deleteIfExists(Path path) throws IOException { Files.deleteIfExists(path); }
     };
     private final FileConfiguration live; private final Path target; private final ConfigurationWriter writer; private final FileOperations files;
@@ -29,11 +27,10 @@ public final class FileConfigStore implements StockAdminConfigCommand.ConfigStor
             catch (org.bukkit.configuration.InvalidConfigurationException invalid) { throw new IOException("could not stage config", invalid); }
             staged.set("company.minimum-capital", value);
             writer.save(staged, temporary);
-            try { files.atomicReplace(temporary, target); }
-            catch (AtomicMoveNotSupportedException unsupported) { files.replace(temporary, target); }
+            files.atomicReplace(temporary, target);
             live.set("company.minimum-capital", value);
         } finally { files.deleteIfExists(temporary); }
     }
     @FunctionalInterface interface ConfigurationWriter { void save(FileConfiguration configuration, Path file) throws IOException; }
-    interface FileOperations { Path createTempFile(Path parent, String prefix) throws IOException; void atomicReplace(Path source, Path destination) throws IOException; void replace(Path source, Path destination) throws IOException; void deleteIfExists(Path path) throws IOException; }
+    interface FileOperations { Path createTempFile(Path parent, String prefix) throws IOException; void atomicReplace(Path source, Path destination) throws IOException; void deleteIfExists(Path path) throws IOException; }
 }
