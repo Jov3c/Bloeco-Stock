@@ -78,6 +78,21 @@ class BlockecoPluginTest {
     }
 
     @Test
+    void startup_gate_runs_ipo_recovery_after_capitalization_and_never_accepts_when_ipo_recovery_fails() {
+        StartupRecoveryGate gate = new StartupRecoveryGate();
+        java.util.concurrent.atomic.AtomicBoolean capitalizationFinished = new java.util.concurrent.atomic.AtomicBoolean();
+        java.util.concurrent.CompletableFuture<Integer> ipo = new java.util.concurrent.CompletableFuture<>();
+
+        gate.start(null, () -> java.util.concurrent.CompletableFuture.completedFuture(2), capitalizations -> {
+            capitalizationFinished.set(true); return ipo;
+        }, (capitalizations, summary) -> { });
+
+        assertThat(capitalizationFinished).isTrue(); assertThat(gate.accepting()).isFalse();
+        ipo.completeExceptionally(new IllegalStateException("IPO SQL failure"));
+        assertThat(gate.accepting()).isFalse(); assertThat(gate.failure()).contains("IPO 认购恢复失败");
+    }
+
+    @Test
     void final_vault_provider_startup_diagnostic_is_chinese() {
         assertThat(BlockecoPlugin.startupFailureMessage(new IllegalStateException("Vault 经济提供方不可用")))
                 .isEqualTo("BlockStock 启动失败：Vault 经济提供方不可用");

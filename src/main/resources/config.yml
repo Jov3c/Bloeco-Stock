@@ -73,3 +73,4 @@ messages:
   no-recovery-records: '没有恢复记录。'
   recovery-record: '编号=%id% 玩家=%player% 金额=%amount% 状态=%state% 时间=%time% 原因=%error%'
   capitalization-recovery-record: '资本托管恢复：操作=%id% 公司=%company% 玩家=%player% 金额=%amount% 状态=%state% 原因=%reason%'
+  ipo-subscription-recovery-record: 'IPO 恢复：操作=%id% 发行=%offering% 公司=%company% 玩家=%player% 股数=%shares% 金额=%amount% 状态=%state% 时间=%time% 原因=%reason%'

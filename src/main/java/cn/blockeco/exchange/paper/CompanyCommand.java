@@ -75,15 +75,22 @@ public final class CompanyCommand implements CommandExecutor {
     }
     private boolean recovery(CommandSender sender) {
         if (!sender.hasPermission("blockeco.admin.recovery")) { sender.sendMessage(messages.noPermission()); return true; }
-        queries.recoveryList().thenCombine(queries.capitalizationRecoveryList(), RecoveryRecords::new).whenComplete((records, failure) -> mainThread.submit(() -> {
+        java.util.concurrent.CompletableFuture<List<IpoSubscriptionRecoveryRecord>> ipo = offerings == null
+                ? java.util.concurrent.CompletableFuture.completedFuture(List.of())
+                : offerings.ambiguousSubscriptions().toCompletableFuture();
+        queries.recoveryList().thenCombine(queries.capitalizationRecoveryList(), RecoveryRecords::new).thenCombine(ipo, RecoveryRecords::withIpo).whenComplete((records, failure) -> mainThread.submit(() -> {
             if (failure != null) { sender.sendMessage(messages.recoveryLookupFailed()); return null; }
-            if (records.registration().isEmpty() && records.capitalization().isEmpty()) sender.sendMessage(messages.noRecoveryRecords());
+            if (records.registration().isEmpty() && records.capitalization().isEmpty() && records.ipo().isEmpty()) sender.sendMessage(messages.noRecoveryRecords());
             for (RegistrationSaga saga : records.registration()) sender.sendMessage(messages.recoveryRecord(saga.id(), saga.founderId(), saga.totalWithdrawal().minorUnits(), saga.state(), saga.updatedAt(), saga.errorMessage()==null ? "" : saga.errorMessage()));
             for (CapitalizationRecoveryRecord record : records.capitalization()) { var operation = record.operation(); sender.sendMessage(messages.capitalizationRecoveryRecord(operation.id(), operation.companyId(), operation.playerId(), operation.amount().minorUnits(), operation.state(), record.reason())); }
+            for (IpoSubscriptionRecoveryRecord record : records.ipo()) sender.sendMessage(messages.ipoSubscriptionRecoveryRecord(record));
             return null;
         }));
         return true;
     }
-    private record RecoveryRecords(List<RegistrationSaga> registration, List<CapitalizationRecoveryRecord> capitalization) { }
+    private record RecoveryRecords(List<RegistrationSaga> registration, List<CapitalizationRecoveryRecord> capitalization, List<IpoSubscriptionRecoveryRecord> ipo) {
+        private RecoveryRecords(List<RegistrationSaga> registration, List<CapitalizationRecoveryRecord> capitalization) { this(registration, capitalization, List.of()); }
+        private RecoveryRecords withIpo(List<IpoSubscriptionRecoveryRecord> records) { return new RecoveryRecords(registration, capitalization, records); }
+    }
     private net.kyori.adventure.text.Component resultMessage(RegistrationResult result) { return switch (result.status()) { case SUCCESS -> messages.registrationSuccess(); case INSUFFICIENT_FUNDS -> messages.insufficientFunds(); case DUPLICATE_NAME -> messages.duplicateName(); case REFUNDED_AFTER_FAILURE -> messages.refunded(); case RECOVERY_REQUIRED, PROVIDER_FAILURE -> messages.recoveryRequired(); }; }
 }

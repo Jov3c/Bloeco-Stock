@@ -10,6 +10,8 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
+import cn.blockeco.exchange.application.IpoSubscriptionRecoveryRecord;
+import cn.blockeco.exchange.application.IpoSubscriptionRecoverySummary;
 
 public interface PrimaryOfferingRepository {
     enum SubscriptionPreparationRejection { NOT_OPEN, SOLD_OUT, INVALID }
@@ -34,4 +36,6 @@ public interface PrimaryOfferingRepository {
     void markAmbiguous(Connection connection, UUID subscriptionId, String externalStage, String reason, Instant now) throws SQLException;
     void cancelPrepared(Connection connection, UUID subscriptionId, Instant now) throws SQLException;
     void closeExpired(Connection connection, Instant now) throws SQLException;
+    IpoSubscriptionRecoverySummary recoverSubscriptionsAtStartup(Connection connection, Instant now) throws SQLException;
+    List<IpoSubscriptionRecoveryRecord> findAmbiguousSubscriptions();
 }

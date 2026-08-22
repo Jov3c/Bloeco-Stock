@@ -10,6 +10,7 @@ import cn.blockeco.exchange.application.CapitalizationRecoveryRecord;
 import cn.blockeco.exchange.application.AssetBindingService;
 import cn.blockeco.exchange.application.PrimaryOfferingService;
 import cn.blockeco.exchange.application.SubscriptionResult;
+import cn.blockeco.exchange.application.IpoSubscriptionRecoveryRecord;
 import cn.blockeco.exchange.domain.company.CompanyId;
 import cn.blockeco.exchange.domain.finance.AssetBindingState;
 import cn.blockeco.exchange.infrastructure.CompanyAssetAdapterRegistryImpl;
@@ -292,6 +293,21 @@ class CompanyCommandTest {
 
         assertThat(allPlainMessages(sender)).anySatisfy(message -> assertThat(message).contains(operationId.toString(), companyId.toString(), playerId.toString(), "77", "待人工核对", "Vault 超时"));
         verifyNoInteractions(registration);
+    }
+
+    @Test
+    void recovery_list_includes_ipo_ambiguities_read_only() {
+        CompanyQueryService queries = mock(CompanyQueryService.class); CompanyRegistrationService registration = mock(CompanyRegistrationService.class);
+        UUID subscription = UUID.fromString("dddddddd-dddd-dddd-dddd-dddddddddddd"); UUID offering = UUID.fromString("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee");
+        IpoSubscriptionRecoveryRecord record = new IpoSubscriptionRecoveryRecord(subscription, offering, new CompanyId(UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")), UUID.fromString("cccccccc-cccc-cccc-cccc-cccccccccccc"), 3, Money.ofMinor(75), TreasuryOperationState.AMBIGUOUS, java.time.Instant.parse("2026-08-22T12:00:00Z"), "启动恢复：无法证明外部资金结果，未执行 Vault 操作。");
+        PrimaryOfferingService offerings = mock(PrimaryOfferingService.class);
+        when(queries.recoveryList()).thenReturn(CompletableFuture.completedFuture(List.of())); when(queries.capitalizationRecoveryList()).thenReturn(CompletableFuture.completedFuture(List.of())); when(offerings.ambiguousSubscriptions()).thenReturn(CompletableFuture.completedFuture(List.of(record)));
+        CommandSender sender = mock(CommandSender.class); when(sender.hasPermission("blockeco.admin.recovery")).thenReturn(true);
+        CompanyCommand command = new CompanyCommand(registration, queries, new Messages(null), DIRECT_MAIN, rules, null, offerings); command.setAccepting(true);
+
+        command.onCommand(sender, mock(Command.class), "company", new String[] {"recovery", "list"});
+
+        assertThat(allPlainMessages(sender)).anySatisfy(message -> assertThat(message).contains("IPO 恢复：操作=" + subscription, "发行=" + offering, "股数=3", "75", "待人工核对", "启动恢复")); verifyNoInteractions(registration);
     }
 
     @Test

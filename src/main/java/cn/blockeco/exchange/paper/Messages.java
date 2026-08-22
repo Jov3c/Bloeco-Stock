@@ -67,6 +67,7 @@ public final class Messages {
     public Component noRecoveryRecords() { return message("no-recovery-records", "没有恢复记录。"); }
     public Component recoveryRecord(Object id,Object player,Object amount,Object state,Object time,Object error) { return message("recovery-record", "编号=%id% 玩家=%player% 金额=%amount% 状态=%state% 时间=%time% 原因=%error%").replaceText(b->b.matchLiteral("%id%").replacement(String.valueOf(id))).replaceText(b->b.matchLiteral("%player%").replacement(String.valueOf(player))).replaceText(b->b.matchLiteral("%amount%").replacement(String.valueOf(amount))).replaceText(b->b.matchLiteral("%state%").replacement(displayState(state))).replaceText(b->b.matchLiteral("%time%").replacement(String.valueOf(time))).replaceText(b->b.matchLiteral("%error%").replacement(String.valueOf(error))); }
     public Component capitalizationRecoveryRecord(Object id, Object company, Object player, Object amount, Object state, Object reason) { return message("capitalization-recovery-record", "资本托管恢复：操作=%id% 公司=%company% 玩家=%player% 金额=%amount% 状态=%state% 原因=%reason%").replaceText(b->b.matchLiteral("%id%").replacement(String.valueOf(id))).replaceText(b->b.matchLiteral("%company%").replacement(String.valueOf(company))).replaceText(b->b.matchLiteral("%player%").replacement(String.valueOf(player))).replaceText(b->b.matchLiteral("%amount%").replacement(String.valueOf(amount))).replaceText(b->b.matchLiteral("%state%").replacement(displayState(state))).replaceText(b->b.matchLiteral("%reason%").replacement(String.valueOf(reason))); }
+    public Component ipoSubscriptionRecoveryRecord(cn.blockeco.exchange.application.IpoSubscriptionRecoveryRecord record) { return message("ipo-subscription-recovery-record", "IPO 恢复：操作=%id% 发行=%offering% 公司=%company% 玩家=%player% 股数=%shares% 金额=%amount% 状态=%state% 时间=%time% 原因=%reason%").replaceText(b->b.matchLiteral("%id%").replacement(record.subscriptionId().toString())).replaceText(b->b.matchLiteral("%offering%").replacement(record.offeringId().toString())).replaceText(b->b.matchLiteral("%company%").replacement(record.companyId().value().toString())).replaceText(b->b.matchLiteral("%player%").replacement(record.playerId().toString())).replaceText(b->b.matchLiteral("%shares%").replacement(String.valueOf(record.shares()))).replaceText(b->b.matchLiteral("%amount%").replacement(String.valueOf(record.amount().minorUnits()))).replaceText(b->b.matchLiteral("%state%").replacement(displayState(record.state()))).replaceText(b->b.matchLiteral("%time%").replacement(record.updatedAt().toString())).replaceText(b->b.matchLiteral("%reason%").replacement(record.reason())); }
     public Component result(String text) { return Component.text(text); }
 
     private String displayState(Object state) {
@@ -77,6 +78,8 @@ public final class Messages {
             case "LIQUIDATING" -> "清算中";
             case "DELISTED" -> "已退市";
             case "PREPARED" -> "已准备";
+            case "PLAYER_WITHDRAWN" -> "已扣款待托管";
+            case "ESCROW_DEPOSITED" -> "已托管待完成";
             case "WITHDRAWN" -> "已扣款";
             case "COMPLETED" -> "已完成";
             case "REFUND_REQUIRED" -> "待人工退款";
