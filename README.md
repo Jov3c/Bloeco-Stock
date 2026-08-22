@@ -164,7 +164,7 @@ Phase 1 的权威数据是 `plugins/BlockStock/blockeco.db` 中的 SQLite 数据
 
 `/stock` 和 `/stock help` 在启动期间提供静态中文帮助。其他子命令会在首个公开代码缓存刷新成功前仅提示初始化，且不会访问 SQLite 或 Vault。Tab 补全只读不可变缓存快照，不在 Paper 主线程执行 SQL。
 
-本次没有重启共享服务器。自动构建和 console 空市场检查可执行；真实 authenticated-player IPO（含关闭上市和代码）没有现场证据，因此状态为**未执行**。详见 [IPO 上市与 stock 烟测](docs/operations/ipo-listing-and-stock-smoke.md)。
+本次已在 0 人在线时备份数据并重启本地 Paper 1.21.4 服务器，实际通过 console 中文帮助、空市场、空 IPO、详情/公告空结果和控制台禁止认购检查；V006 已应用，服务器再次启动到 ready 并保持在线。真实 authenticated-player IPO（含认购、关闭上市、代码分配）和客户端 Tab 补全仍没有现场证据，因此状态为**未执行**。详见 [IPO 上市与 stock 烟测](docs/operations/ipo-listing-and-stock-smoke.md)。
 
 ## 兼容性来源
 
