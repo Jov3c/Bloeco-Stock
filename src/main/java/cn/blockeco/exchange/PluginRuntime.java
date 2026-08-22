@@ -45,14 +45,14 @@ final class PluginRuntime {
         synchronized (lock) { currentGates = gates; currentBootstrap = bootstrap; currentExecutor = executor; currentDatabase = database; }
         currentGates.forEach(gate -> gate.setAccepting(false));
         if (currentBootstrap != null) currentBootstrap.stop();
-        closeDatabase(currentDatabase);
         if (currentExecutor != null) shutdown(currentExecutor);
+        closeDatabase(currentDatabase);
     }
     void closeDatabase(AutoCloseable value) {
         if (value != null && databaseClosed.compareAndSet(false, true)) try { value.close(); } catch (Exception e) { throw new IllegalStateException("could not close BlockStock database", e); }
     }
     private void shutdown(ExecutorService value) {
         value.shutdown();
-        try { value.awaitTermination(5, TimeUnit.SECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        try { if (!value.awaitTermination(5, TimeUnit.SECONDS)) { value.shutdownNow(); value.awaitTermination(5, TimeUnit.SECONDS); } } catch (InterruptedException e) { value.shutdownNow(); Thread.currentThread().interrupt(); }
     }
 }

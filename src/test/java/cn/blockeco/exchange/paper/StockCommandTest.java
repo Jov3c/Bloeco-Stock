@@ -79,6 +79,7 @@ class StockCommandTest {
         command.onCommand(player, mock(Command.class), "stock", new String[] {"subscribe", "红石工业", "2"});
 
         verify(offerings, times(1)).subscribe(playerId, offering, 2L);
+        verify(player).sendMessage(org.mockito.ArgumentMatchers.<Component>argThat(component -> plain(component).equals("IPO 认购正在处理中。")));
     }
 
     @Test void announcements_rejects_an_out_of_range_numeric_limit_without_querying() {

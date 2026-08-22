@@ -66,7 +66,7 @@ public final class StockCommand implements CommandExecutor, CommandAcceptanceGat
         if (args.length < 3) { player.sendMessage(messages.usageStockSubscribe()); return true; }
         long shares; try { shares=Long.parseLong(args[args.length-1]); if (shares<=0) throw new NumberFormatException(); } catch (NumberFormatException e) { player.sendMessage(messages.invalidShares()); return true; }
         String key=String.join(" ",Arrays.copyOfRange(args,1,args.length-1)).trim(); if(key.isEmpty()){player.sendMessage(messages.usageStockSubscribe());return true;}
-        if (!subscriptionsInFlight.add(player.getUniqueId())) { player.sendMessage(messages.duplicateRequest()); return true; }
+        if (!subscriptionsInFlight.add(player.getUniqueId())) { player.sendMessage(messages.ipoProcessing()); return true; }
         long count=shares;
         queries.resolveOpenOffering(key).whenComplete((offering,error)->mainThread.submit(()->{ if (!safe(sender)) { subscriptionsInFlight.remove(player.getUniqueId()); return null; } if(error!=null){subscriptionsInFlight.remove(player.getUniqueId());sender.sendMessage(messages.stockQueryFailed());return null;} if(offering.isEmpty()){subscriptionsInFlight.remove(player.getUniqueId());sender.sendMessage(messages.openIpoNotFound());return null;} offerings.subscribe(player.getUniqueId(),offering.get(),count).whenComplete((result,failure)->mainThread.submit(()->{subscriptionsInFlight.remove(player.getUniqueId());if(safe(sender)) sender.sendMessage(failure==null?messages.ipoSubscriptionResult(result.status()):messages.ipoSubscriptionResult(SubscriptionResult.Status.PROVIDER_FAILURE));return null;})); return null;})); return true;
     }

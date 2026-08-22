@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import cn.blockeco.exchange.domain.company.CompanyStatus;
 import cn.blockeco.exchange.domain.money.Money;
+import cn.blockeco.exchange.application.PublicMarketRow;
 import cn.blockeco.exchange.domain.registration.RegistrationSagaState;
 import java.math.BigDecimal;
 import java.util.List;
@@ -109,6 +110,15 @@ class MessagesTest {
         assertThat(plain(messages.noRecoveryRecords())).isEqualTo("没有恢复记录。");
         assertThat(plain(messages.recoveryRecord("id", "玩家", 1L, CompanyStatus.LISTED, "时间", "原因")))
                 .isEqualTo("编号=id 玩家=玩家 金额=1 状态=已上市 时间=时间 原因=原因");
+    }
+
+    @Test void stock_money_uses_root_currency_scale_and_plain_major_units() {
+        ConfigurationSection root = mock(ConfigurationSection.class);
+        when(root.getInt("currency.scale", 2)).thenReturn(2);
+        Messages messages = new Messages(root);
+        PublicMarketRow row = new PublicMarketRow("红石工业", "BS000001", Money.ofMinor(1000), Money.ofMinor(123400), 10, CompanyStatus.LISTED);
+
+        assertThat(plain(messages.marketRow(row))).contains("参考价（暂无成交）=10.00", "市值=1234.00").doesNotContain("=1000", "=123400");
     }
 
     private static Stream<Arguments> companyStates() {

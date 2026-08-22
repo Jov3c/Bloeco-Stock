@@ -44,6 +44,14 @@ class CompanyCommandTest {
     private final UUID founder = UUID.fromString("11111111-1111-1111-1111-111111111111");
     private final CompanyCreationRules rules = new CompanyCreationRules(Money.fromMajor(new BigDecimal("1000.00"), 2), Money.fromMajor(new BigDecimal("10000.00"), 2), 2, 1000, List.of(30, 50, 70));
 
+    @Test void offline_player_receives_no_create_completion_message() {
+        CompanyRegistrationService registration = mock(CompanyRegistrationService.class); CompletableFuture<cn.blockeco.exchange.application.RegistrationResult> result = new CompletableFuture<>(); when(registration.register(any())).thenReturn(result);
+        Player player = mock(Player.class); when(player.hasPermission("blockeco.company.create")).thenReturn(true); when(player.getUniqueId()).thenReturn(founder); when(player.isOnline()).thenReturn(false);
+        QueuedMain main = new QueuedMain(); CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), main, rules); command.setAccepting(true);
+        command.onCommand(player, mock(Command.class), "company", new String[] {"create", "North", "10000.00", "30"}); result.complete(cn.blockeco.exchange.application.RegistrationResult.of(cn.blockeco.exchange.application.RegistrationResult.Status.SUCCESS, "")); main.runAll();
+        verify(player, times(1)).sendMessage(any(net.kyori.adventure.text.Component.class));
+    }
+
     @Test
     void public_ipo_list_and_info_need_no_permission_and_reply_on_the_main_thread() {
         PrimaryOfferingService offerings = mock(PrimaryOfferingService.class); UUID offeringId = UUID.randomUUID();
@@ -56,7 +64,7 @@ class CompanyCommandTest {
         main.runAll();
         command.onCommand(console, mock(Command.class), "company", new String[] {"ipo", "info", offeringId.toString()});
         main.runAll();
-        assertThat(allPlainMessages(console)).anySatisfy(message -> assertThat(message).contains(offeringId.toString(), "状态=开放认购", "目标=100", "发行价=10", "最大=10", "已发行=2", "可认购=7"));
+        assertThat(allPlainMessages(console)).anySatisfy(message -> assertThat(message).contains(offeringId.toString(), "状态=开放认购", "目标=1.00", "发行价=0.10", "最大=10", "已发行=2", "可认购=7"));
         verify(offerings).listPublic(10); verify(offerings).findPublic(offeringId);
     }
 
@@ -256,7 +264,7 @@ class CompanyCommandTest {
     @Test
     void create_rejects_second_submission_while_first_is_in_flight() {
         CompanyRegistrationService registration = mock(CompanyRegistrationService.class);
-        Player player = mock(Player.class); when(player.hasPermission("blockeco.company.create")).thenReturn(true); when(player.getUniqueId()).thenReturn(founder);
+        Player player = mock(Player.class); when(player.hasPermission("blockeco.company.create")).thenReturn(true); when(player.getUniqueId()).thenReturn(founder); when(player.isOnline()).thenReturn(true);
         when(registration.register(any())).thenReturn(new CompletableFuture<>());
         CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN, rules); command.setAccepting(true);
 
@@ -270,7 +278,7 @@ class CompanyCommandTest {
     @Test
     void create_completion_sends_result_only_when_main_thread_queue_runs() {
         CompanyRegistrationService registration = mock(CompanyRegistrationService.class); CompletableFuture<cn.blockeco.exchange.application.RegistrationResult> result = new CompletableFuture<>(); when(registration.register(any())).thenReturn(result);
-        Player player = mock(Player.class); when(player.hasPermission("blockeco.company.create")).thenReturn(true); when(player.getUniqueId()).thenReturn(founder);
+        Player player = mock(Player.class); when(player.hasPermission("blockeco.company.create")).thenReturn(true); when(player.getUniqueId()).thenReturn(founder); when(player.isOnline()).thenReturn(true);
         QueuedMain main = new QueuedMain(); CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), main, rules); command.setAccepting(true);
         command.onCommand(player, mock(Command.class), "company", new String[] {"create", "North", "10000.00", "30"}); result.complete(cn.blockeco.exchange.application.RegistrationResult.of(cn.blockeco.exchange.application.RegistrationResult.Status.SUCCESS, ""));
         verify(player, times(1)).sendMessage(any(net.kyori.adventure.text.Component.class)); main.runAll();
@@ -418,6 +426,7 @@ class CompanyCommandTest {
 
     private static Player permittedPlayer(String... permissions) {
         Player player = mock(Player.class);
+        when(player.isOnline()).thenReturn(true);
         for (String permission : permissions) when(player.hasPermission(permission)).thenReturn(true);
         return player;
     }

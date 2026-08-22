@@ -14,6 +14,7 @@ import java.util.concurrent.*;
 import org.bukkit.command.Command;
 import org.bukkit.entity.Player;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 
 class PluginRuntimeTest {
  private static final CompanyCreationRules RULES = new CompanyCreationRules(Money.fromMajor(new BigDecimal("1000.00"), 2), Money.fromMajor(new BigDecimal("10000.00"), 2), 2, 1000, List.of(30, 50, 70));
@@ -28,6 +29,11 @@ class PluginRuntimeTest {
   assertThat(runtime.attachReady(List.of(companyGate,stockGate),()->{})).isFalse();
   verify(companyGate).setAccepting(false); verify(stockGate).setAccepting(false);
  }
+ @Test void stop_drains_sql_executor_before_closing_database() throws Exception {
+  ExecutorService executor=mock(ExecutorService.class); AutoCloseable database=mock(AutoCloseable.class); PluginRuntime runtime=new PluginRuntime(mock(CommandAcceptanceGate.class),null,executor,database);
+  runtime.stop();
+  InOrder order=inOrder(executor,database); order.verify(executor).shutdown(); order.verify(executor).awaitTermination(5,TimeUnit.SECONDS); order.verify(database).close();
+ }
  @Test void stop_closes_published_database_before_a_blocked_migration_finishes() throws Exception {
   CompanyRegistrationService service=mock(CompanyRegistrationService.class); MainThreadExecutor main=new MainThreadExecutor(){public <T> CompletionStage<T> submit(java.util.function.Supplier<T>w){return CompletableFuture.completedFuture(w.get());}};
   CompanyCommand command=new CompanyCommand(service,mock(CompanyQueryService.class),new Messages(null),main,RULES); ExecutorService migrationExecutor=Executors.newSingleThreadExecutor(); ExecutorService stopper=Executors.newSingleThreadExecutor();
@@ -35,7 +41,7 @@ class PluginRuntimeTest {
   PluginRuntime runtime=new PluginRuntime(command); BootstrapCoordinator<AutoCloseable> bootstrap=new BootstrapCoordinator<>(main, value -> { wired.incrementAndGet(); return runtime.attachReady(command,value); }, failure -> {}, runtime::closeDatabase); runtime.attachBootstrap(bootstrap); runtime.attachExecutor(migrationExecutor);
   CompletableFuture<AutoCloseable> migration=CompletableFuture.supplyAsync(() -> { AutoCloseable database=() -> { closes.incrementAndGet(); closed.countDown(); }; runtime.attachDatabase(database); published.countDown(); try { releaseMigration.await(); } catch (InterruptedException exception) { Thread.currentThread().interrupt(); } return database; }, migrationExecutor);
   bootstrap.coordinate(migration); assertThat(published.await(1, TimeUnit.SECONDS)).isTrue(); Future<?> stopping=stopper.submit(runtime::stop);
-  assertThat(closed.await(1, TimeUnit.SECONDS)).isTrue(); assertThat(closes).hasValue(1); releaseMigration.countDown(); stopping.get(1, TimeUnit.SECONDS); migration.get(1, TimeUnit.SECONDS); stopper.shutdown();
+  assertThat(closed.await(200, TimeUnit.MILLISECONDS)).isFalse(); releaseMigration.countDown(); stopping.get(2, TimeUnit.SECONDS); assertThat(closed.await(1, TimeUnit.SECONDS)).isTrue(); assertThat(closes).hasValue(1); migration.get(1, TimeUnit.SECONDS); stopper.shutdown();
   Player player=mock(Player.class); when(player.hasPermission("blockeco.company.create")).thenReturn(true); command.onCommand(player,mock(Command.class),"company",new String[]{"create","North","30"});
   assertThat(wired).hasValue(0); verifyNoInteractions(service); assertThat(migrationExecutor.isShutdown()).isTrue();
  }

@@ -26,3 +26,10 @@
 ## Commit
 
 `feat: expose public stock command safely`
+
+## Review follow-up
+
+- Public monetary messages now use root `currency.scale` (default 2) and `Money.toMajor(scale).toPlainString()`; stock market/info and both stock/company IPO displays no longer expose minor units.
+- Runtime shutdown closes acceptance before draining the SQL executor, then closes the database. The timeout path escalates with `shutdownNow` but completion guards still prevent post-stop ready/log work.
+- `BlockecoPlugin.attachStockAfterInitialRefresh` is the production startup seam; its controlled-future test proves a pending refresh cannot open gates and a success opens both together.
+- Company async player replies check online state, and duplicate `/stock subscribe` reports IPO processing rather than company-registration wording.

@@ -15,8 +15,26 @@ import org.bukkit.plugin.java.JavaPlugin;
 import org.junit.jupiter.api.Test;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
+import cn.blockeco.exchange.paper.CommandAcceptanceGate;
+import cn.blockeco.exchange.paper.PublicStockSymbolCache;
+import cn.blockeco.exchange.application.PublicStockQueryService;
+import cn.blockeco.exchange.ports.MainThreadExecutor;
 
 class BlockecoPluginTest {
+
+    @Test
+    void initial_stock_cache_refresh_opens_both_gates_only_after_success() {
+        PublicStockSymbolCache cache = mock(PublicStockSymbolCache.class); PublicStockQueryService queries = mock(PublicStockQueryService.class);
+        java.util.concurrent.CompletableFuture<Void> refresh = new java.util.concurrent.CompletableFuture<>(); when(cache.refresh(queries)).thenReturn(refresh);
+        CommandAcceptanceGate company = mock(CommandAcceptanceGate.class); CommandAcceptanceGate stock = mock(CommandAcceptanceGate.class); PluginRuntime runtime = new PluginRuntime();
+        MainThreadExecutor main = new MainThreadExecutor() { @Override public <T> java.util.concurrent.CompletionStage<T> submit(java.util.function.Supplier<T> work) { return java.util.concurrent.CompletableFuture.completedFuture(work.get()); } };
+
+        BlockecoPlugin.attachStockAfterInitialRefresh(cache, queries, main, runtime, java.util.List.of(company, stock), () -> {}, ignored -> { });
+        verify(company, org.mockito.Mockito.never()).setAccepting(true);
+        refresh.complete(null);
+        verify(company).setAccepting(true); verify(stock).setAccepting(true);
+    }
 
     @Test
     void plugin_does_not_accept_company_commands_when_escrow_preflight_fails() {
