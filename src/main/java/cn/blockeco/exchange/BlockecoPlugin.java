@@ -79,6 +79,10 @@ public final class BlockecoPlugin extends JavaPlugin {
             return;
         }
         saveDefaultConfig();
+        // Existing servers keep their edited values, while newly introduced safe defaults (for
+        // example market fee/time-zone and Chinese command text) are persisted before validation.
+        getConfig().options().copyDefaults(true);
+        saveConfig();
         try { validateConfiguration(); if (!getDataFolder().exists() && !getDataFolder().mkdirs()) throw new IllegalStateException("cannot create plugin data folder"); }
         catch (RuntimeException failure) { failEnable(configurationFailureMessage(failure)); return; }
         if (!installInitializingCommand()) return;
@@ -119,8 +123,8 @@ public final class BlockecoPlugin extends JavaPlugin {
         var adminCommand = getCommand("stockadmin");
         if (adminCommand == null) throw new IllegalStateException("BlockStock 命令注册失败：未在 plugin.yml 中声明 stockadmin 命令");
         var capitalizations = new CompanyCapitalizationService(finance, new SqlAuditLog(), db, escrow, mainThread, sqlExecutor, clock);
-        int feeBps = getConfig().getInt("market.fee-bps");
-        ZoneId marketZone = ZoneId.of(getConfig().getString("market.time-zone"));
+        int feeBps = configuredMarketFeeBps();
+        ZoneId marketZone = ZoneId.of(getConfig().getString("market.time-zone", "Asia/Shanghai"));
         var publicRepository = new SqlPublicStockRepository(db.dataSource());
         var publicQueries = new cn.blockeco.exchange.application.PublicStockQueryService(publicRepository, sqlExecutor, Clock.systemUTC(), marketZone);
         var cashRepository = new SqlSecuritiesCashRepository(db.dataSource());
@@ -192,7 +196,7 @@ public final class BlockecoPlugin extends JavaPlugin {
 
     private void validateConfiguration() {
         int scale = getConfig().getInt("currency.scale", -1); if (scale < 0 || scale > 8) throw new IllegalArgumentException("currency.scale must be between 0 and 8");
-        validateMarketConfiguration(getConfig().getInt("market.fee-bps", -1), getConfig().getString("market.time-zone"));
+        validateMarketConfiguration(configuredMarketFeeBps(), getConfig().getString("market.time-zone", "Asia/Shanghai"));
         positive("company.registration-fee", scale); positive("company.minimum-capital", scale);
         try { if (new java.util.UUID(0, 0).equals(java.util.UUID.fromString(getConfig().getString("company.treasury-escrow-uuid")))) throw new IllegalArgumentException("company.treasury-escrow-uuid must not be zero"); }
         catch (IllegalArgumentException failure) { throw new IllegalArgumentException("company.treasury-escrow-uuid must be a non-zero UUID", failure); }
@@ -205,6 +209,13 @@ public final class BlockecoPlugin extends JavaPlugin {
         if (feeBps < 0 || feeBps > 10_000) throw new IllegalArgumentException("market.fee-bps must be between 0 and 10000");
         try { return ZoneId.of(zoneId); }
         catch (RuntimeException failure) { throw new IllegalArgumentException("market.time-zone must be a valid ZoneId", failure); }
+    }
+    /** Accept numeric YAML nodes and legacy string nodes without silently falling back on a malformed value. */
+    private int configuredMarketFeeBps() {
+        Object raw = getConfig().get("market.fee-bps");
+        if (raw == null) return 10;
+        try { return Integer.parseInt(String.valueOf(raw)); }
+        catch (NumberFormatException failure) { throw new IllegalArgumentException("market.fee-bps must be an integer", failure); }
     }
     static String configurationFailureMessage(Throwable failure) { String detail = failure.getMessage(); return "BlockStock 配置无效" + (detail == null || detail.isBlank() ? "" : "（附加信息：" + detail + "）"); }
     static String missingCompanyCommandMessage() { return "BlockStock 命令注册失败：未在 plugin.yml 中声明 company 命令"; }
