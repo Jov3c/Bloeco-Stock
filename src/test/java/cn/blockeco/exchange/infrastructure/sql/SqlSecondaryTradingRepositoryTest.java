@@ -46,6 +46,12 @@ class SqlSecondaryTradingRepositoryTest {
         } finally { Files.deleteIfExists(file); }
     }
 
+    @Test
+    void split_fills_charge_the_same_cumulative_fee_and_release_each_price_improvement() throws Exception {
+        var file=Files.createTempFile("blockstock-split-", ".db");
+        try(Database db=new Database("jdbc:sqlite:"+file)){db.migrate();CompanyId company=Fixtures.company(db,100);UUID buyer=UUID.randomUUID(),seller=UUID.randomUUID();Instant now=Instant.parse("2026-08-22T12:00:00Z");seedListing(db,company);seedHolding(db,company,seller,100);var cash=new SqlSecuritiesCashRepository(db.dataSource());var trading=new SqlSecondaryTradingRepository(db.dataSource(),cash);db.inTransaction(c->{cash.creditAvailable(c,buyer,Money.ofMinor(2_000),now);return null;});LimitOrder buy=order(company,buyer,LimitOrder.Side.BUY,12,100,100,now),sell=order(company,seller,LimitOrder.Side.SELL,10,100,0,now);db.inTransaction(c->{trading.reserveBuy(c,buy);trading.reserveSell(c,sell);return null;}); Trade one=new Trade(UUID.randomUUID(),company,"BS000001",buy.id(),sell.id(),1,Money.ofMinor(10),Money.ofMinor(10),Money.ofMinor(1),now);db.inTransaction(c->{trading.settleTrade(c,one);return null;});assertThat(trading.findOrder(buy.id()).orElseThrow().reservedCash()).isEqualTo(Money.ofMinor(1_199));Trade rest=new Trade(UUID.randomUUID(),company,"BS000001",buy.id(),sell.id(),99,Money.ofMinor(10),Money.ofMinor(990),Money.ofMinor(9),now);db.inTransaction(c->{trading.settleTrade(c,rest);return null;});assertThat(cash.find(buyer)).contains(new SecuritiesCashAccount(buyer,Money.ofMinor(990),Money.zero()));assertThat(trading.compensationFund()).isEqualTo(Money.ofMinor(10));assertThat(cash.reconcile(Money.ofMinor(2_100)).confirmedDifference()).isEqualTo(Money.zero());}finally{Files.deleteIfExists(file);}
+    }
+
     private static LimitOrder order(CompanyId c, UUID player, LimitOrder.Side side, long price, long shares, int bps, Instant at) {
         Money filled = Money.zero(); Money fee = Money.zero(); Money reserve = side == LimitOrder.Side.BUY ? Money.ofMinor(price * shares + ((price * shares * bps + 9999) / 10000)) : Money.zero();
         return new LimitOrder(UUID.randomUUID(), c, "BS000001", player, side, Money.ofMinor(price), shares, shares, Math.abs(UUID.randomUUID().getLeastSignificantBits()) + 1, reserve, filled, fee, side == LimitOrder.Side.BUY ? bps : 0, at, LimitOrder.State.OPEN);
