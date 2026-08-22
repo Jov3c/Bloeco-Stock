@@ -22,15 +22,15 @@ public class PrimaryOfferingService {
    if(op.state().name().equals("COMPLETED"))return CompletableFuture.completedFuture(SubscriptionResult.of(SubscriptionResult.Status.SUCCESS));
    if(!prepared.newlyPrepared())return CompletableFuture.completedFuture(op.state().name().equals("REFUNDED")?SubscriptionResult.of(SubscriptionResult.Status.PROVIDER_FAILURE):SubscriptionResult.of(SubscriptionResult.Status.RECOVERY_REQUIRED));
    return CompletableFuture.supplyAsync(()->escrow.withdrawPlayer(subscriber,op.amount(),op.id()),executor).handle((withdraw,withdrawError)->{
-    if(withdrawError!=null)return ambiguous(op,"PREPARED");
-    if(withdraw.outcome()!=EconomyGateway.Outcome.SUCCESS)return CompletableFuture.supplyAsync(()->transactions.inTransaction(c->{offerings.cancelPrepared(c,op.id(),clock.now());return withdraw.outcome()==EconomyGateway.Outcome.INSUFFICIENT_FUNDS?SubscriptionResult.of(SubscriptionResult.Status.INSUFFICIENT_FUNDS):SubscriptionResult.of(SubscriptionResult.Status.PROVIDER_FAILURE);}),executor).exceptionallyCompose(e->ambiguous(op,"PREPARED"));
+    if(withdrawError!=null)return ambiguous(op,"WITHDRAW","withdraw threw");
+    if(withdraw.outcome()!=EconomyGateway.Outcome.SUCCESS)return CompletableFuture.supplyAsync(()->transactions.inTransaction(c->{offerings.cancelPrepared(c,op.id(),clock.now());return withdraw.outcome()==EconomyGateway.Outcome.INSUFFICIENT_FUNDS?SubscriptionResult.of(SubscriptionResult.Status.INSUFFICIENT_FUNDS):SubscriptionResult.of(SubscriptionResult.Status.PROVIDER_FAILURE);}),executor).exceptionallyCompose(e->ambiguous(op,"CANCEL","definitive withdrawal result could not be persisted"));
     return CompletableFuture.supplyAsync(()->{transactions.inTransaction(c->{offerings.markWithdrawn(c,op.id(),clock.now());return null;});return escrow.depositEscrow(op.amount(),op.id());},executor).handle((deposit,depositError)->{
-     if(depositError!=null)return ambiguous(op,"PLAYER_WITHDRAWN"); if(deposit.outcome()!=EconomyGateway.Outcome.SUCCESS)return ambiguous(op,"PLAYER_WITHDRAWN");
-     return CompletableFuture.supplyAsync(()->transactions.inTransaction(c->{offerings.markEscrowDeposited(c,op.id(),clock.now());offerings.completeSubscription(c,op.id(),clock.now());return SubscriptionResult.of(SubscriptionResult.Status.SUCCESS);}),executor).exceptionallyCompose(e->ambiguous(op,"ESCROW_DEPOSITED"));
+    if(depositError!=null)return ambiguous(op,"DEPOSIT","deposit or withdrawal-state transition failed"); if(deposit.outcome()!=EconomyGateway.Outcome.SUCCESS)return ambiguous(op,"DEPOSIT","deposit returned failure");
+     return CompletableFuture.supplyAsync(()->transactions.inTransaction(c->{offerings.markEscrowDeposited(c,op.id(),clock.now());offerings.completeSubscription(c,op.id(),clock.now());return SubscriptionResult.of(SubscriptionResult.Status.SUCCESS);}),executor).exceptionallyCompose(e->ambiguous(op,"COMPLETE","final database completion failed"));
     }).thenCompose(x->x);
    }).thenCompose(x->x);
   }).thenCompose(x->x);
  }
- private CompletionStage<SubscriptionResult> ambiguous(TreasuryOperation op,String expected){return CompletableFuture.supplyAsync(()->{try{transactions.inTransaction(c->{offerings.markAmbiguous(c,op.id(),expected,clock.now());return null;});}catch(RuntimeException ignored){}return SubscriptionResult.of(SubscriptionResult.Status.RECOVERY_REQUIRED);},executor);}
+ private CompletionStage<SubscriptionResult> ambiguous(TreasuryOperation op,String stage,String reason){return CompletableFuture.supplyAsync(()->{try{transactions.inTransaction(c->{offerings.markAmbiguous(c,op.id(),stage,reason,clock.now());return null;});}catch(RuntimeException ignored){}return SubscriptionResult.of(SubscriptionResult.Status.RECOVERY_REQUIRED);},executor);}
  public CompletionStage<Void> closeExpired(Instant now){return CompletableFuture.runAsync(()->transactions.inTransaction(c->{offerings.closeExpired(c,now);return null;}),executor);}
 }

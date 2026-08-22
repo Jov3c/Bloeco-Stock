@@ -25,3 +25,8 @@
 - Vault exceptions and each post-Vault SQL boundary now return `RECOVERY_REQUIRED` after a best-effort durable ambiguous transition; failure to persist that marker does not downgrade the player result.
 - Only a definite non-success withdrawal outcome is terminally released (`PREPARED` to `REFUNDED`). Retrying a terminal deterministic id returns its stable provider-failure result; nonterminal persisted ids never replay Vault.
 - Capacity now excludes `REFUNDED`, while early close counts only `COMPLETED` subscriptions. Configuration includes every IPO subscription Chinese message key.
+
+## Round 5: actual-state ambiguity
+
+- The repository now owns ambiguity transitions: it reads the durable operation state, only conditionally changes `PREPARED`, `PLAYER_WITHDRAWN`, or `ESCROW_DEPOSITED`, and never mutates completed/refunded records. The immutable audit records `actualState`, `externalStage`, and `reason`.
+- Service failure boundaries pass an external stage/reason only; they cannot guess a state. Focused service/repository verification passed after this contract change.
