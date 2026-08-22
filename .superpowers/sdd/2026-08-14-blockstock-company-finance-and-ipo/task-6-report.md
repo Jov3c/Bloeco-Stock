@@ -38,9 +38,13 @@ Full suite passed:
 
 `git diff --check` completed without whitespace errors.
 
-## Not performed
+## Release Paper smoke evidence
 
-No real Paper/Vault server operation was performed. In particular, live console/player permission behavior, config file persistence, and asynchronous SQLite audit writes still require a controlled Paper server verification with Vault available.
+A controlled real Paper/Vault smoke was subsequently completed. Fresh `clean test shadowJar --rerun-tasks --no-build-cache` was `BUILD SUCCESSFUL` with 24 suites / 161 tests / 0 failure,error,skip and one Shadow JAR. Java 21.0.11 Paper 1.21.4 build 232 loaded Vault 1.7.3-b131 and EssentialsX 2.21.0, with `Essentials Economy hooked` in the log.
+
+The console verified `/stockadmin config` at `10000.00`, saved and immediately read `10000.01`, then restored `10000.00`. Read-only SQLite verification found `ADMIN_MINIMUM_CAPITAL_CHANGED` sequence 19 (`actor=CONSOLE`, `oldMinor=1000000`, `newMinor=1000001`) and sequence 20 with reversed values. After a graceful stop/restart, the console still read `10000.00`; `1.234` was rejected with the Chinese precision message and did not change the value. The server also recorded first post-fix `legacy capitalizations recovered=2` and second-start `recovered=0`.
+
+Not performed: authenticated-player company creation/insufficient-funds/client completion, a real third-party asset adapter, and IPO subscription. A host-pause `Can't keep up`/clock-leap warning is documented as an environment event rather than plugin pass evidence; the subsequent restart reached ready normally.
 
 ## Fix round 1 — failure-aware config persistence
 

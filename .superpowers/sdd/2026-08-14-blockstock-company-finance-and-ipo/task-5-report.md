@@ -15,10 +15,11 @@
 
 ## Paper/Vault smoke evidence and remaining manual action
 
-- Started `gradlew.bat runServer --console=plain` from this worktree. Paper 1.21.4 build 232 loaded BlockStock, Vault 1.7.3-b131, and Essentials 2.21.0; the log contains `Vault [Economy] Essentials Economy hooked` and listens at `127.0.0.1:25565`.
-- The first launched artifact correctly refused startup because the legacy ignored local config had no escrow UUID/account: `BlockStock initialization failed: 托管账户启动前检查失败 ... has no Vault account`. This is the intended refusal path and occurred before command acceptance or capital recovery.
-- The implementation was then improved to request creation of an empty reserved provider account. It has passed automated verification but cannot be smoke-restarted yet: the current Paper process was launched with redirected standard input, so this task has no safe console-control channel. **An operator must enter `/stop` in the active Paper console**, wait for shutdown, then start `./gradlew.bat runServer --console=plain` again and check `BlockStock ready; legacy capitalizations recovered=...` plus the Vault hook.
-- Do not use Aoozzz/player creation, insufficient-funds, third-party asset binding, or IPO acceptance as evidence until the operator has been told about the restart and a real authenticated player session and verified asset adapter are available.
+- Fresh release verification completed: `clean test shadowJar --rerun-tasks --no-build-cache` was `BUILD SUCCESSFUL` with 24 suites / 161 tests / 0 failure,error,skip and exactly one `blockstock-0.1.0-SNAPSHOT-all.jar`.
+- Real Paper smoke completed on Java 21.0.11 and Paper 1.21.4 build 232 with Vault 1.7.3-b131 and EssentialsX 2.21.0; the log records `Vault [Economy] Essentials Economy hooked`.
+- First post-fix ready was `BlockStock ready; legacy capitalizations recovered=2; stale registration records scanned=0`. Console `/company` returned Chinese help; `info Aoozzz` returned `待绑定资产`; `recovery list` returned `没有恢复记录`; console company creation returned the Chinese players-only diagnostic.
+- `/stockadmin config` reported `10000.00`; `min-capital 10000.01` immediately queried as `10000.01`, then was restored to `10000.00`. Read-only SQLite verification found audit sequence 19 with `actor=CONSOLE, oldMinor=1000000, newMinor=1000001` and sequence 20 with the reverse values. After graceful stop/restart the value still queried as `10000.00`; second ready was `legacy capitalizations recovered=0`, confirming no duplicate legacy capitalization. `min-capital 1.234` was rejected in Chinese and did not change the value.
+- Still not performed: real authenticated-player creation, insufficient-funds, or client tab-completion tests; no real third-party asset adapter was configured and no IPO subscription was made. One `Can't keep up`/Hikari clock-leap episode was caused by host suspension; it is not used as plugin pass evidence, and the restart subsequently reached ready normally.
 
 ## Fix round 1/5 — finance recovery and startup gate
 

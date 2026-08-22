@@ -90,11 +90,13 @@ Paper 完成保存，再让 BlockStock 的下一次启动完成迁移。
 
 ### 本次本地验收状态（2026-08-14）
 
-首次自动化尝试中，Paper 已加载 Vault 与 Essentials，但 BlockStock 因旧本地配置缺少托管 UUID/账户而按设计拒绝启动；该次启动没有进入 ready 状态，也没有执行资本恢复。随后虽已补上“请求创建空托管账户”的自动化覆盖，**尚未实际重启 Paper 验证该改动**。因此不能把 ready、重启、`127.0.0.1:25565` 监听或 Vault 挂钩称为本轮已完成的烟测。
+发布前已在本工作区完成一次 fresh `clean test shadowJar --rerun-tasks --no-build-cache`：24 个测试套件、161 个测试、0 failure/error/skip，且 `build/libs/` 仅产出 `blockstock-0.1.0-SNAPSHOT-all.jar`。随后使用 Java 21.0.11 的 Paper 1.21.4 build 232 进行了真实服务器烟测；Vault 1.7.3-b131 已挂接 EssentialsX 2.21.0 Economy。
 
-但 Aoozzz 的原版客户端 `/company` 聊天输出，以及以下三条 Tab 路径仍**未执行**：
-`/company `、`/company create 红石工坊 `、`/company recovery `。上文描述的是实现的预期
-行为；在可优雅停服并启动 BlockStock 后，仍须由 Aoozzz 实机验证并记录结果。
+首次 post-fix 启动记录 `BlockStock ready; legacy capitalizations recovered=2; stale registration records scanned=0`。控制台已验证 `/company` 的中文帮助、`/company info Aoozzz` 显示“待绑定资产”、`/company recovery list` 显示“没有恢复记录”，以及 console `/company create ...` 返回“此命令只能由玩家执行”。优雅停止并重启后，ready 行为 `legacy capitalizations recovered=0`，证明遗留资本化恢复没有重复入账。
+
+OP 控制台已验证 `/stockadmin config` 显示 `10000.00`，改为 `10000.01` 后立即查询到新值，再恢复为 `10000.00`；停止、重启后仍为 `10000.00`。只读 SQLite 查询确认审计 `sequence=19` 记录 `oldMinor=1000000`、`newMinor=1000001`，`sequence=20` 记录反向变更，二者 `actor=CONSOLE`。`/stockadmin config min-capital 1.234` 被中文精度错误拒绝，数值保持 `10000.00`。
+
+本轮仍**未**验证真实 authenticated player 的公司创建、余额不足分支或客户端 Tab 补全；未配置真实资产 adapter，亦未进行 IPO 认购。日志中的 `Can't keep up` 与 Hikari `clock leap` 来自宿主暂停造成的一次时钟跳变，不作为插件通过证据；重启后服务器正常达到 ready。
 
 正常路径中，`/company create <名称> <实缴资本> <30|50|70>` 会**恰好一次**扣除**注册费用 + 实缴资本**，且实缴资本不得低于 `company.minimum-capital`。注册费从流通中移除；仅实缴资本会进入 BlockStock 的公司现金账，并在 Vault 的保留托管账户中等额留存。公司初始状态为 `PENDING_ASSET_BINDING`，拥有 1,000 股及所选、不可变的 30%、50% 或 70% 分红档位。创始人没有金库提款命令。
 
@@ -141,14 +143,15 @@ Phase 1 的权威数据是 `plugins/BlockStock/blockeco.db` 中的 SQLite 数据
 
 | 检查项 | 结果 | 证据 |
 | --- | --- | --- |
-| Gradle run 任务语法 | 通过 | `help --task runServer` 报告 `xyz.jpenilla.runpaper.task.RunServer`。 |
-| 首次 Paper 启动 | 部分完成 | Java 21.0.11 上的 Paper 1.21.4 build 232 曾加载 Vault 1.7.3-b131 与 Essentials 2.21.0；BlockStock 因托管前置检查拒绝启动。 |
-| Vault 提供方解析 | 部分完成 | Vault 曾报告 `Essentials Economy hooked`；本轮修复后尚未实际重启确认。 |
-| 模式迁移/数据库创建 | 部分完成 | 曾创建 `plugins/BlockStock/blockeco.db`；本轮修复后尚未实际重启确认。 |
-| 干净的 BlockStock 关闭 | 未确认 | 本轮未控制或停止任何 Paper 进程。 |
-| 重启 | 未执行 | 不得将后续真实重启说成已经完成。 |
-| 已认证玩家的创建/查询/重复扣款 | 未执行 | 本地烟测环境没有可用的自动化、已认证 Minecraft 客户端/玩家会话。请在管理员测试服务器上执行步骤 4–5。 |
-| 故意中断注册 | 未执行 | 需要受控的延迟提供方调用和玩家会话；仅保留为管理员测试。 |
+| fresh 发布构建 | 通过 | `clean test shadowJar --rerun-tasks --no-build-cache` 成功；24 suites、161 tests、0 failure/error/skip，且仅一个 Shadow JAR。 |
+| 首次 post-fix Paper 启动 | 通过 | Java 21.0.11、Paper 1.21.4 build 232，首次 ready 为 `legacy capitalizations recovered=2; stale registration records scanned=0`。 |
+| Vault 提供方解析 | 通过 | Vault 1.7.3-b131 记录 `Essentials Economy hooked`，EssentialsX 2.21.0 已加载。 |
+| 控制台公司命令 | 通过 | `/company` 中文帮助、`info Aoozzz` 的“待绑定资产”、无恢复记录，以及 console create 的玩家限定提示均已记录。 |
+| 最低注册资本运行时配置 | 通过 | `10000.00 → 10000.01 → 10000.00` 即时查询正确；SQLite sequence 19/20 审计与优雅重启后的持久化均已核实。 |
+| 非法精度 | 通过 | `1.234` 返回中文拒绝消息，当前值仍为 `10000.00`。 |
+| 重启幂等性 | 通过 | 优雅 stop/restart 后第二次 ready 为 `legacy capitalizations recovered=0`。 |
+| 已认证玩家的创建/余额不足/客户端补全 | 未执行 | 没有可用于本轮验证的真实 authenticated player 客户端会话。 |
+| 真实资产 adapter 与 IPO 认购 | 未执行 | 未配置和验证第三方资产适配器，未进行 IPO 玩家认购。 |
 
 本地烟测使用的快速管道 `stop`，在 BlockStock 已干净关闭后触发了 EssentialsX 更新检查器的关闭警告。这是 EssentialsX 的异步任务警告，不是 BlockStock 堆栈跟踪；评估提供方日志时，应让测试服务器正常空闲一段时间后再停止。
 
