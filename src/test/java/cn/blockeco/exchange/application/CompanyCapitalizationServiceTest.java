@@ -55,7 +55,7 @@ class CompanyCapitalizationServiceTest {
             CompanyCapitalizationService service = new CompanyCapitalizationService(
                     new FailingFinanceRepository(database.dataSource()), new SqlAuditLog(), database, escrow, directMain(), Runnable::run, () -> Instant.parse("2026-08-14T12:00:00Z"));
 
-            Company company = company(); insertCompany(database, company);
+            Company company = company(); insertCompany(database, company); insertExistingFinance(database, company);
             service.capitalize(company, company.founderId(), Money.ofMinor(99), UUID.randomUUID()).toCompletableFuture().join();
 
             assertThat(escrow.playerWithdrawals).isEqualTo(1);
@@ -78,8 +78,25 @@ class CompanyCapitalizationServiceTest {
             service.recoverPendingCapitalizations().toCompletableFuture().join();
 
             assertThat(escrow.playerWithdrawals).isZero();
+            assertThat(escrow.escrowDeposits).isEqualTo(1);
             assertThat(longValue(database.dataSource().getConnection(), "SELECT COUNT(*) FROM company_cash_accounts")).isEqualTo(1);
             assertThat(longValue(database.dataSource().getConnection(), "SELECT COUNT(*) FROM treasury_operations")).isEqualTo(1);
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
+    void legacy_deposit_failure_becomes_ambiguous_without_cash_or_shares() throws Exception {
+        Path file = Files.createTempFile("blockstock-capitalization-legacy-failed-", ".db");
+        try (Database database = migrated(file)) {
+            Company company = company(); insertCompany(database, company);
+            RecordingEscrow escrow = new RecordingEscrow(); escrow.deposit = EconomyGateway.Result.providerFailure("provider unavailable");
+
+            service(database, escrow).recoverPendingCapitalizations().toCompletableFuture().join();
+
+            assertThat(escrow.playerWithdrawals).isZero();
+            assertThat(escrow.escrowDeposits).isEqualTo(1);
+            assertThat(longValue(database.dataSource().getConnection(), "SELECT COUNT(*) FROM company_cash_accounts")).isZero();
+            assertThat(stringValue(database.dataSource().getConnection(), "SELECT state FROM treasury_operations")).isEqualTo("AMBIGUOUS");
         } finally { Files.deleteIfExists(file); }
     }
 
@@ -87,7 +104,7 @@ class CompanyCapitalizationServiceTest {
     void recovery_marks_crash_ambiguous_prepared_operation_without_repeating_a_player_withdrawal() throws Exception {
         Path file = Files.createTempFile("blockstock-capitalization-ambiguous-", ".db");
         try (Database database = migrated(file)) {
-            Company company = company(); insertCompany(database, company);
+            Company company = company(); insertCompany(database, company); insertExistingFinance(database, company);
             RecordingEscrow escrow = new RecordingEscrow();
             CompanyCapitalizationService service = service(database, escrow);
             UUID operationId = UUID.randomUUID();
@@ -108,7 +125,7 @@ class CompanyCapitalizationServiceTest {
     void recovery_marks_player_withdrawn_operation_ambiguous_without_repeating_an_escrow_deposit() throws Exception {
         Path file = Files.createTempFile("blockstock-capitalization-withdrawn-", ".db");
         try (Database database = migrated(file)) {
-            Company company = company(); insertCompany(database, company);
+            Company company = company(); insertCompany(database, company); insertExistingFinance(database, company);
             RecordingEscrow escrow = new RecordingEscrow(); CompanyCapitalizationService service = service(database, escrow);
             UUID operationId = UUID.randomUUID(); Instant now = Instant.parse("2026-08-14T12:00:00Z");
             database.inTransaction(c -> { SqlCompanyFinanceRepository repository = new SqlCompanyFinanceRepository(database.dataSource());
@@ -132,13 +149,14 @@ class CompanyCapitalizationServiceTest {
     private static Database migrated(Path file) throws Exception { Database database = new Database("jdbc:sqlite:" + file); database.migrate(); return database; }
     private static Company company() { return Company.register(new CompanyId(UUID.randomUUID()), "Capital Guild", UUID.randomUUID(), Money.ofMinor(500), DividendRate.FIFTY, Instant.parse("2026-08-14T12:00:00Z")); }
     private static void insertCompany(Database database, Company company) { database.inTransaction(c -> { try (PreparedStatement s = c.prepareStatement("INSERT INTO companies (id, normalized_name, display_name, founder_uuid, status, treasury_minor, total_shares, dividend_basis_points, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) { s.setString(1, company.id().value().toString()); s.setString(2, company.normalizedName()); s.setString(3, company.displayName()); s.setString(4, company.founderId().toString()); s.setString(5, company.status().name()); s.setLong(6, company.treasury().minorUnits()); s.setLong(7, company.totalShares()); s.setInt(8, company.dividendRate().basisPoints()); s.setString(9, company.createdAt().toString()); s.executeUpdate(); } return null; }); }
+    private static void insertExistingFinance(Database database, Company company) { database.inTransaction(c -> { try (PreparedStatement cash = c.prepareStatement("INSERT INTO company_cash_accounts (company_id, cash_minor, paid_in_capital_minor, retained_earnings_minor, reserved_minor) VALUES (?, ?, ?, ?, ?)"); PreparedStatement shares = c.prepareStatement("INSERT INTO share_holdings (company_id, holder_uuid, available_shares, reserved_shares) VALUES (?, ?, ?, ?)")) { cash.setString(1, company.id().value().toString()); cash.setLong(2, 1); cash.setLong(3, 1); cash.setLong(4, 0); cash.setLong(5, 0); cash.executeUpdate(); shares.setString(1, company.id().value().toString()); shares.setString(2, company.founderId().toString()); shares.setLong(3, 1_000); shares.setLong(4, 0); shares.executeUpdate(); } return null; }); }
     private static long longValue(Connection c, String sql) throws Exception { try (c; PreparedStatement s = c.prepareStatement(sql); var rows = s.executeQuery()) { rows.next(); return rows.getLong(1); } }
     private static String stringValue(Connection c, String sql) throws Exception { try (c; PreparedStatement s = c.prepareStatement(sql); var rows = s.executeQuery()) { rows.next(); return rows.getString(1); } }
 
     private static final class RecordingEscrow implements TreasuryEscrowGateway {
-        int playerWithdrawals; int escrowDeposits; int refunds; EconomyGateway.Result refund = EconomyGateway.Result.success("");
+        int playerWithdrawals; int escrowDeposits; int refunds; EconomyGateway.Result refund = EconomyGateway.Result.success(""); EconomyGateway.Result deposit = EconomyGateway.Result.success("");
         @Override public EconomyGateway.Result withdrawPlayer(UUID playerId, Money amount, UUID operationId) { playerWithdrawals++; return EconomyGateway.Result.success(""); }
-        @Override public EconomyGateway.Result depositEscrow(Money amount, UUID operationId) { escrowDeposits++; return EconomyGateway.Result.success(""); }
+        @Override public EconomyGateway.Result depositEscrow(Money amount, UUID operationId) { escrowDeposits++; return deposit; }
         @Override public EconomyGateway.Result withdrawEscrow(Money amount, UUID operationId) { return EconomyGateway.Result.success(""); }
         @Override public EconomyGateway.Result refundPlayer(UUID playerId, Money amount, UUID operationId) { refunds++; return refund; }
     }

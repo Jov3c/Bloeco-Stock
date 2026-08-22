@@ -73,7 +73,6 @@ public final class BlockecoPlugin extends JavaPlugin {
         if (!VaultProviderResolver.isAvailable(economyRegistration)) throw new IllegalStateException("Vault economy provider is unavailable");
         var escrowId = java.util.UUID.fromString(getConfig().getString("company.treasury-escrow-uuid"));
         String escrowFailure = VaultProviderResolver.escrowPreflightFailure(economyRegistration.getProvider(), getServer().getOfflinePlayer(escrowId), escrowId);
-        if (escrowFailure != null) throw new IllegalStateException("托管账户启动前检查失败：" + escrowFailure + "。请先由经济插件创建该保留 UUID 对应的非玩家账户，再重启 BlockStock。");
         database = db;
         AppClock clock = Instant::now;
         var companies = new SqlCompanyRepository(db.dataSource()); var sagas = new SqlRegistrationSagaRepository(db.dataSource(), clock);
@@ -94,8 +93,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         if (companyCommand == null) throw new IllegalStateException("company command is missing from plugin.yml");
         companyCommand.setExecutor(command);
         var capitalizations = new CompanyCapitalizationService(finance, new SqlAuditLog(), db, escrow, mainThread, sqlExecutor, clock);
-        capitalizations.recoverPendingCapitalizations().whenComplete((recovered, recoveryFailure) -> getServer().getScheduler().runTask(this, () -> {
-            if (recoveryFailure != null) { failEnable("BlockStock 遗留公司资本恢复失败，/company 命令保持不可用：" + recoveryFailure.getMessage()); return; }
+        new StartupRecoveryGate(failure -> getServer().getScheduler().runTask(this, () -> failEnable("BlockStock initialization failed: " + failure))).start(escrowFailure, capitalizations::recoverPendingCapitalizations, recovered -> getServer().getScheduler().runTask(this, () -> {
             if (!runtime.attachReady(command, database)) return;
             registration.recoverStaleRegistrations(Instant.now().minus(Duration.ofMinutes(5))).whenComplete((count, staleFailure) -> getServer().getScheduler().runTask(this, () -> getLogger().info("BlockStock ready; legacy capitalizations recovered=" + recovered + "; stale registration records scanned=" + (staleFailure == null ? count : "failed"))));
             ipoLifecycle = new IpoLifecycleScheduler(task -> { var bukkitTask=getServer().getScheduler().runTaskTimerAsynchronously(this,task,20L,1200L); return bukkitTask::cancel; }, clock::now, primaryOfferings, failure -> getLogger().warning("IPO 状态调度失败，将在下个周期重试: " + failure.getMessage())); ipoLifecycle.start();

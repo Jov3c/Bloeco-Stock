@@ -66,9 +66,8 @@ public final class CompanyCapitalizationService {
     }
     private CompletionStage<Void> afterEscrowDeposit(TreasuryOperation operation, EconomyGateway.Result result) {
         if (result.outcome() != EconomyGateway.Outcome.SUCCESS) return CompletableFuture.runAsync(() -> transition(operation, TreasuryOperationState.PLAYER_WITHDRAWN, TreasuryOperationState.AMBIGUOUS, result.message()), sql);
-        return CompletableFuture.runAsync(() -> transition(operation, TreasuryOperationState.PLAYER_WITHDRAWN, TreasuryOperationState.ESCROW_DEPOSITED, "confirmed escrow deposit"), sql)
-                .thenCompose(ignored -> CompletableFuture.runAsync(() -> complete(operation), sql))
-                .exceptionallyCompose(failure -> CompletableFuture.runAsync(() -> { TreasuryOperation current = finance.findById(operation.id()).orElse(operation); if (current.state() == TreasuryOperationState.ESCROW_DEPOSITED) transition(current, TreasuryOperationState.ESCROW_DEPOSITED, TreasuryOperationState.AMBIGUOUS, "database completion failed after confirmed escrow deposit: " + failure.getMessage()); }, sql));
+        return CompletableFuture.runAsync(() -> completeAfterEscrowDeposit(operation, TreasuryOperationState.PLAYER_WITHDRAWN), sql)
+                .exceptionallyCompose(failure -> CompletableFuture.runAsync(() -> markDepositAmbiguous(operation, failure), sql));
     }
     private void complete(TreasuryOperation operation) {
         TreasuryOperation current = finance.findById(operation.id()).orElse(operation);
@@ -80,10 +79,27 @@ public final class CompanyCapitalizationService {
     }
     private void createLegacy(Company company) {
         UUID id = UUID.nameUUIDFromBytes(("legacy-capitalization:" + company.id().value()).getBytes(StandardCharsets.UTF_8));
-        if (finance.findById(id).isPresent()) return;
+        TreasuryOperation operation = finance.findById(id).orElseGet(() -> prepareLegacy(company, id));
+        if (operation.state() != TreasuryOperationState.PREPARED) return;
+        transition(operation, TreasuryOperationState.PREPARED, TreasuryOperationState.PLAYER_WITHDRAWN, "已确认历史玩家扣款；不会再次扣款");
+        try {
+            EconomyGateway.Result deposit = escrow.depositEscrow(operation.amount(), operation.id());
+            if (deposit.outcome() != EconomyGateway.Outcome.SUCCESS) { transition(operation, TreasuryOperationState.PLAYER_WITHDRAWN, TreasuryOperationState.AMBIGUOUS, deposit.message()); return; }
+            completeAfterEscrowDeposit(operation, TreasuryOperationState.PLAYER_WITHDRAWN);
+        } catch (RuntimeException failure) { markDepositAmbiguous(operation, failure); }
+    }
+    private TreasuryOperation prepareLegacy(Company company, UUID id) {
         Instant now = clock.now(); TreasuryOperation operation = new TreasuryOperation(id, company.id(), company.founderId(), company.treasury(), id.toString(), TreasuryOperationState.PREPARED, now, now);
-        transactions.inTransaction(c -> { finance.prepare(c, operation, event(operation, "NONE", TreasuryOperationState.PREPARED, "legacy capitalization")); finance.transition(c, id, TreasuryOperationState.PREPARED, TreasuryOperationState.PLAYER_WITHDRAWN, event(operation, "PREPARED", TreasuryOperationState.PLAYER_WITHDRAWN, "historical company")); finance.transition(c, id, TreasuryOperationState.PLAYER_WITHDRAWN, TreasuryOperationState.ESCROW_DEPOSITED, event(operation, "PLAYER_WITHDRAWN", TreasuryOperationState.ESCROW_DEPOSITED, "historical company")); return null; });
-        complete(operation);
+        transactions.inTransaction(c -> { finance.prepare(c, operation, event(operation, "NONE", TreasuryOperationState.PREPARED, "遗留公司资本化")); return null; });
+        return operation;
+    }
+    private void completeAfterEscrowDeposit(TreasuryOperation operation, TreasuryOperationState expected) {
+        Money amount = operation.amount(); CompanyCashAccount account = new CompanyCashAccount(operation.companyId(), amount, amount, Money.zero(), Money.zero()); ShareHolding holding = new ShareHolding(operation.companyId(), operation.playerId(), 1_000, 0);
+        transactions.inTransaction(c -> { finance.transition(c, operation.id(), expected, TreasuryOperationState.ESCROW_DEPOSITED, event(operation, expected.name(), TreasuryOperationState.ESCROW_DEPOSITED, "confirmed escrow deposit")); finance.createCapitalization(c, account, holding, operation, event(operation, TreasuryOperationState.ESCROW_DEPOSITED.name(), TreasuryOperationState.COMPLETED, "")); return null; });
+    }
+    private void markDepositAmbiguous(TreasuryOperation operation, Throwable failure) {
+        TreasuryOperation current = finance.findById(operation.id()).orElse(operation);
+        if (current.state() == TreasuryOperationState.PLAYER_WITHDRAWN || current.state() == TreasuryOperationState.ESCROW_DEPOSITED) transition(current, current.state(), TreasuryOperationState.AMBIGUOUS, "confirmed escrow deposit could not be recorded: " + failure.getMessage());
     }
     private void transition(TreasuryOperation operation, TreasuryOperationState from, TreasuryOperationState to, String reason) {
         transactions.inTransaction(c -> { finance.transition(c, operation.id(), from, to, event(operation, from.name(), to, reason)); return null; });

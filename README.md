@@ -88,11 +88,7 @@ Paper 完成保存，再让 BlockStock 的下一次启动完成迁移。
 
 ### 本次本地验收状态（2026-08-14）
 
-首次自动化尝试时，旧 Paper 的控制台输入没有消费写入的 `stop`，因此没有强制终止 JVM。
-在随后经外部操作者确认优雅停服后，BlockStock 已实际启动：旧
-`plugins/BlockecoExchange/` 目录由插件迁移为 `plugins/BlockStock/`，并验证了
-`127.0.0.1:25565` 监听、Vault 的 Essentials Economy 挂钩以及 `BlockStock ready` 启动日志。
-启动窗口未出现 BlockStock `ERROR`、`Exception` 或 `SEVERE`。
+首次自动化尝试中，Paper 已加载 Vault 与 Essentials，但 BlockStock 因旧本地配置缺少托管 UUID/账户而按设计拒绝启动；该次启动没有进入 ready 状态，也没有执行资本恢复。随后虽已补上“请求创建空托管账户”的自动化覆盖，**尚未实际重启 Paper 验证该改动**。因此不能把 ready、重启、`127.0.0.1:25565` 监听或 Vault 挂钩称为本轮已完成的烟测。
 
 但 Aoozzz 的原版客户端 `/company` 聊天输出，以及以下三条 Tab 路径仍**未执行**：
 `/company `、`/company create 红石工坊 `、`/company recovery `。上文描述的是实现的预期
@@ -133,8 +129,8 @@ Phase 1 的权威数据是 `plugins/BlockStock/blockeco.db` 中的 SQLite 数据
 
 1. 将官方 Vault 与经济提供方 JAR 放入 `run/plugins/`，并将 `run/eula.txt` 设置为 `eula=true`。
 2. 使用 Java 21 运行 `.\gradlew.bat runServer`，确认 Paper、Vault、经济提供方和 BlockStock 均已加载。
-3. 确认日志包含 `BlockStock ready; stale registration records scanned=...`，且 Vault 报告已挂钩经济提供方。
-4. 以余额已知的测试玩家加入；执行 `/company create "Red Stone" 50`。通过数据库/审计数据确认恰好一次扣除费用 + 资本、状态为 `PENDING_ASSET_BINDING`、拥有 1,000 股、50% 档位以及仅资本进入金库。
+3. 确认日志包含 `BlockStock ready; legacy capitalizations recovered=...; stale registration records scanned=...`，且 Vault 报告已挂钩经济提供方。
+4. 以余额已知的测试玩家加入；执行 `/company create "Red Stone" 10000.00 50`。通过数据库/审计数据确认恰好一次扣除费用 + 资本、状态为 `PENDING_ASSET_BINDING`、拥有 1,000 股、50% 档位以及仅资本进入金库。
 5. 执行 `/company info "Red Stone"`，再重复创建命令；确认同名拒绝且不会再次扣款。
 6. 使用 `stop` 停服、重启，并确认公司/审计数据仍保留。
 7. 进行恢复演练时，只能在受控测试环境中、故意延迟注册期间停止；确认记录可通过 `/company recovery list` 查看。绝不可将生产资金用于该演练。
@@ -144,11 +140,11 @@ Phase 1 的权威数据是 `plugins/BlockStock/blockeco.db` 中的 SQLite 数据
 | 检查项 | 结果 | 证据 |
 | --- | --- | --- |
 | Gradle run 任务语法 | 通过 | `help --task runServer` 报告 `xyz.jpenilla.runpaper.task.RunServer`。 |
-| 首次 Paper 启动 | 通过 | Java 21.0.11 上的 Paper 1.21.4 build 232 已加载 BlockStock、Vault 1.7.3-b131 和 Essentials 2.21.0。 |
-| Vault 提供方解析 | 通过 | Vault 报告 `Essentials Economy hooked`；BlockStock 记录其 ready 行。 |
-| 模式迁移/数据库创建 | 通过 | 已创建 `plugins/BlockStock/blockeco.db`，且 Hikari 成功启动。 |
-| 干净的 BlockStock 关闭 | 通过 | Vault 关闭前，Hikari 记录了 shutdown initiated/completed。 |
-| 重启 | 通过 | 第二次启动复用了同一 `run/` 数据库，并再次达到 BlockStock ready 行。 |
+| 首次 Paper 启动 | 部分完成 | Java 21.0.11 上的 Paper 1.21.4 build 232 曾加载 Vault 1.7.3-b131 与 Essentials 2.21.0；BlockStock 因托管前置检查拒绝启动。 |
+| Vault 提供方解析 | 部分完成 | Vault 曾报告 `Essentials Economy hooked`；本轮修复后尚未实际重启确认。 |
+| 模式迁移/数据库创建 | 部分完成 | 曾创建 `plugins/BlockStock/blockeco.db`；本轮修复后尚未实际重启确认。 |
+| 干净的 BlockStock 关闭 | 未确认 | 本轮未控制或停止任何 Paper 进程。 |
+| 重启 | 未执行 | 不得将后续真实重启说成已经完成。 |
 | 已认证玩家的创建/查询/重复扣款 | 未执行 | 本地烟测环境没有可用的自动化、已认证 Minecraft 客户端/玩家会话。请在管理员测试服务器上执行步骤 4–5。 |
 | 故意中断注册 | 未执行 | 需要受控的延迟提供方调用和玩家会话；仅保留为管理员测试。 |
 
