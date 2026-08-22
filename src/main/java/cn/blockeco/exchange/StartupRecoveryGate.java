@@ -49,6 +49,15 @@ final class StartupRecoveryGate {
         } catch (RuntimeException startFailure) { fail("遗留公司资本恢复无法启动：" + detail(startFailure)); }
     }
 
+    /** Extends recovery without publishing readiness between local-only recovery phases. */
+    <C, I, S> void start(String preflightFailure, Supplier<? extends CompletionStage<C>> capitalizations,
+                         Function<C, ? extends CompletionStage<I>> ipoSubscriptions,
+                         Function<I, ? extends CompletionStage<S>> secondary,
+                         java.util.function.Consumer<S> onRecovered) {
+        if (preflightFailure != null) { fail("托管账户启动前检查失败：" + preflightFailure); return; }
+        try { capitalizations.get().whenComplete((c,cf) -> { if(cf!=null){fail("遗留公司资本恢复失败："+detail(cf));return;} try { ipoSubscriptions.apply(c).whenComplete((i,ifail)->{if(ifail!=null){fail("IPO 认购恢复失败："+detail(ifail));return;} try { secondary.apply(i).whenComplete((s,sfail)->{if(sfail!=null){fail("证券现金恢复失败："+detail(sfail));return;} try {onRecovered.accept(s);ready.set(true);}catch(RuntimeException e){fail("启动就绪处理失败："+detail(e));}});}catch(RuntimeException e){fail("证券现金恢复无法启动："+detail(e));}});}catch(RuntimeException e){fail("IPO 认购恢复无法启动："+detail(e));}}); } catch(RuntimeException e){fail("遗留公司资本恢复无法启动："+detail(e));}
+    }
+
     boolean ready() { return ready.get(); }
     boolean accepting() { return ready.get() && failure == null; }
     String failure() { return failure; }

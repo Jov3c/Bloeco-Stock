@@ -4,12 +4,14 @@ import cn.blockeco.exchange.paper.CommandAcceptanceGate;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /** Owns shutdown from pre-migration initialization through the ready runtime. */
 final class PluginRuntime {
     private final Object lock = new Object();
     private final AtomicBoolean stopped = new AtomicBoolean();
     private final AtomicBoolean databaseClosed = new AtomicBoolean();
+    private final AtomicLong epoch = new AtomicLong(1L);
     private java.util.List<CommandAcceptanceGate> gates = java.util.List.of();
     private BootstrapCoordinator<?> bootstrap;
     private ExecutorService executor;
@@ -20,6 +22,8 @@ final class PluginRuntime {
     PluginRuntime(CommandAcceptanceGate command) { this.gates = java.util.List.of(command); }
 
     boolean accepting() { return !stopped.get(); }
+    long captureEpoch() { return epoch.get(); }
+    boolean isAccepting(long capturedEpoch) { return !stopped.get() && epoch.get() == capturedEpoch; }
     void attachBootstrap(BootstrapCoordinator<?> value) { boolean stop; synchronized (lock) { bootstrap = value; stop = stopped.get(); } if (stop) value.stop(); }
     void attachExecutor(ExecutorService value) { boolean stop; synchronized (lock) { executor = value; stop = stopped.get(); } if (stop) shutdown(value); }
     /** Claims a pool as soon as it exists, before any potentially-blocking migration work. */
@@ -41,6 +45,7 @@ final class PluginRuntime {
     }
     void stop() {
         if (!stopped.compareAndSet(false, true)) return;
+        epoch.incrementAndGet();
         java.util.List<CommandAcceptanceGate> currentGates; BootstrapCoordinator<?> currentBootstrap; ExecutorService currentExecutor; AutoCloseable currentDatabase;
         synchronized (lock) { currentGates = gates; currentBootstrap = bootstrap; currentExecutor = executor; currentDatabase = database; }
         currentGates.forEach(gate -> gate.setAccepting(false));

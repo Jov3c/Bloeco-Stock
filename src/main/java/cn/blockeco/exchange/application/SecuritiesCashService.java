@@ -21,15 +21,17 @@ import java.util.concurrent.Executor;
 /** Intent-first, deliberately non-retrying two-leg personal cash saga. */
 public final class SecuritiesCashService {
     private final SecuritiesCashRepository repository; private final TransactionRunner transactions;
-    private final SecuritiesCashGateway gateway; private final Executor sql; private final AppClock clock; private final Duration externalTimeout;
+    private final SecuritiesCashGateway gateway; private final Executor sql; private final AppClock clock; private final Duration externalTimeout; private final java.util.function.BooleanSupplier accepting;
     public SecuritiesCashService(SecuritiesCashRepository repository, TransactionRunner transactions, SecuritiesCashGateway gateway, Executor sql, AppClock clock) {
-        this(repository,transactions,gateway,sql,clock,Duration.ofSeconds(15));
+        this(repository,transactions,gateway,sql,clock,Duration.ofSeconds(15),()->true);
     }
-    public SecuritiesCashService(SecuritiesCashRepository repository, TransactionRunner transactions, SecuritiesCashGateway gateway, Executor sql, AppClock clock, Duration externalTimeout) { this.repository=Objects.requireNonNull(repository); this.transactions=Objects.requireNonNull(transactions); this.gateway=Objects.requireNonNull(gateway); this.sql=Objects.requireNonNull(sql); this.clock=Objects.requireNonNull(clock); this.externalTimeout=Objects.requireNonNull(externalTimeout); if(externalTimeout.isNegative()||externalTimeout.isZero())throw new IllegalArgumentException("external timeout must be positive"); }
+    public SecuritiesCashService(SecuritiesCashRepository repository, TransactionRunner transactions, SecuritiesCashGateway gateway, Executor sql, AppClock clock, Duration externalTimeout) { this(repository,transactions,gateway,sql,clock,externalTimeout,()->true); }
+    public SecuritiesCashService(SecuritiesCashRepository repository, TransactionRunner transactions, SecuritiesCashGateway gateway, Executor sql, AppClock clock, Duration externalTimeout, java.util.function.BooleanSupplier accepting) { this.repository=Objects.requireNonNull(repository); this.transactions=Objects.requireNonNull(transactions); this.gateway=Objects.requireNonNull(gateway); this.sql=Objects.requireNonNull(sql); this.clock=Objects.requireNonNull(clock); this.externalTimeout=Objects.requireNonNull(externalTimeout); this.accepting=Objects.requireNonNull(accepting); if(externalTimeout.isNegative()||externalTimeout.isZero())throw new IllegalArgumentException("external timeout must be positive"); }
     public CompletionStage<SecuritiesCashResult> deposit(UUID player, Money amount) { return start(player,amount,SecuritiesCashDirection.DEPOSIT); }
     public CompletionStage<SecuritiesCashResult> withdraw(UUID player, Money amount) { return start(player,amount,SecuritiesCashDirection.WITHDRAW); }
     private CompletionStage<SecuritiesCashResult> start(UUID player,Money amount,SecuritiesCashDirection direction) {
         Objects.requireNonNull(player); requireAmount(amount); UUID id=UUID.randomUUID();
+        if(!accepting.getAsBoolean()) return CompletableFuture.failedFuture(new IllegalStateException("cash operations are not accepting"));
         return CompletableFuture.supplyAsync(() -> prepare(id,player,amount,direction),sql).thenCompose(operation -> {
             if(operation.state()!=SecuritiesCashOperationState.PREPARED) return CompletableFuture.completedFuture(result(operation));
             return direction==SecuritiesCashDirection.DEPOSIT ? depositLegOne(operation) : withdrawLegOne(operation);
@@ -44,7 +46,7 @@ public final class SecuritiesCashService {
         return external(() -> gateway.withdrawPlayer(o.playerId(),o.amount())).thenCompose(x -> {
             if(!success(x)) return afterFailure(o,SecuritiesCashOperationState.PREPARED,null,x,false);
             return durable(o,SecuritiesCashOperationState.PREPARED,SecuritiesCashOperationState.PLAYER_WITHDRAWN,SecuritiesCashOperationState.PLAYER_WITHDRAWN,"player withdrawal confirmed")
-                .thenCompose(v -> external(() -> gateway.depositEscrow(o.amount())))
+                .thenCompose(v -> accepting.getAsBoolean()?external(() -> gateway.depositEscrow(o.amount())):CompletableFuture.completedFuture(new External(null,new IllegalStateException("cash gateway stopped before escrow deposit"),false)))
                 .thenCompose(y -> { if(!success(y)) return afterFailure(o,SecuritiesCashOperationState.PLAYER_WITHDRAWN,SecuritiesCashOperationState.PLAYER_WITHDRAWN,y,true);
                     return durable(o,SecuritiesCashOperationState.PLAYER_WITHDRAWN,SecuritiesCashOperationState.ESCROW_DEPOSITED,SecuritiesCashOperationState.ESCROW_DEPOSITED,"escrow deposit confirmed")
                         .thenCompose(v -> sql(() -> { SecuritiesCashOperation latest=require(o.id()); transactions.inTransaction(c->{repository.completeDeposit(c,latest,clock.now());return null;}); return new SecuritiesCashResult(o.id(),SecuritiesCashOperationState.COMPLETED,"completed"); })); });
@@ -54,7 +56,7 @@ public final class SecuritiesCashService {
         return external(() -> gateway.withdrawEscrow(o.amount())).thenCompose(x -> {
             if(!success(x)) return afterFailure(o,SecuritiesCashOperationState.PREPARED,null,x,false);
             return durable(o,SecuritiesCashOperationState.PREPARED,SecuritiesCashOperationState.ESCROW_WITHDRAWN,SecuritiesCashOperationState.ESCROW_WITHDRAWN,"escrow withdrawal confirmed")
-                .thenCompose(v -> external(() -> gateway.depositPlayer(o.playerId(),o.amount())))
+                .thenCompose(v -> accepting.getAsBoolean()?external(() -> gateway.depositPlayer(o.playerId(),o.amount())):CompletableFuture.completedFuture(new External(null,new IllegalStateException("cash gateway stopped before player deposit"),false)))
                 .thenCompose(y -> { if(!success(y)) return afterFailure(o,SecuritiesCashOperationState.ESCROW_WITHDRAWN,SecuritiesCashOperationState.ESCROW_WITHDRAWN,y,true);
                     return durable(o,SecuritiesCashOperationState.ESCROW_WITHDRAWN,SecuritiesCashOperationState.PLAYER_DEPOSITED,SecuritiesCashOperationState.PLAYER_DEPOSITED,"player deposit confirmed")
                         .thenCompose(v -> sql(() -> { SecuritiesCashOperation latest=require(o.id()); transactions.inTransaction(c->{repository.completeWithdrawal(c,latest,clock.now());return null;});return new SecuritiesCashResult(o.id(),SecuritiesCashOperationState.COMPLETED,"completed"); })); });

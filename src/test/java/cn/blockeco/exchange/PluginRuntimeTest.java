@@ -17,6 +17,9 @@ import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 
 class PluginRuntimeTest {
+ @Test void epoch_is_monotonic_and_invalidated_by_stop() {
+  PluginRuntime runtime=new PluginRuntime(); long captured=runtime.captureEpoch(); assertThat(runtime.isAccepting(captured)).isTrue(); runtime.stop(); assertThat(runtime.captureEpoch()).isGreaterThan(captured); assertThat(runtime.isAccepting(captured)).isFalse();
+ }
  private static final CompanyCreationRules RULES = new CompanyCreationRules(Money.fromMajor(new BigDecimal("1000.00"), 2), Money.fromMajor(new BigDecimal("10000.00"), 2), 2, 1000, List.of(30, 50, 70));
  @Test void runtime_readies_and_stops_both_command_gates() {
   CommandAcceptanceGate companyGate=mock(CommandAcceptanceGate.class); CommandAcceptanceGate stockGate=mock(CommandAcceptanceGate.class); PluginRuntime runtime=new PluginRuntime();
