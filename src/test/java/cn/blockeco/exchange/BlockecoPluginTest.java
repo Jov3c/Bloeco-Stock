@@ -120,6 +120,45 @@ class BlockecoPluginTest {
     }
 
     @Test
+    void full_startup_chain_waits_for_symbol_refresh_before_publishing_readiness() {
+        StartupRecoveryGate gate = new StartupRecoveryGate();
+        java.util.List<String> order = new java.util.ArrayList<>();
+        java.util.concurrent.CompletableFuture<Void> symbols = new java.util.concurrent.CompletableFuture<>();
+
+        gate.startFull(null,
+                () -> { order.add("capitalization"); return java.util.concurrent.CompletableFuture.completedFuture("C"); },
+                capitalizations -> { order.add("ipo:" + capitalizations); return java.util.concurrent.CompletableFuture.completedFuture("I"); },
+                ipo -> { order.add("cash:" + ipo); return java.util.concurrent.CompletableFuture.completedFuture("S"); },
+                cash -> { order.add("reconcile:" + cash); return java.util.concurrent.CompletableFuture.completedFuture("R"); },
+                reconciliation -> { order.add("symbols:" + reconciliation); return symbols; },
+                result -> order.add("ready:" + result));
+
+        assertThat(order).containsExactly("capitalization", "ipo:C", "cash:I", "reconcile:S", "symbols:R");
+        assertThat(gate.accepting()).isFalse();
+        symbols.complete(null);
+        assertThat(order).containsExactly("capitalization", "ipo:C", "cash:I", "reconcile:S", "symbols:R", "ready:R");
+        assertThat(gate.accepting()).isTrue();
+    }
+
+    @Test
+    void full_startup_chain_fails_closed_when_symbol_refresh_fails() {
+        java.util.concurrent.atomic.AtomicReference<String> failure = new java.util.concurrent.atomic.AtomicReference<>();
+        StartupRecoveryGate gate = new StartupRecoveryGate(failure::set);
+
+        gate.startFull(null,
+                () -> java.util.concurrent.CompletableFuture.completedFuture(1),
+                ignored -> java.util.concurrent.CompletableFuture.completedFuture(2),
+                ignored -> java.util.concurrent.CompletableFuture.completedFuture(3),
+                ignored -> java.util.concurrent.CompletableFuture.completedFuture(4),
+                ignored -> java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException("symbol cache")),
+                ignored -> { throw new AssertionError("must not publish readiness"); });
+
+        assertThat(gate.accepting()).isFalse();
+        assertThat(gate.failure()).contains("symbol cache");
+        assertThat(failure.get()).contains("symbol cache");
+    }
+
+    @Test
     void final_vault_provider_startup_diagnostic_is_chinese() {
         assertThat(BlockecoPlugin.startupFailureMessage(new IllegalStateException("Vault 经济提供方不可用")))
                 .isEqualTo("BlockStock 启动失败：Vault 经济提供方不可用");

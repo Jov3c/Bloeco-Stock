@@ -103,7 +103,7 @@ class SecuritiesCashServiceTest {
         org.assertj.core.api.Assertions.assertThatThrownBy(()->f.service.deposit(f.player,Money.ofMinor(100)).toCompletableFuture().join()).hasCauseInstanceOf(IllegalStateException.class);
 
         verify(f.gateway,never()).depositEscrow(any());
-        verify(f.repository).transitionOperation(any(),any(),eq(SecuritiesCashOperationState.PREPARED),eq(SecuritiesCashOperationState.AMBIGUOUS),isNull(),contains("durable stage persistence failed"),any());
+        verify(f.repository).transitionOperation(any(),any(),eq(SecuritiesCashOperationState.PREPARED),eq(SecuritiesCashOperationState.AMBIGUOUS),eq(SecuritiesCashOperationState.PLAYER_WITHDRAWN),contains("durable stage persistence failed"),any());
     }
     @Test void local_completion_failure_after_final_durable_stage_is_recovered_without_another_gateway_leg() throws Exception {
         Fixture f=fixture(); Instant now=Instant.parse("2026-08-22T00:00:00Z");

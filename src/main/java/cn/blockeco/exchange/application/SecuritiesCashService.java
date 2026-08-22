@@ -22,13 +22,18 @@ import java.util.concurrent.Executor;
 public final class SecuritiesCashService {
     private final SecuritiesCashRepository repository; private final TransactionRunner transactions;
     private final SecuritiesCashGateway gateway; private final Executor sql; private final AppClock clock; private final Duration externalTimeout; private final java.util.function.BooleanSupplier accepting;
+    private final Object lifecycleLock=new Object(); private final java.util.Set<CompletableFuture<Void>> inFlight=new java.util.HashSet<>(); private boolean quiescing;
     public SecuritiesCashService(SecuritiesCashRepository repository, TransactionRunner transactions, SecuritiesCashGateway gateway, Executor sql, AppClock clock) {
         this(repository,transactions,gateway,sql,clock,Duration.ofSeconds(15),()->true);
     }
     public SecuritiesCashService(SecuritiesCashRepository repository, TransactionRunner transactions, SecuritiesCashGateway gateway, Executor sql, AppClock clock, Duration externalTimeout) { this(repository,transactions,gateway,sql,clock,externalTimeout,()->true); }
     public SecuritiesCashService(SecuritiesCashRepository repository, TransactionRunner transactions, SecuritiesCashGateway gateway, Executor sql, AppClock clock, Duration externalTimeout, java.util.function.BooleanSupplier accepting) { this.repository=Objects.requireNonNull(repository); this.transactions=Objects.requireNonNull(transactions); this.gateway=Objects.requireNonNull(gateway); this.sql=Objects.requireNonNull(sql); this.clock=Objects.requireNonNull(clock); this.externalTimeout=Objects.requireNonNull(externalTimeout); this.accepting=Objects.requireNonNull(accepting); if(externalTimeout.isNegative()||externalTimeout.isZero())throw new IllegalArgumentException("external timeout must be positive"); }
-    public CompletionStage<SecuritiesCashResult> deposit(UUID player, Money amount) { return start(player,amount,SecuritiesCashDirection.DEPOSIT); }
-    public CompletionStage<SecuritiesCashResult> withdraw(UUID player, Money amount) { return start(player,amount,SecuritiesCashDirection.WITHDRAW); }
+    public CompletionStage<SecuritiesCashResult> deposit(UUID player, Money amount) { return trackedStart(player,amount,SecuritiesCashDirection.DEPOSIT); }
+    public CompletionStage<SecuritiesCashResult> withdraw(UUID player, Money amount) { return trackedStart(player,amount,SecuritiesCashDirection.WITHDRAW); }
+    private CompletionStage<SecuritiesCashResult> trackedStart(UUID player,Money amount,SecuritiesCashDirection direction){CompletableFuture<Void> token=new CompletableFuture<>();synchronized(lifecycleLock){if(quiescing||!accepting.getAsBoolean())return CompletableFuture.failedFuture(new IllegalStateException("cash operations are not accepting"));inFlight.add(token);}CompletionStage<SecuritiesCashResult> stage;try{stage=start(player,amount,direction);}catch(RuntimeException failure){finish(token);return CompletableFuture.failedFuture(failure);}stage.whenComplete((v,e)->finish(token));return stage;}
+    private void finish(CompletableFuture<Void> token){synchronized(lifecycleLock){inFlight.remove(token);token.complete(null);}}
+    /** Rejects new sagas and completes only after every already registered saga has persisted its final known state. */
+    public CompletionStage<Void> quiesce(){CompletableFuture<?>[] pending;synchronized(lifecycleLock){quiescing=true;pending=inFlight.toArray(CompletableFuture[]::new);}return CompletableFuture.allOf(pending);}
     private CompletionStage<SecuritiesCashResult> start(UUID player,Money amount,SecuritiesCashDirection direction) {
         Objects.requireNonNull(player); requireAmount(amount); UUID id=UUID.randomUUID();
         if(!accepting.getAsBoolean()) return CompletableFuture.failedFuture(new IllegalStateException("cash operations are not accepting"));

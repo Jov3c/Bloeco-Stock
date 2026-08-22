@@ -58,6 +58,19 @@ final class StartupRecoveryGate {
         try { capitalizations.get().whenComplete((c,cf) -> { if(cf!=null){fail("遗留公司资本恢复失败："+detail(cf));return;} try { ipoSubscriptions.apply(c).whenComplete((i,ifail)->{if(ifail!=null){fail("IPO 认购恢复失败："+detail(ifail));return;} try { secondary.apply(i).whenComplete((s,sfail)->{if(sfail!=null){fail("证券现金恢复失败："+detail(sfail));return;} try {onRecovered.accept(s);ready.set(true);}catch(RuntimeException e){fail("启动就绪处理失败："+detail(e));}});}catch(RuntimeException e){fail("证券现金恢复无法启动："+detail(e));}});}catch(RuntimeException e){fail("IPO 认购恢复无法启动："+detail(e));}}); } catch(RuntimeException e){fail("遗留公司资本恢复无法启动："+detail(e));}
     }
 
+    /** Full async startup chain; readiness is published only after the final symbol stage completes. */
+    <C,I,S,B> void startFull(String preflightFailure, Supplier<? extends CompletionStage<C>> capitalizations,
+            Function<C,? extends CompletionStage<I>> ipo, Function<I,? extends CompletionStage<S>> secondary,
+            Function<S,? extends CompletionStage<B>> balanceAndReconcile,
+            Function<B,? extends CompletionStage<Void>> symbols, Consumer<B> onReady) {
+        if(preflightFailure!=null){fail("托管账户启动前检查失败："+preflightFailure);return;}
+        CompletionStage<B> chain;
+        try { chain=capitalizations.get().thenCompose(ipo).thenCompose(secondary).thenCompose(balanceAndReconcile); }
+        catch(RuntimeException failure){fail("启动恢复无法启动："+detail(failure));return;}
+        chain.thenCompose(snapshot->{try{return symbols.apply(snapshot).thenApply(v->snapshot);}catch(RuntimeException failure){return java.util.concurrent.CompletableFuture.failedFuture(failure);}})
+            .whenComplete((snapshot,failure)->{if(failure!=null){fail("启动恢复失败："+detail(failure));return;}try{onReady.accept(snapshot);ready.set(true);}catch(RuntimeException callbackFailure){fail("启动就绪处理失败："+detail(callbackFailure));}});
+    }
+
     boolean ready() { return ready.get(); }
     boolean accepting() { return ready.get() && failure == null; }
     String failure() { return failure; }
