@@ -3,13 +3,18 @@ package cn.blockeco.exchange.infrastructure.sql;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import cn.blockeco.exchange.application.SecuritiesCashService;
 import cn.blockeco.exchange.domain.finance.SecuritiesCashDirection;
 import cn.blockeco.exchange.domain.finance.SecuritiesCashOperation;
 import cn.blockeco.exchange.domain.finance.SecuritiesCashOperationState;
 import cn.blockeco.exchange.domain.money.Money;
+import cn.blockeco.exchange.ports.EconomyGateway;
+import cn.blockeco.exchange.ports.SecuritiesCashGateway;
 import java.nio.file.Files;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import org.junit.jupiter.api.Test;
 
 class SqlSecuritiesCashRepositoryTest {
@@ -28,6 +33,31 @@ class SqlSecuritiesCashRepositoryTest {
         try(Database db=new Database("jdbc:sqlite:"+file)) { db.migrate(); var repository=new SqlSecuritiesCashRepository(db.dataSource()); SecuritiesCashOperation operation=operation(UUID.randomUUID(),SecuritiesCashDirection.DEPOSIT,100);
             db.inTransaction(c->{repository.prepareOperation(c,operation);return null;});
             assertThatThrownBy(()->db.inTransaction(c->{repository.transitionOperation(c,operation.id(),SecuritiesCashOperationState.PREPARED,SecuritiesCashOperationState.ESCROW_WITHDRAWN,SecuritiesCashOperationState.ESCROW_WITHDRAWN,"wrong direction",NOW);return null;})).isInstanceOf(IllegalArgumentException.class);
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test void terminal_and_repeated_ambiguous_transitions_are_rejected() throws Exception {
+        var file=Files.createTempFile("blockstock-cash-terminal-", ".db");
+        try(Database db=new Database("jdbc:sqlite:"+file)) { db.migrate(); var repository=new SqlSecuritiesCashRepository(db.dataSource());
+            SecuritiesCashOperation failed=operation(UUID.randomUUID(),SecuritiesCashDirection.DEPOSIT,100), ambiguous=operation(UUID.randomUUID(),SecuritiesCashDirection.DEPOSIT,100);
+            db.inTransaction(c->{repository.prepareOperation(c,failed);repository.transitionOperation(c,failed.id(),SecuritiesCashOperationState.PREPARED,SecuritiesCashOperationState.FAILED,null,"not called",NOW);return null;});
+            assertThatThrownBy(()->db.inTransaction(c->{repository.transitionOperation(c,failed.id(),SecuritiesCashOperationState.FAILED,SecuritiesCashOperationState.AMBIGUOUS,null,"must stay terminal",NOW);return null;})).isInstanceOf(IllegalArgumentException.class);
+            db.inTransaction(c->{repository.prepareOperation(c,ambiguous);repository.transitionOperation(c,ambiguous.id(),SecuritiesCashOperationState.PREPARED,SecuritiesCashOperationState.AMBIGUOUS,null,"unknown",NOW);return null;});
+            assertThatThrownBy(()->db.inTransaction(c->{repository.transitionOperation(c,ambiguous.id(),SecuritiesCashOperationState.AMBIGUOUS,SecuritiesCashOperationState.AMBIGUOUS,null,"must stay terminal",NOW);return null;})).isInstanceOf(IllegalArgumentException.class);
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test void real_service_deposit_and_withdraw_complete_with_single_connection_pool() throws Exception {
+        var file=Files.createTempFile("blockstock-cash-service-", ".db");
+        try(Database db=new Database("jdbc:sqlite:"+file)) { db.migrate(); var repository=new SqlSecuritiesCashRepository(db.dataSource()); var gateway=new SuccessfulGateway(); UUID player=UUID.randomUUID();
+            var service=new SecuritiesCashService(repository,db,gateway,Runnable::run,()->NOW);
+            assertThat(service.deposit(player,Money.ofMinor(100)).toCompletableFuture().join().completed()).isTrue();
+            assertThat(repository.find(player).orElseThrow().available()).isEqualTo(Money.ofMinor(100));
+            assertThat(service.withdraw(player,Money.ofMinor(40)).toCompletableFuture().join().completed()).isTrue();
+            assertThat(repository.find(player).orElseThrow().available()).isEqualTo(Money.ofMinor(60));
+            assertThat(repository.find(player).orElseThrow().reserved()).isEqualTo(Money.zero());
+            assertThat(repository.findActiveOperation(player)).isEmpty();
+            assertThat(gateway.playerWithdrawals).isEqualTo(1); assertThat(gateway.escrowDeposits).isEqualTo(1); assertThat(gateway.escrowWithdrawals).isEqualTo(1); assertThat(gateway.playerDeposits).isEqualTo(1);
         } finally { Files.deleteIfExists(file); }
     }
 
@@ -54,5 +84,14 @@ class SqlSecuritiesCashRepositoryTest {
 
     private static SecuritiesCashOperation operation(UUID player,SecuritiesCashDirection direction,long amount) {
         return new SecuritiesCashOperation(UUID.randomUUID(),player,Money.ofMinor(amount),direction,SecuritiesCashOperationState.PREPARED,null,"prepared",NOW,NOW);
+    }
+
+    private static final class SuccessfulGateway implements SecuritiesCashGateway {
+        int playerWithdrawals,escrowDeposits,escrowWithdrawals,playerDeposits;
+        @Override public CompletionStage<EconomyGateway.Result> withdrawPlayer(UUID playerId,Money amount){playerWithdrawals++;return CompletableFuture.completedFuture(EconomyGateway.Result.success("ok"));}
+        @Override public CompletionStage<EconomyGateway.Result> depositEscrow(Money amount){escrowDeposits++;return CompletableFuture.completedFuture(EconomyGateway.Result.success("ok"));}
+        @Override public CompletionStage<EconomyGateway.Result> withdrawEscrow(Money amount){escrowWithdrawals++;return CompletableFuture.completedFuture(EconomyGateway.Result.success("ok"));}
+        @Override public CompletionStage<EconomyGateway.Result> depositPlayer(UUID playerId,Money amount){playerDeposits++;return CompletableFuture.completedFuture(EconomyGateway.Result.success("ok"));}
+        @Override public CompletionStage<Money> escrowBalance(){return CompletableFuture.completedFuture(Money.zero());}
     }
 }

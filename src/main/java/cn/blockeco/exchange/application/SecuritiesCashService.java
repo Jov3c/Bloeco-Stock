@@ -47,7 +47,7 @@ public final class SecuritiesCashService {
                 .thenCompose(v -> external(() -> gateway.depositEscrow(o.amount())))
                 .thenCompose(y -> { if(!success(y)) return afterFailure(o,SecuritiesCashOperationState.PLAYER_WITHDRAWN,SecuritiesCashOperationState.PLAYER_WITHDRAWN,y,true);
                     return durable(o,SecuritiesCashOperationState.PLAYER_WITHDRAWN,SecuritiesCashOperationState.ESCROW_DEPOSITED,SecuritiesCashOperationState.ESCROW_DEPOSITED,"escrow deposit confirmed")
-                        .thenCompose(v -> sql(() -> { transactions.inTransaction(c->{repository.completeDeposit(c,require(o.id()),clock.now());return null;}); return new SecuritiesCashResult(o.id(),SecuritiesCashOperationState.COMPLETED,"completed"); })); });
+                        .thenCompose(v -> sql(() -> { SecuritiesCashOperation latest=require(o.id()); transactions.inTransaction(c->{repository.completeDeposit(c,latest,clock.now());return null;}); return new SecuritiesCashResult(o.id(),SecuritiesCashOperationState.COMPLETED,"completed"); })); });
         });
     }
     private CompletionStage<SecuritiesCashResult> withdrawLegOne(SecuritiesCashOperation o) {
@@ -57,7 +57,7 @@ public final class SecuritiesCashService {
                 .thenCompose(v -> external(() -> gateway.depositPlayer(o.playerId(),o.amount())))
                 .thenCompose(y -> { if(!success(y)) return afterFailure(o,SecuritiesCashOperationState.ESCROW_WITHDRAWN,SecuritiesCashOperationState.ESCROW_WITHDRAWN,y,true);
                     return durable(o,SecuritiesCashOperationState.ESCROW_WITHDRAWN,SecuritiesCashOperationState.PLAYER_DEPOSITED,SecuritiesCashOperationState.PLAYER_DEPOSITED,"player deposit confirmed")
-                        .thenCompose(v -> sql(() -> { transactions.inTransaction(c->{repository.completeWithdrawal(c,require(o.id()),clock.now());return null;});return new SecuritiesCashResult(o.id(),SecuritiesCashOperationState.COMPLETED,"completed"); })); });
+                        .thenCompose(v -> sql(() -> { SecuritiesCashOperation latest=require(o.id()); transactions.inTransaction(c->{repository.completeWithdrawal(c,latest,clock.now());return null;});return new SecuritiesCashResult(o.id(),SecuritiesCashOperationState.COMPLETED,"completed"); })); });
         });
     }
     private CompletionStage<SecuritiesCashResult> afterFailure(SecuritiesCashOperation o,SecuritiesCashOperationState expected,SecuritiesCashOperationState last,External external,boolean priorExternalEffect) {
