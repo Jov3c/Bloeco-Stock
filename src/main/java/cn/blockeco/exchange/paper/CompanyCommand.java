@@ -79,6 +79,7 @@ public final class CompanyCommand implements CommandExecutor, CommandAcceptanceG
                 ? java.util.concurrent.CompletableFuture.completedFuture(List.of())
                 : offerings.ambiguousSubscriptions().toCompletableFuture();
         queries.recoveryList().thenCombine(queries.capitalizationRecoveryList(), RecoveryRecords::new).thenCombine(ipo, RecoveryRecords::withIpo).whenComplete((records, failure) -> mainThread.submit(() -> {
+            if (!online(sender)) return null;
             if (failure != null) { sender.sendMessage(messages.recoveryLookupFailed()); return null; }
             if (records.registration().isEmpty() && records.capitalization().isEmpty() && records.ipo().isEmpty()) sender.sendMessage(messages.noRecoveryRecords());
             for (RegistrationSaga saga : records.registration()) sender.sendMessage(messages.recoveryRecord(saga.id(), saga.founderId(), saga.totalWithdrawal().minorUnits(), saga.state(), saga.updatedAt(), saga.errorMessage()==null ? "" : saga.errorMessage()));

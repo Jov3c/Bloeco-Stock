@@ -1,6 +1,7 @@
 package cn.blockeco.exchange;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.Mockito.verifyNoInteractions;
 
@@ -34,6 +35,14 @@ class BlockecoPluginTest {
         verify(company, org.mockito.Mockito.never()).setAccepting(true);
         refresh.complete(null);
         verify(company).setAccepting(true); verify(stock).setAccepting(true);
+    }
+
+    @Test void failed_initial_stock_refresh_reports_failure_and_never_opens_gates() {
+        PublicStockSymbolCache cache = mock(PublicStockSymbolCache.class); PublicStockQueryService queries = mock(PublicStockQueryService.class); when(cache.refresh(queries)).thenReturn(java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException("db")));
+        CommandAcceptanceGate company = mock(CommandAcceptanceGate.class); CommandAcceptanceGate stock = mock(CommandAcceptanceGate.class); PluginRuntime runtime = new PluginRuntime(); java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
+        MainThreadExecutor main = new MainThreadExecutor() { @Override public <T> java.util.concurrent.CompletionStage<T> submit(java.util.function.Supplier<T> work) { return java.util.concurrent.CompletableFuture.completedFuture(work.get()); } };
+        assertThatThrownBy(() -> BlockecoPlugin.attachStockAfterInitialRefresh(cache, queries, main, runtime, java.util.List.of(company, stock), () -> {}, failure::set).toCompletableFuture().join()).isInstanceOf(java.util.concurrent.CompletionException.class);
+        assertThat(failure.get()).isNotNull(); verify(company, org.mockito.Mockito.never()).setAccepting(true); verify(stock, org.mockito.Mockito.never()).setAccepting(true);
     }
 
     @Test

@@ -30,9 +30,13 @@ class PluginRuntimeTest {
   verify(companyGate).setAccepting(false); verify(stockGate).setAccepting(false);
  }
  @Test void stop_drains_sql_executor_before_closing_database() throws Exception {
-  ExecutorService executor=mock(ExecutorService.class); AutoCloseable database=mock(AutoCloseable.class); PluginRuntime runtime=new PluginRuntime(mock(CommandAcceptanceGate.class),null,executor,database);
+  ExecutorService executor=mock(ExecutorService.class); when(executor.awaitTermination(5,TimeUnit.SECONDS)).thenReturn(true); AutoCloseable database=mock(AutoCloseable.class); PluginRuntime runtime=new PluginRuntime(mock(CommandAcceptanceGate.class),null,executor,database);
   runtime.stop();
   InOrder order=inOrder(executor,database); order.verify(executor).shutdown(); order.verify(executor).awaitTermination(5,TimeUnit.SECONDS); order.verify(database).close();
+ }
+ @Test void stop_keeps_database_open_when_sql_executor_does_not_terminate() throws Exception {
+  ExecutorService executor=mock(ExecutorService.class); when(executor.awaitTermination(anyLong(),any())).thenReturn(false); AutoCloseable database=mock(AutoCloseable.class); PluginRuntime runtime=new PluginRuntime(mock(CommandAcceptanceGate.class),null,executor,database);
+  runtime.stop(); verify(database,never()).close(); verify(executor).shutdownNow();
  }
  @Test void stop_closes_published_database_before_a_blocked_migration_finishes() throws Exception {
   CompanyRegistrationService service=mock(CompanyRegistrationService.class); MainThreadExecutor main=new MainThreadExecutor(){public <T> CompletionStage<T> submit(java.util.function.Supplier<T>w){return CompletableFuture.completedFuture(w.get());}};

@@ -120,7 +120,7 @@ public final class BlockecoPlugin extends JavaPlugin {
                 if (wiringFailure != null) { failEnable(startupFailureMessage(wiringFailure)); return; }
                 if (!runtime.accepting()) return;
                 registration.recoverStaleRegistrations(Instant.now().minus(Duration.ofMinutes(5))).whenComplete((count, staleFailure) -> getServer().getScheduler().runTask(this, () -> getLogger().info("BlockStock ready; legacy capitalizations recovered=" + recovered + "; ipo escrow completions=" + ipoRecovery.completedFromEscrow() + "; ipo ambiguities marked=" + ipoRecovery.markedAmbiguous() + "; ipo ambiguities existing=" + ipoRecovery.alreadyAmbiguous() + "; stale registration records scanned=" + (staleFailure == null ? count : "failed"))));
-                ipoLifecycle = new IpoLifecycleScheduler(task -> { var bukkitTask=getServer().getScheduler().runTaskTimerAsynchronously(this,task,20L,1200L); return bukkitTask::cancel; }, clock::now, primaryOfferings, failure -> getLogger().warning("IPO 状态调度失败，将在下个周期重试: " + failure.getMessage()), ignoredClose -> symbols.refresh(publicQueries).whenComplete((refreshed, error) -> { if (error != null) getLogger().warning("股票代码缓存刷新失败，将在下个周期重试: " + error.getMessage()); })); ipoLifecycle.start();
+                ipoLifecycle = new IpoLifecycleScheduler(task -> { var bukkitTask=getServer().getScheduler().runTaskTimerAsynchronously(this,task,20L,1200L); return bukkitTask::cancel; }, clock::now, primaryOfferings, failure -> getLogger().warning("IPO 状态调度失败，将在下个周期重试: " + failure.getMessage()), ignoredClose -> refreshSymbolsIfAccepting(runtime, symbols, publicQueries, error -> getLogger().warning("股票代码缓存刷新失败，将在下个周期重试: " + error.getMessage()))); ipoLifecycle.start();
             });
         }));
         return true;
@@ -160,7 +160,8 @@ public final class BlockecoPlugin extends JavaPlugin {
     static String configurationFailureMessage(Throwable failure) { String detail = failure.getMessage(); return "BlockStock 配置无效" + (detail == null || detail.isBlank() ? "" : "（附加信息：" + detail + "）"); }
     static String missingCompanyCommandMessage() { return "BlockStock 命令注册失败：未在 plugin.yml 中声明 company 命令"; }
     static CompletionStage<Void> attachStockAfterInitialRefresh(PublicStockSymbolCache cache, cn.blockeco.exchange.application.PublicStockQueryService queries, cn.blockeco.exchange.ports.MainThreadExecutor main, PluginRuntime runtime, java.util.List<? extends cn.blockeco.exchange.paper.CommandAcceptanceGate> gates, AutoCloseable database, Consumer<Throwable> failed) {
-        return cache.refresh(queries).handle((ignored, error) -> main.<Void>submit(() -> { if (!runtime.accepting()) return null; if (error != null) { failed.accept(error); return null; } runtime.attachReady(gates, database); return null; })).thenCompose(stage -> stage);
+        return cache.refresh(queries).handle((ignored, error) -> main.<Void>submit(() -> { if (!runtime.accepting()) return null; if (error != null) { failed.accept(error); throw new java.util.concurrent.CompletionException(error); } runtime.attachReady(gates, database); return null; })).thenCompose(stage -> stage);
     }
+    static void refreshSymbolsIfAccepting(PluginRuntime runtime, PublicStockSymbolCache cache, cn.blockeco.exchange.application.PublicStockQueryService queries, Consumer<Throwable> failed) { if (!runtime.accepting()) return; try { cache.refresh(queries).whenComplete((ignored, error) -> { if (error != null && runtime.accepting()) failed.accept(error); }); } catch (RuntimeException error) { if (runtime.accepting()) failed.accept(error); } }
     private void failEnable(String message) { getLogger().severe(message); getServer().getPluginManager().disablePlugin(this); }
 }

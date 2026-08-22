@@ -33,3 +33,4 @@
 - Runtime shutdown closes acceptance before draining the SQL executor, then closes the database. The timeout path escalates with `shutdownNow` but completion guards still prevent post-stop ready/log work.
 - `BlockecoPlugin.attachStockAfterInitialRefresh` is the production startup seam; its controlled-future test proves a pending refresh cannot open gates and a success opens both together.
 - Company async player replies check online state, and duplicate `/stock subscribe` reports IPO processing rather than company-registration wording.
+- Final race follow-up: recovery replies now short-circuit for offline players; stopped lifecycle callbacks do not launch cache refreshes; failed initial refresh completes exceptionally so stale recovery/lifecycle cannot start. A non-terminated SQL executor leaves the database open and a daemon observer closes it only after termination.
