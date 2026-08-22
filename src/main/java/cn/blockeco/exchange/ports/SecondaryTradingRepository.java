@@ -1,6 +1,7 @@
 package cn.blockeco.exchange.ports;
 
 import cn.blockeco.exchange.domain.finance.ShareHolding;
+import cn.blockeco.exchange.domain.finance.StockListing;
 import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.domain.trading.LimitOrder;
 import cn.blockeco.exchange.domain.trading.Trade;
@@ -13,9 +14,15 @@ import java.util.UUID;
 public interface SecondaryTradingRepository {
     LimitOrder reserveBuy(Connection connection, LimitOrder order) throws SQLException;
     LimitOrder reserveSell(Connection connection, LimitOrder order) throws SQLException;
+    /** Must be checked in the same transaction as the reservation/order insert. */
+    boolean isListed(Connection connection, LimitOrder order) throws SQLException;
+    Optional<StockListing> findListing(Connection connection, String stockCode) throws SQLException;
+    /** Best active maker which crosses the supplied taker, using price-time priority. */
+    Optional<LimitOrder> nextCrossingMaker(Connection connection, LimitOrder taker) throws SQLException;
     Settlement settleTrade(Connection connection, Trade trade) throws SQLException;
     void releaseOrder(Connection connection, UUID orderId, LimitOrder.State terminalState) throws SQLException;
     void cancelTakerForSelfTrade(Connection connection, UUID orderId) throws SQLException;
+    Optional<LimitOrder> findOrder(Connection connection, UUID orderId) throws SQLException;
     Optional<LimitOrder> findOrder(UUID orderId);
     Optional<ShareHolding> findHolding(cn.blockeco.exchange.domain.company.CompanyId companyId, UUID playerId);
     Money compensationFund();

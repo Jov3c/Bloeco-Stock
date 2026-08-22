@@ -18,6 +18,19 @@ public final class SqlSecondaryTradingRepository implements SecondaryTradingRepo
     public SqlSecondaryTradingRepository(DataSource dataSource, SqlSecuritiesCashRepository cash) { this.dataSource=Objects.requireNonNull(dataSource);this.cash=Objects.requireNonNull(cash); }
     @Override public LimitOrder reserveBuy(Connection c, LimitOrder order)throws SQLException { requireTransaction(c); requireNew(order, LimitOrder.Side.BUY); LimitOrder accepted=withSequence(order,nextSequence(c)); cash.reserve(c,accepted.playerId(),accepted.reservedCash()); insertOrder(c,accepted); return accepted; }
     @Override public LimitOrder reserveSell(Connection c, LimitOrder order)throws SQLException { requireTransaction(c); requireNew(order, LimitOrder.Side.SELL); LimitOrder accepted=withSequence(order,nextSequence(c)); reserveShares(c,accepted.companyId(),accepted.playerId(),accepted.remainingShares()); insertOrder(c,accepted); return accepted; }
+    @Override public boolean isListed(Connection c, LimitOrder order) throws SQLException { return findListing(c, order.stockCode()).filter(listing -> listing.companyId().equals(order.companyId())).isPresent(); }
+    @Override public Optional<cn.blockeco.exchange.domain.finance.StockListing> findListing(Connection c, String code) throws SQLException {
+        try (PreparedStatement s=c.prepareStatement("SELECT company_id,stock_code,issue_reference_price_minor,issued_shares,listed_at FROM stock_listings WHERE stock_code=?")) {
+            s.setString(1,code); try(ResultSet r=s.executeQuery()) { return r.next()?Optional.of(new cn.blockeco.exchange.domain.finance.StockListing(new CompanyId(UUID.fromString(r.getString(1))),r.getString(2),Money.ofMinor(r.getLong(3)),r.getLong(4),Instant.parse(r.getString(5)))):Optional.empty(); }
+        }
+    }
+    @Override public Optional<LimitOrder> nextCrossingMaker(Connection c, LimitOrder taker) throws SQLException {
+        requireTransaction(c);
+        String sql = taker.side()==LimitOrder.Side.BUY
+                ? "SELECT * FROM stock_orders WHERE company_id=? AND stock_code=? AND side='SELL' AND state IN ('OPEN','PARTIALLY_FILLED') AND limit_price_minor<=? ORDER BY limit_price_minor ASC,priority_sequence ASC LIMIT 1"
+                : "SELECT * FROM stock_orders WHERE company_id=? AND stock_code=? AND side='BUY' AND state IN ('OPEN','PARTIALLY_FILLED') AND limit_price_minor>=? ORDER BY limit_price_minor DESC,priority_sequence ASC LIMIT 1";
+        try(PreparedStatement s=c.prepareStatement(sql)){s.setString(1,taker.companyId().value().toString());s.setString(2,taker.stockCode());s.setLong(3,taker.limitPrice().minorUnits());try(ResultSet r=s.executeQuery()){return r.next()?Optional.of(read(r)):Optional.empty();}}
+    }
     @Override public Settlement settleTrade(Connection c, Trade trade)throws SQLException {
         requireTransaction(c); LimitOrder buy=load(c,trade.buyOrderId()),sell=load(c,trade.sellOrderId()); validateFill(buy,sell,trade);
         long newFilledNotional=Math.addExact(buy.filledNotional().minorUnits(),trade.notional().minorUnits());
@@ -43,6 +56,7 @@ public final class SqlSecondaryTradingRepository implements SecondaryTradingRepo
     }
     @Override public void releaseOrder(Connection c, UUID orderId, LimitOrder.State terminal)throws SQLException { requireTransaction(c); if(terminal!=LimitOrder.State.CANCELLED&&terminal!=LimitOrder.State.SELF_TRADE_PREVENTED)throw new IllegalArgumentException("terminal cancellation state required"); LimitOrder o=load(c,orderId); if(o.state()==terminal)return; if(o.state()!=LimitOrder.State.OPEN&&o.state()!=LimitOrder.State.PARTIALLY_FILLED)throw new OptimisticStateException("order is no longer active"); if(o.side()==LimitOrder.Side.BUY)cash.release(c,o.playerId(),o.reservedCash());else releaseShares(c,o.companyId(),o.playerId(),o.remainingShares()); updateTerminal(c,o,terminal); }
     @Override public void cancelTakerForSelfTrade(Connection c, UUID orderId)throws SQLException { requireTransaction(c); releaseOrder(c,orderId,LimitOrder.State.SELF_TRADE_PREVENTED); }
+    @Override public Optional<LimitOrder> findOrder(Connection c, UUID id) throws SQLException { return find(c,id); }
     @Override public Optional<LimitOrder> findOrder(UUID id){try(Connection c=dataSource.getConnection()){return find(c,id);}catch(SQLException e){throw new IllegalStateException("could not find stock order",e);}}
     @Override public Optional<ShareHolding> findHolding(CompanyId company,UUID p){try(Connection c=dataSource.getConnection();PreparedStatement s=c.prepareStatement("SELECT available_shares,reserved_shares FROM share_holdings WHERE company_id=? AND holder_uuid=?")){s.setString(1,company.value().toString());s.setString(2,p.toString());try(ResultSet r=s.executeQuery()){return r.next()?Optional.of(new ShareHolding(company,p,r.getLong(1),r.getLong(2))):Optional.empty();}}catch(SQLException e){throw new IllegalStateException("could not find share holding",e);}}
     @Override public Money compensationFund(){try(Connection c=dataSource.getConnection();PreparedStatement s=c.prepareStatement("SELECT balance_minor FROM compensation_fund WHERE singleton=1");ResultSet r=s.executeQuery()){if(!r.next())throw new IllegalStateException("compensation fund missing");return Money.ofMinor(r.getLong(1));}catch(SQLException e){throw new IllegalStateException("could not read compensation fund",e);}}

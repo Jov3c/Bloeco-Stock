@@ -17,6 +17,21 @@ import org.junit.jupiter.api.Test;
 
 class SqlSecondaryTradingRepositoryTest {
     @Test
+    void best_crossing_maker_uses_price_then_allocated_priority_not_timestamp_or_uuid() throws Exception {
+        var file=Files.createTempFile("blockstock-book-priority-", ".db");
+        try(Database db=new Database("jdbc:sqlite:"+file)) { db.migrate(); CompanyId company=Fixtures.company(db,100); seedListing(db,company);
+            UUID first=UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff"), second=UUID.fromString("00000000-0000-0000-0000-000000000001"), buyer=UUID.randomUUID(); Instant now=Instant.EPOCH;
+            seedHolding(db,company,first,10); seedHolding(db,company,second,10); var cash=new SqlSecuritiesCashRepository(db.dataSource());var trading=new SqlSecondaryTradingRepository(db.dataSource(),cash);
+            db.inTransaction(c->{cash.creditAvailable(c,buyer,Money.ofMinor(1_000),now);return null;});
+            LimitOrder makerOne=db.inTransaction(c->trading.reserveSell(c,order(company,first,LimitOrder.Side.SELL,9,10,0,now)));
+            db.inTransaction(c->trading.reserveSell(c,order(company,second,LimitOrder.Side.SELL,9,10,0,now)));
+            LimitOrder taker=db.inTransaction(c->trading.reserveBuy(c,order(company,buyer,LimitOrder.Side.BUY,10,10,0,now)));
+            java.util.Optional<LimitOrder> best=db.inTransaction(c->trading.nextCrossingMaker(c,taker));
+            assertThat(best).contains(makerOne);
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
     void repository_allocates_priority_inside_the_reservation_transaction() throws Exception {
         var file=Files.createTempFile("blockstock-priority-", ".db");
         try(Database db=new Database("jdbc:sqlite:"+file)) { db.migrate(); CompanyId company=Fixtures.company(db,100); seedListing(db,company); UUID player=UUID.randomUUID(); var cash=new SqlSecuritiesCashRepository(db.dataSource()); var trading=new SqlSecondaryTradingRepository(db.dataSource(),cash); Instant now=Instant.parse("2026-08-22T12:00:00Z"); db.inTransaction(c->{cash.creditAvailable(c,player,Money.ofMinor(1_000),now);return null;}); LimitOrder first=order(company,player,LimitOrder.Side.BUY,10,1,0,now), second=order(company,player,LimitOrder.Side.BUY,10,1,0,now); LimitOrder acceptedOne=db.inTransaction(c->trading.reserveBuy(c,first)); LimitOrder acceptedTwo=db.inTransaction(c->trading.reserveBuy(c,second)); assertThat(acceptedOne.prioritySequence()).isEqualTo(1);assertThat(acceptedTwo.prioritySequence()).isEqualTo(2); assertThatThrownBy(()->db.inTransaction(c->{trading.reserveBuy(c,order(company,player,LimitOrder.Side.BUY,10,1,0,now));throw new IllegalStateException("rollback");})).isInstanceOf(IllegalStateException.class); LimitOrder acceptedThree=db.inTransaction(c->trading.reserveBuy(c,order(company,player,LimitOrder.Side.BUY,10,1,0,now)));assertThat(acceptedThree.prioritySequence()).isEqualTo(3); }finally{Files.deleteIfExists(file);}
