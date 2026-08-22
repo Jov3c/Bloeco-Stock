@@ -94,6 +94,11 @@ class PublicStockQueryServiceTest {
         } finally { Files.deleteIfExists(file); }
     }
 
+    @Test void market_no_trade_uses_issue_reference_without_writing() throws Exception {
+        Path file=Files.createTempFile("market-no-trade-", ".db");
+        try(Database db=new Database("jdbc:sqlite:"+file)){db.migrate();CompanyId company=Fixtures.company(db,100);db.inTransaction(c->{try(var u=c.prepareStatement("UPDATE companies SET status='LISTED' WHERE id=?");var l=c.prepareStatement("INSERT INTO stock_listings VALUES (?,?,?,?,?)")){u.setString(1,company.value().toString());u.executeUpdate();l.setString(1,company.value().toString());l.setString(2,"BS000001");l.setLong(3,10);l.setLong(4,1000);l.setString(5,Instant.EPOCH.toString());l.executeUpdate();}return null;});SqlPublicStockRepository repo=new SqlPublicStockRepository(db.dataSource());assertThat(repo.market()).singleElement().satisfies(r->{assertThat(r.latestPrice()).isEqualTo(Money.ofMinor(10));assertThat(r.change()).isEqualTo(Money.zero());assertThat(r.volume()).isZero();assertThat(r.turnover()).isEqualTo(Money.zero());assertThat(r.marketCapitalization()).isEqualTo(Money.ofMinor(10_000));});}finally{Files.deleteIfExists(file);}
+    }
+
     private static final class QueuedExecutor implements Executor {
         private final ArrayDeque<Runnable> tasks = new ArrayDeque<>();
         @Override public void execute(Runnable task) { tasks.add(task); }
