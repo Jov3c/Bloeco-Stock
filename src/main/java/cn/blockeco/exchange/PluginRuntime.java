@@ -16,6 +16,7 @@ final class PluginRuntime {
     private BootstrapCoordinator<?> bootstrap;
     private ExecutorService executor;
     private AutoCloseable database;
+    private java.util.function.Supplier<? extends java.util.concurrent.CompletionStage<Void>> financialQuiesce;
 
     PluginRuntime() { }
     PluginRuntime(CommandAcceptanceGate command, BootstrapCoordinator<?> bootstrap, ExecutorService executor, AutoCloseable database) { this.gates = java.util.List.of(command); this.bootstrap = bootstrap; this.executor = executor; this.database = database; }
@@ -26,6 +27,7 @@ final class PluginRuntime {
     boolean isAccepting(long capturedEpoch) { return !stopped.get() && epoch.get() == capturedEpoch; }
     void attachBootstrap(BootstrapCoordinator<?> value) { boolean stop; synchronized (lock) { bootstrap = value; stop = stopped.get(); } if (stop) value.stop(); }
     void attachExecutor(ExecutorService value) { boolean stop; synchronized (lock) { executor = value; stop = stopped.get(); } if (stop) shutdown(value); }
+    void attachFinancialQuiesce(java.util.function.Supplier<? extends java.util.concurrent.CompletionStage<Void>> value) { synchronized(lock){financialQuiesce=value;} }
     /** Claims a pool as soon as it exists, before any potentially-blocking migration work. */
     void attachDatabase(AutoCloseable value) {
         synchronized (lock) {
@@ -46,13 +48,14 @@ final class PluginRuntime {
     void stop() {
         if (!stopped.compareAndSet(false, true)) return;
         epoch.incrementAndGet();
-        java.util.List<CommandAcceptanceGate> currentGates; BootstrapCoordinator<?> currentBootstrap; ExecutorService currentExecutor; AutoCloseable currentDatabase;
-        synchronized (lock) { currentGates = gates; currentBootstrap = bootstrap; currentExecutor = executor; currentDatabase = database; }
+        java.util.List<CommandAcceptanceGate> currentGates; BootstrapCoordinator<?> currentBootstrap; ExecutorService currentExecutor; AutoCloseable currentDatabase; java.util.function.Supplier<? extends java.util.concurrent.CompletionStage<Void>> currentQuiesce;
+        synchronized (lock) { currentGates = gates; currentBootstrap = bootstrap; currentExecutor = executor; currentDatabase = database; currentQuiesce=financialQuiesce; }
         currentGates.forEach(gate -> gate.setAccepting(false));
         if (currentBootstrap != null) currentBootstrap.stop();
-        if (currentExecutor == null || shutdown(currentExecutor)) closeDatabase(currentDatabase);
-        else observeTerminationThenClose(currentExecutor, currentDatabase);
+        if(currentQuiesce!=null){try{java.util.concurrent.CompletionStage<Void> pending=currentQuiesce.get();if(pending!=null&&!pending.toCompletableFuture().isDone()){pending.whenComplete((v,e)->finishShutdown(currentExecutor,currentDatabase));return;}}catch(RuntimeException ignored){/* fall through: no external work was registered */}}
+        finishShutdown(currentExecutor,currentDatabase);
     }
+    private void finishShutdown(ExecutorService currentExecutor,AutoCloseable currentDatabase){if (currentExecutor == null || shutdown(currentExecutor)) closeDatabase(currentDatabase); else observeTerminationThenClose(currentExecutor,currentDatabase);}
     void closeDatabase(AutoCloseable value) {
         if (value != null && databaseClosed.compareAndSet(false, true)) try { value.close(); } catch (Exception e) { throw new IllegalStateException("could not close BlockStock database", e); }
     }

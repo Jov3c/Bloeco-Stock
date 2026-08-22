@@ -7,6 +7,7 @@ import cn.blockeco.exchange.ports.SecuritiesCashGateway;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletionStage;
+import java.util.function.BooleanSupplier;
 
 /** Marshals every Bukkit/Vault action onto the Paper main thread without blocking it. */
 public final class VaultSecuritiesCashGateway implements SecuritiesCashGateway {
@@ -17,4 +18,9 @@ public final class VaultSecuritiesCashGateway implements SecuritiesCashGateway {
     @Override public CompletionStage<EconomyGateway.Result> withdrawEscrow(Money amount) { return main.submit(() -> economy.withdraw(escrowId, amount)); }
     @Override public CompletionStage<EconomyGateway.Result> depositPlayer(UUID id, Money amount) { return main.submit(() -> economy.deposit(id, amount)); }
     @Override public CompletionStage<Money> escrowBalance() { return main.submit(() -> economy.balance(escrowId)); }
+    @Override public CompletionStage<EconomyGateway.Result> withdrawPlayer(UUID id, Money amount, BooleanSupplier guard) { return guarded(guard,()->economy.withdraw(id,amount)); }
+    @Override public CompletionStage<EconomyGateway.Result> depositEscrow(Money amount, BooleanSupplier guard) { return guarded(guard,()->economy.deposit(escrowId,amount)); }
+    @Override public CompletionStage<EconomyGateway.Result> withdrawEscrow(Money amount, BooleanSupplier guard) { return guarded(guard,()->economy.withdraw(escrowId,amount)); }
+    @Override public CompletionStage<EconomyGateway.Result> depositPlayer(UUID id, Money amount, BooleanSupplier guard) { return guarded(guard,()->economy.deposit(id,amount)); }
+    private CompletionStage<EconomyGateway.Result> guarded(BooleanSupplier guard,java.util.function.Supplier<EconomyGateway.Result> call){return main.submit(()->guard.getAsBoolean()?call.get():EconomyGateway.Result.notCalledFailure("runtime stopped before provider call"));}
 }

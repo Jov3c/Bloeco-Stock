@@ -20,6 +20,10 @@ class PluginRuntimeTest {
  @Test void epoch_is_monotonic_and_invalidated_by_stop() {
   PluginRuntime runtime=new PluginRuntime(); long captured=runtime.captureEpoch(); assertThat(runtime.isAccepting(captured)).isTrue(); runtime.stop(); assertThat(runtime.captureEpoch()).isGreaterThan(captured); assertThat(runtime.isAccepting(captured)).isFalse();
  }
+ @Test void stop_keeps_sql_open_until_financial_quiesce_finishes() throws Exception {
+  ExecutorService executor=mock(ExecutorService.class); when(executor.awaitTermination(5,TimeUnit.SECONDS)).thenReturn(true); AutoCloseable database=mock(AutoCloseable.class); CompletableFuture<Void> quiesce=new CompletableFuture<>(); PluginRuntime runtime=new PluginRuntime(mock(CommandAcceptanceGate.class),null,executor,database); runtime.attachFinancialQuiesce(()->quiesce);
+  runtime.stop(); verify(executor,never()).shutdown(); verify(database,never()).close(); quiesce.complete(null); verify(executor,timeout(1000)).shutdown(); verify(database,timeout(1000)).close();
+ }
  private static final CompanyCreationRules RULES = new CompanyCreationRules(Money.fromMajor(new BigDecimal("1000.00"), 2), Money.fromMajor(new BigDecimal("10000.00"), 2), 2, 1000, List.of(30, 50, 70));
  @Test void runtime_readies_and_stops_both_command_gates() {
   CommandAcceptanceGate companyGate=mock(CommandAcceptanceGate.class); CommandAcceptanceGate stockGate=mock(CommandAcceptanceGate.class); PluginRuntime runtime=new PluginRuntime();
