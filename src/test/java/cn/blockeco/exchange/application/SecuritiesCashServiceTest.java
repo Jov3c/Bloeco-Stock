@@ -16,6 +16,16 @@ import org.junit.jupiter.api.Test;
 import org.mockito.stubbing.Answer;
 
 class SecuritiesCashServiceTest {
+    @Test void withdraw_pre_call_rejection_releases_reserve_and_never_calls_player_deposit() throws Exception {
+        SecuritiesCashRepository repo=mock(SecuritiesCashRepository.class); SecuritiesCashGateway gateway=mock(SecuritiesCashGateway.class); TransactionRunner tx=mock(TransactionRunner.class); Connection connection=mock(Connection.class); when(connection.getAutoCommit()).thenReturn(false);
+        doAnswer((Answer<Object>) invocation -> ((TransactionRunner.SqlWork<?>)invocation.getArgument(0)).execute(connection)).when(tx).inTransaction(any());
+        UUID player=UUID.randomUUID(); Instant now=Instant.parse("2026-08-22T00:00:00Z"); when(repo.findActiveOperation(player)).thenReturn(Optional.empty());
+        when(gateway.withdrawEscrow(Money.ofMinor(100))).thenReturn(CompletableFuture.completedFuture(EconomyGateway.Result.insufficientFunds("empty escrow")));
+        SecuritiesCashResult result=new SecuritiesCashService(repo,tx,gateway,(Executor)Runnable::run,()->now).withdraw(player,Money.ofMinor(100)).toCompletableFuture().join();
+        assertThat(result.state()).isEqualTo(SecuritiesCashOperationState.FAILED);
+        var order=inOrder(repo,gateway); order.verify(repo).reserve(eq(connection),eq(player),eq(Money.ofMinor(100))); order.verify(repo).prepareOperation(eq(connection),any()); order.verify(gateway).withdrawEscrow(Money.ofMinor(100)); order.verify(repo).release(eq(connection),eq(player),eq(Money.ofMinor(100)));
+        verify(gateway,never()).depositPlayer(any(),any());
+    }
     @Test void deposit_persists_intent_then_executes_exactly_two_external_legs() throws Exception {
         SecuritiesCashRepository repo=mock(SecuritiesCashRepository.class); SecuritiesCashGateway gateway=mock(SecuritiesCashGateway.class);
         TransactionRunner tx=mock(TransactionRunner.class); Connection connection=mock(Connection.class); when(connection.getAutoCommit()).thenReturn(false);

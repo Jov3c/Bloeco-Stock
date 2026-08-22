@@ -10,6 +10,7 @@ import cn.blockeco.exchange.ports.SecuritiesCashGateway;
 import cn.blockeco.exchange.ports.SecuritiesCashRepository;
 import cn.blockeco.exchange.ports.TransactionRunner;
 import java.time.Instant;
+import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -20,10 +21,11 @@ import java.util.concurrent.Executor;
 /** Intent-first, deliberately non-retrying two-leg personal cash saga. */
 public final class SecuritiesCashService {
     private final SecuritiesCashRepository repository; private final TransactionRunner transactions;
-    private final SecuritiesCashGateway gateway; private final Executor sql; private final AppClock clock;
+    private final SecuritiesCashGateway gateway; private final Executor sql; private final AppClock clock; private final Duration externalTimeout;
     public SecuritiesCashService(SecuritiesCashRepository repository, TransactionRunner transactions, SecuritiesCashGateway gateway, Executor sql, AppClock clock) {
-        this.repository=Objects.requireNonNull(repository); this.transactions=Objects.requireNonNull(transactions); this.gateway=Objects.requireNonNull(gateway); this.sql=Objects.requireNonNull(sql); this.clock=Objects.requireNonNull(clock);
+        this(repository,transactions,gateway,sql,clock,Duration.ofSeconds(15));
     }
+    public SecuritiesCashService(SecuritiesCashRepository repository, TransactionRunner transactions, SecuritiesCashGateway gateway, Executor sql, AppClock clock, Duration externalTimeout) { this.repository=Objects.requireNonNull(repository); this.transactions=Objects.requireNonNull(transactions); this.gateway=Objects.requireNonNull(gateway); this.sql=Objects.requireNonNull(sql); this.clock=Objects.requireNonNull(clock); this.externalTimeout=Objects.requireNonNull(externalTimeout); if(externalTimeout.isNegative()||externalTimeout.isZero())throw new IllegalArgumentException("external timeout must be positive"); }
     public CompletionStage<SecuritiesCashResult> deposit(UUID player, Money amount) { return start(player,amount,SecuritiesCashDirection.DEPOSIT); }
     public CompletionStage<SecuritiesCashResult> withdraw(UUID player, Money amount) { return start(player,amount,SecuritiesCashDirection.WITHDRAW); }
     private CompletionStage<SecuritiesCashResult> start(UUID player,Money amount,SecuritiesCashDirection direction) {
@@ -39,20 +41,20 @@ public final class SecuritiesCashService {
         transactions.inTransaction(c->{ if(direction==SecuritiesCashDirection.WITHDRAW) repository.reserve(c,player,amount); repository.prepareOperation(c,operation); return null; }); return operation;
     }
     private CompletionStage<SecuritiesCashResult> depositLegOne(SecuritiesCashOperation o) {
-        return gateway.withdrawPlayer(o.playerId(),o.amount()).handle((r,t)->new External(r,t)).thenCompose(x -> {
+        return external(gateway.withdrawPlayer(o.playerId(),o.amount())).thenCompose(x -> {
             if(!success(x)) return afterFailure(o,SecuritiesCashOperationState.PREPARED,null,x,false);
             return durable(o,SecuritiesCashOperationState.PREPARED,SecuritiesCashOperationState.PLAYER_WITHDRAWN,SecuritiesCashOperationState.PLAYER_WITHDRAWN,"player withdrawal confirmed")
-                .thenCompose(v -> gateway.depositEscrow(o.amount()).handle((r,t)->new External(r,t)))
+                .thenCompose(v -> external(gateway.depositEscrow(o.amount())))
                 .thenCompose(y -> { if(!success(y)) return afterFailure(o,SecuritiesCashOperationState.PLAYER_WITHDRAWN,SecuritiesCashOperationState.PLAYER_WITHDRAWN,y,true);
                     return durable(o,SecuritiesCashOperationState.PLAYER_WITHDRAWN,SecuritiesCashOperationState.ESCROW_DEPOSITED,SecuritiesCashOperationState.ESCROW_DEPOSITED,"escrow deposit confirmed")
                         .thenCompose(v -> sql(() -> { transactions.inTransaction(c->{repository.completeDeposit(c,require(o.id()),clock.now());return null;}); return new SecuritiesCashResult(o.id(),SecuritiesCashOperationState.COMPLETED,"completed"); })); });
         });
     }
     private CompletionStage<SecuritiesCashResult> withdrawLegOne(SecuritiesCashOperation o) {
-        return gateway.withdrawEscrow(o.amount()).handle((r,t)->new External(r,t)).thenCompose(x -> {
+        return external(gateway.withdrawEscrow(o.amount())).thenCompose(x -> {
             if(!success(x)) return afterFailure(o,SecuritiesCashOperationState.PREPARED,null,x,false);
             return durable(o,SecuritiesCashOperationState.PREPARED,SecuritiesCashOperationState.ESCROW_WITHDRAWN,SecuritiesCashOperationState.ESCROW_WITHDRAWN,"escrow withdrawal confirmed")
-                .thenCompose(v -> gateway.depositPlayer(o.playerId(),o.amount()).handle((r,t)->new External(r,t)))
+                .thenCompose(v -> external(gateway.depositPlayer(o.playerId(),o.amount())))
                 .thenCompose(y -> { if(!success(y)) return afterFailure(o,SecuritiesCashOperationState.ESCROW_WITHDRAWN,SecuritiesCashOperationState.ESCROW_WITHDRAWN,y,true);
                     return durable(o,SecuritiesCashOperationState.ESCROW_WITHDRAWN,SecuritiesCashOperationState.PLAYER_DEPOSITED,SecuritiesCashOperationState.PLAYER_DEPOSITED,"player deposit confirmed")
                         .thenCompose(v -> sql(() -> { transactions.inTransaction(c->{repository.completeWithdrawal(c,require(o.id()),clock.now());return null;});return new SecuritiesCashResult(o.id(),SecuritiesCashOperationState.COMPLETED,"completed"); })); });
@@ -68,10 +70,11 @@ public final class SecuritiesCashService {
     /** Startup is local-only: final externally durable states can safely finish their internal leg. */
     public CompletionStage<List<SecuritiesCashRecoveryRecord>> recoverDurableFinalStages() { return sql(() -> {
         List<SecuritiesCashRecoveryRecord> out=new java.util.ArrayList<>(); for(SecuritiesCashOperation o:repository.findRecoveryCandidates()) { if(o.direction()==SecuritiesCashDirection.DEPOSIT&&o.state()==SecuritiesCashOperationState.ESCROW_DEPOSITED) transactions.inTransaction(c->{repository.completeDeposit(c,o,clock.now());return null;}); else if(o.direction()==SecuritiesCashDirection.WITHDRAW&&o.state()==SecuritiesCashOperationState.PLAYER_DEPOSITED) transactions.inTransaction(c->{repository.completeWithdrawal(c,o,clock.now());return null;}); SecuritiesCashOperation current=repository.findOperation(o.id()).orElse(o); out.add(new SecuritiesCashRecoveryRecord(current.id(),current.playerId(),current.amount(),current.direction(),current.state(),current.lastConfirmedExternalStage(),current.detail())); } return List.copyOf(out); }); }
-    private CompletionStage<Void> durable(SecuritiesCashOperation o,SecuritiesCashOperationState expected,SecuritiesCashOperationState state,SecuritiesCashOperationState stage,String detail){return this.<Void>sql(() -> {transactions.inTransaction(c->{repository.transitionOperation(c,o.id(),expected,state,stage,detail,clock.now());return null;});return null;}).exceptionallyCompose(failure -> this.<Void>sql(() -> {try {transactions.inTransaction(c->{repository.transitionOperation(c,o.id(),expected,SecuritiesCashOperationState.AMBIGUOUS,null,"durable stage persistence failed: "+failure,clock.now());return null;});} catch (RuntimeException ignored) { /* DB may be unavailable; never issue another external leg. */ } return null;}).thenCompose(v -> CompletableFuture.<Void>failedFuture(failure)));}
+    private CompletionStage<Void> durable(SecuritiesCashOperation o,SecuritiesCashOperationState expected,SecuritiesCashOperationState state,SecuritiesCashOperationState stage,String detail){return this.<Void>sql(() -> {transactions.inTransaction(c->{repository.transitionOperation(c,o.id(),expected,state,stage,detail,clock.now());return null;});return null;}).exceptionallyCompose(failure -> this.<Void>sql(() -> {try {SecuritiesCashOperationState confirmed=expected.isConfirmedExternalStage()?expected:null;transactions.inTransaction(c->{repository.transitionOperation(c,o.id(),expected,SecuritiesCashOperationState.AMBIGUOUS,confirmed,"durable stage persistence failed: "+failure,clock.now());return null;});} catch (RuntimeException ignored) { /* DB may be unavailable; never issue another external leg. */ } return null;}).thenCompose(v -> CompletableFuture.<Void>failedFuture(failure)));}
     private SecuritiesCashOperation require(UUID id){return repository.findOperation(id).orElseThrow(()->new IllegalStateException("cash operation disappeared: "+id));}
     private <T> CompletionStage<T> sql(java.util.concurrent.Callable<T> work){return CompletableFuture.supplyAsync(()->{try{return work.call();}catch(Exception e){throw new java.util.concurrent.CompletionException(e);}},sql);}
     private static boolean success(External external){return external.failure==null&&external.result!=null&&external.result.outcome()== EconomyGateway.Outcome.SUCCESS;}
+    private CompletionStage<External> external(CompletionStage<EconomyGateway.Result> stage){return stage.toCompletableFuture().orTimeout(externalTimeout.toMillis(),java.util.concurrent.TimeUnit.MILLISECONDS).handle(External::new);}
     private static SecuritiesCashResult result(SecuritiesCashOperation o){return new SecuritiesCashResult(o.id(),o.state(),o.detail());}
     private static void requireAmount(Money amount){Objects.requireNonNull(amount);if(amount.minorUnits()<=0)throw new IllegalArgumentException("amount must be positive");}
     private record External(EconomyGateway.Result result,Throwable failure){String detail(){return failure!=null?failure.toString():result==null?"provider returned null":result.message();}}
