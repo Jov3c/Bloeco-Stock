@@ -19,6 +19,8 @@ import cn.blockeco.exchange.infrastructure.sql.SqlCompanyRepository;
 import cn.blockeco.exchange.ports.CompanyAssetAdapter;
 import cn.blockeco.exchange.domain.finance.TreasuryOperation;
 import cn.blockeco.exchange.domain.finance.TreasuryOperationState;
+import cn.blockeco.exchange.domain.finance.PublicOfferingView;
+import cn.blockeco.exchange.domain.finance.PrimaryOfferingState;
 import cn.blockeco.exchange.ports.MainThreadExecutor;
 import cn.blockeco.exchange.domain.money.Money;
 import java.math.BigDecimal;
@@ -40,6 +42,36 @@ class CompanyCommandTest {
     private static final MainThreadExecutor DIRECT_MAIN = new MainThreadExecutor() { @Override public <T> java.util.concurrent.CompletionStage<T> submit(java.util.function.Supplier<T> work) { return CompletableFuture.completedFuture(work.get()); } };
     private final UUID founder = UUID.fromString("11111111-1111-1111-1111-111111111111");
     private final CompanyCreationRules rules = new CompanyCreationRules(Money.fromMajor(new BigDecimal("1000.00"), 2), Money.fromMajor(new BigDecimal("10000.00"), 2), 2, 1000, List.of(30, 50, 70));
+
+    @Test
+    void public_ipo_list_and_info_need_no_permission_and_reply_on_the_main_thread() {
+        PrimaryOfferingService offerings = mock(PrimaryOfferingService.class); UUID offeringId = UUID.randomUUID();
+        PublicOfferingView view = new PublicOfferingView(offeringId, new CompanyId(UUID.randomUUID()), "公开工坊", PrimaryOfferingState.OPEN, Money.ofMinor(100), Money.ofMinor(10), 10, 2, 3, 7, Instant.parse("2026-08-14T12:00:00Z"), Instant.parse("2026-08-15T00:00:00Z"), Instant.parse("2026-08-17T00:00:00Z"));
+        when(offerings.listPublic(10)).thenReturn(CompletableFuture.completedFuture(List.of(view)));
+        when(offerings.findPublic(offeringId)).thenReturn(CompletableFuture.completedFuture(java.util.Optional.of(view)));
+        QueuedMain main = new QueuedMain(); CommandSender console = mock(CommandSender.class);
+        CompanyCommand command = new CompanyCommand(mock(CompanyRegistrationService.class), mock(CompanyQueryService.class), new Messages(null), main, rules, null, offerings); command.setAccepting(true);
+        command.onCommand(console, mock(Command.class), "company", new String[] {"ipo", "list"});
+        main.runAll();
+        command.onCommand(console, mock(Command.class), "company", new String[] {"ipo", "info", offeringId.toString()});
+        main.runAll();
+        assertThat(allPlainMessages(console)).anySatisfy(message -> assertThat(message).contains(offeringId.toString(), "状态=开放认购", "目标=100", "发行价=10", "最大=10", "已发行=2", "可认购=7"));
+        verify(offerings).listPublic(10); verify(offerings).findPublic(offeringId);
+    }
+
+    @Test
+    void public_ipo_queries_report_empty_missing_and_database_failure_in_chinese() {
+        PrimaryOfferingService offerings = mock(PrimaryOfferingService.class); UUID offeringId = UUID.randomUUID();
+        when(offerings.listPublic(10)).thenReturn(CompletableFuture.completedFuture(List.of()));
+        when(offerings.findPublic(offeringId)).thenReturn(CompletableFuture.completedFuture(java.util.Optional.empty()));
+        QueuedMain main = new QueuedMain(); CommandSender console = mock(CommandSender.class);
+        CompanyCommand command = new CompanyCommand(mock(CompanyRegistrationService.class), mock(CompanyQueryService.class), new Messages(null), main, rules, null, offerings); command.setAccepting(true);
+        command.onCommand(console, mock(Command.class), "company", new String[] {"ipo", "list"}); main.runAll();
+        command.onCommand(console, mock(Command.class), "company", new String[] {"ipo", "info", offeringId.toString()}); main.runAll();
+        when(offerings.listPublic(10)).thenReturn(CompletableFuture.failedFuture(new IllegalStateException("db down")));
+        command.onCommand(console, mock(Command.class), "company", new String[] {"ipo", "list"}); main.runAll();
+        assertThat(allPlainMessages(console)).contains("当前没有可公开查询的 IPO。", "未找到该公开 IPO。", "公开 IPO 查询失败，请稍后再试。");
+    }
 
     @Test
     void rejects_initial_shares_below_the_company_domain_minimum_during_configuration() {

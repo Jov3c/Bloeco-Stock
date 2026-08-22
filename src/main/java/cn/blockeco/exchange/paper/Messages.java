@@ -2,6 +2,7 @@ package cn.blockeco.exchange.paper;
 
 import net.kyori.adventure.text.Component;
 import java.util.List;
+import cn.blockeco.exchange.domain.finance.PublicOfferingView;
 import org.bukkit.configuration.ConfigurationSection;
 
 /** Configuration-backed user messages; defaults keep the first deployment usable. */
@@ -25,6 +26,12 @@ public final class Messages {
     public Component usageAssetBind() { return message("usage-asset-bind", "用法：/company asset bind <adapter> <external-key>"); }
     public Component usageIpoAnnounce() { return message("usage-ipo-announce", "用法：/company ipo announce <目标金额> <发行价>"); }
     public Component usageIpoSubscribe() { return message("usage-ipo-subscribe", "用法：/company ipo subscribe <发行UUID> <整数股>"); }
+    public Component usageIpoList() { return message("usage-ipo-list", "用法：/company ipo list"); }
+    public Component usageIpoInfo() { return message("usage-ipo-info", "用法：/company ipo info <发行UUID>"); }
+    public Component noPublicIpos() { return message("ipo-public-empty", "当前没有可公开查询的 IPO。"); }
+    public Component publicIpoNotFound() { return message("ipo-public-not-found", "未找到该公开 IPO。"); }
+    public Component ipoPublicQueryFailed() { return message("ipo-public-query-failed", "公开 IPO 查询失败，请稍后再试。"); }
+    public Component publicIpo(PublicOfferingView view) { return message("ipo-public-row", "发行=%id% 公司=%company% 状态=%state% 目标=%target% 发行价=%price% 最大=%maximum% 已发行=%issued% 可认购=%available% 公告=%announced% 开放=%opens% 关闭=%closes%").replaceText(b->b.matchLiteral("%id%").replacement(view.offeringId().toString())).replaceText(b->b.matchLiteral("%company%").replacement(view.companyDisplayName())).replaceText(b->b.matchLiteral("%state%").replacement(displayState(view.state()))).replaceText(b->b.matchLiteral("%target%").replacement(String.valueOf(view.target().minorUnits()))).replaceText(b->b.matchLiteral("%price%").replacement(String.valueOf(view.issuePrice().minorUnits()))).replaceText(b->b.matchLiteral("%maximum%").replacement(String.valueOf(view.maximumShares()))).replaceText(b->b.matchLiteral("%issued%").replacement(String.valueOf(view.issuedShares()))).replaceText(b->b.matchLiteral("%available%").replacement(String.valueOf(view.availableShares()))).replaceText(b->b.matchLiteral("%announced%").replacement(String.valueOf(view.announcedAt()))).replaceText(b->b.matchLiteral("%opens%").replacement(String.valueOf(view.opensAt()))).replaceText(b->b.matchLiteral("%closes%").replacement(String.valueOf(view.closesAt()))); }
     public Component ipoProcessing() { return message("ipo-processing", "IPO 认购正在处理中。"); }
     public Component ipoSubscriptionResult(cn.blockeco.exchange.application.SubscriptionResult.Status status) { return switch(status){case SUCCESS->message("ipo-subscribe-success","IPO 认购已完成。");case INSUFFICIENT_FUNDS->message("ipo-subscribe-insufficient","余额不足，认购未执行。");case NOT_OPEN->message("ipo-subscribe-not-open","该 IPO 当前不可认购。");case SOLD_OUT->message("ipo-subscribe-sold-out","该 IPO 已售罄。");case INVALID->message("ipo-subscribe-invalid","认购参数无效。");case RECOVERY_REQUIRED->message("ipo-subscribe-recovery","认购状态需要管理员恢复，请勿重复付款。");case PROVIDER_FAILURE->message("ipo-subscribe-provider-failure","经济服务失败，认购未完成。");}; }
     public Component assetBound() { return message("asset-bound", "资产绑定已完成。"); }
@@ -40,6 +47,8 @@ public final class Messages {
             for (String line : createRules.split("\\R")) lines.add(Component.text(line));
         }
         if (canInfo) lines.add(message("help-info", "查询：/company info <名称>"));
+        lines.add(message("help-ipo-list", "公开 IPO：/company ipo list"));
+        lines.add(message("help-ipo-info", "公开 IPO 详情：/company ipo info <发行UUID>"));
         if (canRecovery) lines.add(message("help-recovery", "恢复：/company recovery list"));
         return List.copyOf(lines);
     }
@@ -74,6 +83,9 @@ public final class Messages {
             case "REFUNDED" -> "已退款";
             case "AMBIGUOUS" -> "待人工核对";
             case "REJECTED" -> "已拒绝";
+            case "ANNOUNCED" -> "已公告";
+            case "OPEN" -> "开放认购";
+            case "CLOSED" -> "已关闭";
             default -> String.valueOf(state);
         };
     }

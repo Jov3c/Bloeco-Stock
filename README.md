@@ -74,6 +74,9 @@ Paper 完成保存，再让 BlockStock 的下一次启动完成迁移。
 | `/company recovery list` | `blockeco.admin.recovery`（默认：op） | 列出未解决/可见的注册记录；绝不强制退款。 |
 | `/company asset bind <adapter> <external-key>` | `blockeco.company.asset.bind`（默认：true） | 将创始人的公司绑定到外部资产；没有已验证适配器时会拒绝。 |
 | `/company ipo announce <目标金额> <发行价>` | `blockeco.company.ipo.announce`（默认：true） | 为已绑定资产的公司公告首次发行；公告 12 小时后才开放认购。 |
+| `/company ipo list` | 无需权限 | 列出全服公开 IPO；显示发行编号、状态、目标、发行价、股数容量和开闭时间。 |
+| `/company ipo info <发行UUID>` | 无需权限 | 显示一个公开 IPO 的完整只读条目；发行编号可直接用于认购命令。 |
+| `/company ipo subscribe <发行UUID> <整数股>` | `blockeco.company.ipo.subscribe`（默认：true） | 仅玩家可用，认购公开 IPO。 |
 | `/stockadmin config` | `blockstock.admin.config`（默认：op） | 显示当前最低注册资本。 |
 | `/stockadmin config min-capital <金额>` | `blockstock.admin.config`（默认：op） | 保存并立即发布下一笔公司注册使用的最低注册资本。金额必须为正数，且小数位必须恰好符合 `currency.scale`。 |
 
@@ -85,8 +88,8 @@ Paper 完成保存，再让 BlockStock 的下一次启动完成迁移。
 
 原版客户端的 Tab 补全按权限过滤：在 `/company ` 后，具备相应权限的玩家会获得
 `create`、`info`、`recovery`；在 `/company create 红石工坊 ` 后会获得配置的
-`30`、`50`、`70`；在 `/company recovery ` 后，管理员会获得 `list`。这些候选项
-不替代实际命令权限检查。
+`30`、`50`、`70`；在 `/company recovery ` 后，管理员会获得 `list`。在 `/company ipo ` 后，任何调用者都会获得
+`list`、`info`；玩家还会按各自权限获得 `announce`、`subscribe`。这些候选项不替代实际命令权限检查。
 
 ### 本次本地验收状态（2026-08-14）
 

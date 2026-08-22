@@ -41,3 +41,9 @@
 
 - The repository now owns ambiguity transitions: it reads the durable operation state, only conditionally changes `PREPARED`, `PLAYER_WITHDRAWN`, or `ESCROW_DEPOSITED`, and never mutates completed/refunded records. The immutable audit records `actualState`, `externalStage`, and `reason`.
 - Service failure boundaries pass an external stage/reason only; they cannot guess a state. Focused service/repository verification passed after this contract change.
+
+## Round 8: public IPO discovery
+
+- Added immutable `PublicOfferingView` and public repository/service queries. The SQL projection uses prepared joins only and exposes offering/company identity, terms, lifecycle times and safe share totals; it never exposes subscribers, escrow identity or saga diagnostics.
+- `issuedShares` counts only `COMPLETED` treasury operations. `reservedShares` counts every non-`REFUNDED` operation, including prepared/in-flight/ambiguous records, and `availableShares` is checked as `maximum-reserved`.
+- `/company ipo list` and `/company ipo info <发行UUID>` are public after the normal accepting gate, execute read work asynchronously and publish Chinese results on the Paper main thread. Help, config, metadata, README and tab completion include `list`/`info`; the latter are always offered while player-only `announce`/`subscribe` remain permission scoped.

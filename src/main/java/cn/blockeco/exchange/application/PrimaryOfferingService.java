@@ -3,6 +3,9 @@ package cn.blockeco.exchange.application;
 import cn.blockeco.exchange.domain.company.CompanyId;
 import cn.blockeco.exchange.domain.finance.PrimaryOffering;
 import cn.blockeco.exchange.domain.finance.TreasuryOperation;
+import cn.blockeco.exchange.domain.finance.PublicOfferingView;
+import java.util.List;
+import java.util.Optional;
 import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.ports.*;
 import java.nio.charset.StandardCharsets;
@@ -34,4 +37,6 @@ public class PrimaryOfferingService {
  private CompletionStage<SubscriptionResult> ambiguous(TreasuryOperation op,String stage,String reason){return CompletableFuture.supplyAsync(()->{try{transactions.inTransaction(c->{offerings.markAmbiguous(c,op.id(),stage,reason,clock.now());return null;});}catch(RuntimeException ignored){}return SubscriptionResult.of(SubscriptionResult.Status.RECOVERY_REQUIRED);},executor);}
  private SubscriptionResult preparationFailure(Throwable error){Throwable cause=error;while(cause instanceof CompletionException||cause instanceof ExecutionException){if(cause.getCause()==null)break;cause=cause.getCause();}if(cause instanceof PrimaryOfferingRepository.SubscriptionPreparationRejectedException rejected)return SubscriptionResult.of(switch(rejected.rejection()){case NOT_OPEN->SubscriptionResult.Status.NOT_OPEN;case SOLD_OUT->SubscriptionResult.Status.SOLD_OUT;case INVALID->SubscriptionResult.Status.INVALID;});if(cause instanceof IllegalArgumentException)return SubscriptionResult.of(SubscriptionResult.Status.INVALID);return SubscriptionResult.of(SubscriptionResult.Status.PROVIDER_FAILURE);}
  public CompletionStage<Void> closeExpired(Instant now){return CompletableFuture.runAsync(()->transactions.inTransaction(c->{offerings.closeExpired(c,now);return null;}),executor);}
+ public CompletionStage<List<PublicOfferingView>> listPublic(int limit){return CompletableFuture.supplyAsync(()->offerings.listPublic(limit),executor);}
+ public CompletionStage<Optional<PublicOfferingView>> findPublic(UUID offeringId){return CompletableFuture.supplyAsync(()->offerings.findPublic(offeringId),executor);}
 }

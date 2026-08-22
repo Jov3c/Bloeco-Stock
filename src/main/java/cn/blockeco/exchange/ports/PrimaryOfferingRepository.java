@@ -3,6 +3,8 @@ package cn.blockeco.exchange.ports;
 import cn.blockeco.exchange.domain.company.CompanyId;
 import cn.blockeco.exchange.domain.finance.PrimaryOffering;
 import cn.blockeco.exchange.domain.finance.TreasuryOperation;
+import cn.blockeco.exchange.domain.finance.PublicOfferingView;
+import java.util.List;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Instant;
@@ -20,6 +22,8 @@ public interface PrimaryOfferingRepository {
     record SubscriptionPreparation(TreasuryOperation operation, boolean newlyPrepared) { }
     void announce(Connection connection, PrimaryOffering offering) throws SQLException;
     Optional<PrimaryOffering> find(UUID offeringId);
+    List<PublicOfferingView> listPublic(int limit);
+    Optional<PublicOfferingView> findPublic(UUID offeringId);
     long paidInCapital(CompanyId companyId);
     boolean hasActiveAsset(CompanyId companyId);
     boolean isFounder(CompanyId companyId, UUID founder);
