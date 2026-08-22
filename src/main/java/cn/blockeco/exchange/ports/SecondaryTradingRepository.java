@@ -1,0 +1,27 @@
+package cn.blockeco.exchange.ports;
+
+import cn.blockeco.exchange.domain.finance.ShareHolding;
+import cn.blockeco.exchange.domain.money.Money;
+import cn.blockeco.exchange.domain.trading.LimitOrder;
+import cn.blockeco.exchange.domain.trading.Trade;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.util.Optional;
+import java.util.UUID;
+
+/** SQL facts for reservations and fills. Every write is part of the caller's transaction. */
+public interface SecondaryTradingRepository {
+    void reserveBuy(Connection connection, LimitOrder order) throws SQLException;
+    void reserveSell(Connection connection, LimitOrder order) throws SQLException;
+    Settlement settleTrade(Connection connection, Trade trade) throws SQLException;
+    void releaseOrder(Connection connection, UUID orderId, LimitOrder.State terminalState) throws SQLException;
+    void cancelTakerForSelfTrade(Connection connection, UUID orderId) throws SQLException;
+    Optional<LimitOrder> findOrder(UUID orderId);
+    Optional<ShareHolding> findHolding(cn.blockeco.exchange.domain.company.CompanyId companyId, UUID playerId);
+    Money compensationFund();
+
+    record Settlement(LimitOrder buyOrder, LimitOrder sellOrder, Money releasedCash) { }
+    final class InsufficientCashException extends IllegalStateException { public InsufficientCashException(String message) { super(message); } }
+    final class InsufficientSharesException extends IllegalStateException { public InsufficientSharesException(String message) { super(message); } }
+    final class OptimisticStateException extends IllegalStateException { public OptimisticStateException(String message) { super(message); } }
+}
