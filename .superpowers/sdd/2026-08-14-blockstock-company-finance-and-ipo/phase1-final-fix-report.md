@@ -28,5 +28,11 @@
 
 ## Round 5: actual-state ambiguity
 
+## Round 6: typed prepare rejection and subscribe command hardening
+
+- RED: a second buyer of an exhausted one-share offering received `NOT_OPEN`, because the service collapsed every prepare failure to that status.
+- GREEN: `PrimaryOfferingRepository.SubscriptionPreparationRejectedException` carries only `NOT_OPEN`, `SOLD_OUT`, or `INVALID`; SQL opening, missing-offering, capacity, and arithmetic boundaries classify deliberately, while unknown pre-Vault failures map to `PROVIDER_FAILURE`.
+- New regression tests: `sold_out_is_a_typed_result_and_does_not_call_vault_for_the_rejected_buyer`, `unknown_prepare_failure_is_provider_failure_not_not_open_and_never_calls_vault`, `persisted_withdrawn_or_escrow_deposited_subscription_never_replays_vault`, `post_vault_failures_return_recovery_and_record_ambiguous_without_replaying_a_second_vault_call`, `ipo_subscribe_validates_player_permission_and_arguments_before_dispatch`, `ipo_subscribe_dispatches_exact_arguments_and_completes_only_on_main_thread`, and `ipo_second_level_candidates_are_player_only_and_individually_permission_scoped`.
+
 - The repository now owns ambiguity transitions: it reads the durable operation state, only conditionally changes `PREPARED`, `PLAYER_WITHDRAWN`, or `ESCROW_DEPOSITED`, and never mutates completed/refunded records. The immutable audit records `actualState`, `externalStage`, and `reason`.
 - Service failure boundaries pass an external stage/reason only; they cannot guess a state. Focused service/repository verification passed after this contract change.

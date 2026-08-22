@@ -8,6 +8,8 @@ import cn.blockeco.exchange.application.CompanyQueryService;
 import cn.blockeco.exchange.application.CompanyRegistrationService;
 import cn.blockeco.exchange.application.CapitalizationRecoveryRecord;
 import cn.blockeco.exchange.application.AssetBindingService;
+import cn.blockeco.exchange.application.PrimaryOfferingService;
+import cn.blockeco.exchange.application.SubscriptionResult;
 import cn.blockeco.exchange.domain.company.CompanyId;
 import cn.blockeco.exchange.domain.finance.AssetBindingState;
 import cn.blockeco.exchange.infrastructure.CompanyAssetAdapterRegistryImpl;
@@ -314,6 +316,36 @@ class CompanyCommandTest {
             assertThat(allPlainMessages(player)).containsExactly("资产绑定失败。请确认资产归属和适配器。");
             assertThat(new SqlAssetBindingRepository(database.dataSource()).findActive(company, "missing", "plot-42")).isEmpty();
         } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
+    void ipo_subscribe_validates_player_permission_and_arguments_before_dispatch() {
+        PrimaryOfferingService offerings = mock(PrimaryOfferingService.class);
+        CompanyCommand command = new CompanyCommand(mock(CompanyRegistrationService.class), mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN, rules, null, offerings); command.setAccepting(true);
+        CommandSender console = mock(CommandSender.class);
+        command.onCommand(console, mock(Command.class), "company", new String[] {"ipo", "subscribe", UUID.randomUUID().toString(), "1"});
+        Player denied = mock(Player.class); when(denied.hasPermission("blockeco.company.ipo.subscribe")).thenReturn(false);
+        command.onCommand(denied, mock(Command.class), "company", new String[] {"ipo", "subscribe", UUID.randomUUID().toString(), "1"});
+        Player player = permittedPlayer("blockeco.company.ipo.subscribe"); when(player.getUniqueId()).thenReturn(founder);
+        command.onCommand(player, mock(Command.class), "company", new String[] {"ipo", "subscribe", "not-a-uuid", "1"});
+        command.onCommand(player, mock(Command.class), "company", new String[] {"ipo", "subscribe", UUID.randomUUID().toString(), "0"});
+        command.onCommand(player, mock(Command.class), "company", new String[] {"ipo", "subscribe", UUID.randomUUID().toString(), "-1"});
+        verifyNoInteractions(offerings);
+        assertThat(allPlainMessages(console)).contains("此命令只能由玩家执行。");
+        assertThat(allPlainMessages(denied)).contains("你没有权限。");
+        assertThat(allPlainMessages(player)).allMatch(message -> message.contains("用法：/company ipo subscribe"));
+    }
+
+    @Test
+    void ipo_subscribe_dispatches_exact_arguments_and_completes_only_on_main_thread() {
+        PrimaryOfferingService offerings = mock(PrimaryOfferingService.class); CompletableFuture<SubscriptionResult> future = new CompletableFuture<>(); when(offerings.subscribe(any(), any(), anyLong())).thenReturn(future);
+        QueuedMain main = new QueuedMain(); CompanyCommand command = new CompanyCommand(mock(CompanyRegistrationService.class), mock(CompanyQueryService.class), new Messages(null), main, rules, null, offerings); command.setAccepting(true);
+        Player player = permittedPlayer("blockeco.company.ipo.subscribe"); when(player.getUniqueId()).thenReturn(founder); UUID offering = UUID.randomUUID();
+        command.onCommand(player, mock(Command.class), "company", new String[] {"ipo", "subscribe", offering.toString(), "2"});
+        command.onCommand(player, mock(Command.class), "company", new String[] {"ipo", "subscribe", offering.toString(), "2"});
+        verify(offerings).subscribe(founder, offering, 2L); future.complete(SubscriptionResult.of(SubscriptionResult.Status.SOLD_OUT));
+        verify(player, times(2)).sendMessage(any(net.kyori.adventure.text.Component.class)); main.runAll();
+        assertThat(allPlainMessages(player)).contains("IPO 认购正在处理中。", "你的公司注册已在处理中。", "该 IPO 已售罄。");
     }
 
     private CompanyCommand commandWithAssetBindings(Database database, AssetBindingService assetBindings, QueuedMain main) {

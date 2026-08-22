@@ -30,6 +30,13 @@ class CompanyTabCompleterTest {
     }
 
     @Test
+    void ipo_second_level_candidates_are_player_only_and_individually_permission_scoped() {
+        assertThat(tab.complete(playerWith("blockeco.company.ipo.announce"), new String[] {"ipo", ""})).containsExactly("announce");
+        assertThat(tab.complete(playerWith("blockeco.company.ipo.subscribe"), new String[] {"ipo", ""})).containsExactly("subscribe");
+        assertThat(tab.complete(consoleWith("blockeco.company.ipo.announce", "blockeco.company.ipo.subscribe"), new String[] {"ipo", ""})).isEmpty();
+    }
+
+    @Test
     void unknown_and_incomplete_paths_return_empty_immutable_lists() {
         assertThat(tab.complete(playerWith("blockeco.company.create"), new String[] {"unknown"})).isEmpty();
         assertThat(tab.complete(playerWith("blockeco.company.create"), new String[] {"create", "name"})).isEmpty();

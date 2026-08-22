@@ -10,6 +10,13 @@ import java.util.Optional;
 import java.util.UUID;
 
 public interface PrimaryOfferingRepository {
+    enum SubscriptionPreparationRejection { NOT_OPEN, SOLD_OUT, INVALID }
+    final class SubscriptionPreparationRejectedException extends RuntimeException {
+        private final SubscriptionPreparationRejection rejection;
+        public SubscriptionPreparationRejectedException(SubscriptionPreparationRejection rejection, String message) { super(message); this.rejection = rejection; }
+        public SubscriptionPreparationRejectedException(SubscriptionPreparationRejection rejection, String message, Throwable cause) { super(message, cause); this.rejection = rejection; }
+        public SubscriptionPreparationRejection rejection() { return rejection; }
+    }
     record SubscriptionPreparation(TreasuryOperation operation, boolean newlyPrepared) { }
     void announce(Connection connection, PrimaryOffering offering) throws SQLException;
     Optional<PrimaryOffering> find(UUID offeringId);

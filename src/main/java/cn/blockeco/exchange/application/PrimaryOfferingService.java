@@ -18,7 +18,7 @@ public class PrimaryOfferingService {
  public CompletionStage<SubscriptionResult> subscribe(UUID subscriber,UUID offeringId,long shares){
   if(shares<=0)return CompletableFuture.completedFuture(SubscriptionResult.of(SubscriptionResult.Status.INVALID));
   return CompletableFuture.supplyAsync(()->{PrimaryOffering offering=offerings.find(offeringId).orElseThrow(()->new IllegalArgumentException("offering not found"));UUID id=UUID.nameUUIDFromBytes((offeringId+":"+subscriber+":"+shares).getBytes(StandardCharsets.UTF_8));return transactions.inTransaction(c->offerings.prepareSubscription(c,id,offering,subscriber,shares,clock.now()));},executor).handle((prepared,error)->{
-   if(error!=null)return CompletableFuture.completedFuture(SubscriptionResult.of(SubscriptionResult.Status.NOT_OPEN)); TreasuryOperation op=prepared.operation();
+   if(error!=null)return CompletableFuture.completedFuture(preparationFailure(error)); TreasuryOperation op=prepared.operation();
    if(op.state().name().equals("COMPLETED"))return CompletableFuture.completedFuture(SubscriptionResult.of(SubscriptionResult.Status.SUCCESS));
    if(!prepared.newlyPrepared())return CompletableFuture.completedFuture(op.state().name().equals("REFUNDED")?SubscriptionResult.of(SubscriptionResult.Status.PROVIDER_FAILURE):SubscriptionResult.of(SubscriptionResult.Status.RECOVERY_REQUIRED));
    return CompletableFuture.supplyAsync(()->escrow.withdrawPlayer(subscriber,op.amount(),op.id()),executor).handle((withdraw,withdrawError)->{
@@ -32,5 +32,6 @@ public class PrimaryOfferingService {
   }).thenCompose(x->x);
  }
  private CompletionStage<SubscriptionResult> ambiguous(TreasuryOperation op,String stage,String reason){return CompletableFuture.supplyAsync(()->{try{transactions.inTransaction(c->{offerings.markAmbiguous(c,op.id(),stage,reason,clock.now());return null;});}catch(RuntimeException ignored){}return SubscriptionResult.of(SubscriptionResult.Status.RECOVERY_REQUIRED);},executor);}
+ private SubscriptionResult preparationFailure(Throwable error){Throwable cause=error;while(cause instanceof CompletionException||cause instanceof ExecutionException){if(cause.getCause()==null)break;cause=cause.getCause();}if(cause instanceof PrimaryOfferingRepository.SubscriptionPreparationRejectedException rejected)return SubscriptionResult.of(switch(rejected.rejection()){case NOT_OPEN->SubscriptionResult.Status.NOT_OPEN;case SOLD_OUT->SubscriptionResult.Status.SOLD_OUT;case INVALID->SubscriptionResult.Status.INVALID;});if(cause instanceof IllegalArgumentException)return SubscriptionResult.of(SubscriptionResult.Status.INVALID);return SubscriptionResult.of(SubscriptionResult.Status.PROVIDER_FAILURE);}
  public CompletionStage<Void> closeExpired(Instant now){return CompletableFuture.runAsync(()->transactions.inTransaction(c->{offerings.closeExpired(c,now);return null;}),executor);}
 }
