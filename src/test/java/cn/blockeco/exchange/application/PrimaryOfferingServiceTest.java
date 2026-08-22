@@ -23,7 +23,7 @@ class PrimaryOfferingServiceTest {
    Fixtures.activeAsset(db,c,founder); PrimaryOfferingService service=new PrimaryOfferingService(repo,db,new Escrow(),Runnable::run,clock);
    var offer=service.announce(c,founder,Money.ofMinor(100),Money.ofMinor(10)).toCompletableFuture().join(); clock.now=offer.opensAt(); UUID subscriber=UUID.randomUUID(); UUID subscription=UUID.nameUUIDFromBytes((offer.id()+":"+subscriber+":2").getBytes(java.nio.charset.StandardCharsets.UTF_8));
    db.inTransaction(x->{repo.prepareSubscription(x,subscription,offer,subscriber,2,clock.now);return null;});
-   assertThatThrownBy(()->service.subscribe(subscriber,offer.id(),2).toCompletableFuture().join()).hasCauseInstanceOf(IllegalStateException.class).hasMessageContaining("recovery");
+   assertThat(service.subscribe(subscriber,offer.id(),2).toCompletableFuture().join().status()).isEqualTo(SubscriptionResult.Status.RECOVERY_REQUIRED);
   } finally {Files.deleteIfExists(file);} }
  @Test void requires_active_asset_caps_target_and_honors_exact_open_close_boundaries() throws Exception {
   Path file=Files.createTempFile("ipo-", ".db"); try(Database db=new Database("jdbc:sqlite:"+file)) { db.migrate(); CompanyId c=Fixtures.company(db,100_000); UUID founder=Fixtures.founder(db,c); MutableClock clock=new MutableClock();
@@ -32,9 +32,9 @@ class PrimaryOfferingServiceTest {
    Fixtures.activeAsset(db,c,founder);
    assertThatThrownBy(()->service.announce(c,founder,Money.ofMinor(500_001),Money.ofMinor(1)).toCompletableFuture().join()).hasCauseInstanceOf(IllegalArgumentException.class);
    var offer=service.announce(c,founder,Money.ofMinor(500_000),Money.ofMinor(100)).toCompletableFuture().join(); UUID buyer=UUID.randomUUID();
-   assertThatThrownBy(()->service.subscribe(buyer,offer.id(),1).toCompletableFuture().join()).hasCauseInstanceOf(IllegalStateException.class);
+   assertThat(service.subscribe(buyer,offer.id(),1).toCompletableFuture().join().status()).isEqualTo(SubscriptionResult.Status.NOT_OPEN);
    clock.now=offer.opensAt(); service.subscribe(buyer,offer.id(),2).toCompletableFuture().join();
-   clock.now=offer.closesAt(); assertThatThrownBy(()->service.subscribe(UUID.randomUUID(),offer.id(),1).toCompletableFuture().join()).hasCauseInstanceOf(IllegalStateException.class);
+   clock.now=offer.closesAt(); assertThat(service.subscribe(UUID.randomUUID(),offer.id(),1).toCompletableFuture().join().status()).isEqualTo(SubscriptionResult.Status.NOT_OPEN);
   } finally {Files.deleteIfExists(file);} }
  @Test void subscription_does_not_list_company_until_the_offering_closes() throws Exception {
   Path file=Files.createTempFile("ipo-list-on-close-", ".db"); try(Database db=new Database("jdbc:sqlite:"+file)) { db.migrate(); CompanyId c=Fixtures.company(db,100); UUID founder=Fixtures.founder(db,c); Fixtures.activeAsset(db,c,founder); MutableClock clock=new MutableClock(); SqlPrimaryOfferingRepository repo=new SqlPrimaryOfferingRepository(db.dataSource()); PrimaryOfferingService service=new PrimaryOfferingService(repo,db,new Escrow(),Runnable::run,clock);

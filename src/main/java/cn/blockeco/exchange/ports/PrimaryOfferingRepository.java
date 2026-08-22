@@ -21,5 +21,6 @@ public interface PrimaryOfferingRepository {
     void markEscrowDeposited(Connection connection, UUID subscriptionId, Instant now) throws SQLException;
     void completeSubscription(Connection connection, UUID subscriptionId, Instant now) throws SQLException;
     void markAmbiguous(Connection connection, UUID subscriptionId, String expectedState, Instant now) throws SQLException;
+    void cancelPrepared(Connection connection, UUID subscriptionId, Instant now) throws SQLException;
     void closeExpired(Connection connection, Instant now) throws SQLException;
 }

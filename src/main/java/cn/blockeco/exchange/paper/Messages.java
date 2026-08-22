@@ -24,6 +24,9 @@ public final class Messages {
     public Component usageRecovery() { return message("usage-recovery", "用法：/company recovery list"); }
     public Component usageAssetBind() { return message("usage-asset-bind", "用法：/company asset bind <adapter> <external-key>"); }
     public Component usageIpoAnnounce() { return message("usage-ipo-announce", "用法：/company ipo announce <目标金额> <发行价>"); }
+    public Component usageIpoSubscribe() { return message("usage-ipo-subscribe", "用法：/company ipo subscribe <发行UUID> <整数股>"); }
+    public Component ipoProcessing() { return message("ipo-processing", "IPO 认购正在处理中。"); }
+    public Component ipoSubscriptionResult(cn.blockeco.exchange.application.SubscriptionResult.Status status) { return switch(status){case SUCCESS->message("ipo-subscribe-success","IPO 认购已完成。");case INSUFFICIENT_FUNDS->message("ipo-subscribe-insufficient","余额不足，认购未执行。");case NOT_OPEN->message("ipo-subscribe-not-open","该 IPO 当前不可认购。");case SOLD_OUT->message("ipo-subscribe-sold-out","该 IPO 已售罄。");case INVALID->message("ipo-subscribe-invalid","认购参数无效。");case RECOVERY_REQUIRED->message("ipo-subscribe-recovery","认购状态需要管理员恢复，请勿重复付款。");case PROVIDER_FAILURE->message("ipo-subscribe-provider-failure","经济服务失败，认购未完成。");}; }
     public Component assetBound() { return message("asset-bound", "资产绑定已完成。"); }
     public Component assetBindFailed() { return message("asset-bind-failed", "资产绑定失败。请确认资产归属和适配器。"); }
     public Component ipoAnnounced() { return message("ipo-announced", "首次公开发行已公告，12 小时后开放认购。"); }
