@@ -58,7 +58,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         }
         saveDefaultConfig();
         try { validateConfiguration(); if (!getDataFolder().exists() && !getDataFolder().mkdirs()) throw new IllegalStateException("cannot create plugin data folder"); }
-        catch (RuntimeException failure) { failEnable("Invalid BlockStock configuration: " + failure.getMessage()); return; }
+        catch (RuntimeException failure) { failEnable(configurationFailureMessage(failure)); return; }
         if (!installInitializingCommand()) return;
         sqlExecutor = Executors.newSingleThreadExecutor(r -> { Thread thread = new Thread(r, "BlockStock-SQL"); thread.setDaemon(true); return thread; });
         runtime.attachExecutor(sqlExecutor);
@@ -90,7 +90,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         var primaryOfferings = new PrimaryOfferingService(new SqlPrimaryOfferingRepository(db.dataSource()), db, escrow, sqlExecutor, clock);
         command = new CompanyCommand(registration, new CompanyQueryService(companies, sagas, new SqlCompanyFinanceRepository(db.dataSource()), sqlExecutor), new Messages(getConfig().getConfigurationSection("messages")), mainThread, creationRules, assetBindings, primaryOfferings);
         var companyCommand = getCommand("company");
-        if (companyCommand == null) throw new IllegalStateException("company command is missing from plugin.yml");
+        if (companyCommand == null) throw new IllegalStateException(missingCompanyCommandMessage());
         companyCommand.setExecutor(command);
         var capitalizations = new CompanyCapitalizationService(finance, new SqlAuditLog(), db, escrow, mainThread, sqlExecutor, clock);
         new StartupRecoveryGate(failure -> getServer().getScheduler().runTask(this, () -> failEnable(startupFailureMessage(new IllegalStateException(failure))))).start(escrowFailure, capitalizations::recoverPendingCapitalizations, recovered -> getServer().getScheduler().runTask(this, () -> {
@@ -104,7 +104,7 @@ public final class BlockecoPlugin extends JavaPlugin {
     /** Takes ownership of the command before asynchronous migration begins. */
     private boolean installInitializingCommand() {
         var companyCommand = getCommand("company");
-        if (companyCommand == null) { failEnable("company command is missing from plugin.yml"); return false; }
+        if (companyCommand == null) { failEnable(missingCompanyCommandMessage()); return false; }
         Messages messages = new Messages(getConfig().getConfigurationSection("messages"));
         companyCommand.setExecutor((sender, command, label, args) -> { sender.sendMessage(messages.initializing()); return runtime.accepting(); });
         companyCommand.setTabCompleter(new CompanyTabCompleter(creationRules));
@@ -127,5 +127,7 @@ public final class BlockecoPlugin extends JavaPlugin {
     private void positive(String path, int scale) { if (configuredMoney(path, scale).minorUnits() <= 0) throw new IllegalArgumentException(path + " must be positive"); }
     private Money configuredMoney(String path, int scale) { return Money.fromMajor(new BigDecimal(getConfig().getString(path)), scale); }
     static String startupFailureMessage(Throwable failure) { String detail = failure.getMessage(); return "BlockStock 启动失败：" + (detail == null || detail.isBlank() ? "启动过程中发生未知异常（" + failure.getClass().getSimpleName() + "）" : detail); }
+    static String configurationFailureMessage(Throwable failure) { String detail = failure.getMessage(); return "BlockStock 配置无效" + (detail == null || detail.isBlank() ? "" : "（附加信息：" + detail + "）"); }
+    static String missingCompanyCommandMessage() { return "BlockStock 命令注册失败：未在 plugin.yml 中声明 company 命令"; }
     private void failEnable(String message) { getLogger().severe(message); getServer().getPluginManager().disablePlugin(this); }
 }

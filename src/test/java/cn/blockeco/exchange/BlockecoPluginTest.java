@@ -84,6 +84,14 @@ class BlockecoPluginTest {
     }
 
     @Test
+    void configuration_and_missing_command_startup_diagnostics_have_chinese_primary_text() {
+        assertThat(BlockecoPlugin.configurationFailureMessage(new IllegalArgumentException("currency.scale must be between 0 and 8")))
+                .isEqualTo("BlockStock 配置无效（附加信息：currency.scale must be between 0 and 8）");
+        assertThat(BlockecoPlugin.missingCompanyCommandMessage())
+                .isEqualTo("BlockStock 命令注册失败：未在 plugin.yml 中声明 company 命令");
+    }
+
+    @Test
     void plugin_metadata_entrypoint_exists_and_is_a_java_plugin() {
         Class<?> entrypoint = assertDoesNotThrow(() -> Class.forName(declaredEntrypointClass()));
 

@@ -152,6 +152,34 @@ class CompanyCommandTest {
     }
 
     @Test
+    void every_nonempty_subcommand_during_initialization_only_sends_initializing_without_services() {
+        CompanyRegistrationService registration = mock(CompanyRegistrationService.class); CompanyQueryService queries = mock(CompanyQueryService.class);
+        AssetBindingService assets = mock(AssetBindingService.class); cn.blockeco.exchange.application.PrimaryOfferingService offerings = mock(cn.blockeco.exchange.application.PrimaryOfferingService.class);
+        CommandSender sender = mock(CommandSender.class);
+        CompanyCommand command = new CompanyCommand(registration, queries, new Messages(null), DIRECT_MAIN, rules, assets, offerings);
+
+        for (String[] args : List.of(new String[] {"create", "North", "10000.00", "50"}, new String[] {"info", "North"}, new String[] {"recovery", "list"}, new String[] {"asset", "bind", "adapter", "key"}, new String[] {"ipo", "announce", "10000.00", "10.00"}, new String[] {"unknown"})) {
+            command.onCommand(sender, mock(Command.class), "company", args);
+        }
+
+        assertThat(allPlainMessages(sender)).containsOnly("BlockStock 正在初始化，请稍后再试。");
+        verifyNoInteractions(registration, queries, assets, offerings);
+    }
+
+    @Test
+    void root_help_during_initialization_is_readable_without_service_access() {
+        CompanyRegistrationService registration = mock(CompanyRegistrationService.class); CompanyQueryService queries = mock(CompanyQueryService.class);
+        AssetBindingService assets = mock(AssetBindingService.class); cn.blockeco.exchange.application.PrimaryOfferingService offerings = mock(cn.blockeco.exchange.application.PrimaryOfferingService.class);
+        CommandSender sender = mock(CommandSender.class);
+        CompanyCommand command = new CompanyCommand(registration, queries, new Messages(null), DIRECT_MAIN, rules, assets, offerings);
+
+        command.onCommand(sender, mock(Command.class), "company", new String[0]);
+
+        assertThat(allPlainMessages(sender)).contains("BlockStock 公司命令：");
+        verifyNoInteractions(registration, queries, assets, offerings);
+    }
+
+    @Test
     void info_during_initialization_does_not_query_and_only_reports_initializing() {
         CompanyQueryService queries = mock(CompanyQueryService.class);
         CommandSender sender = mock(CommandSender.class); when(sender.hasPermission("blockeco.company.info")).thenReturn(true);
