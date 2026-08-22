@@ -15,6 +15,8 @@ import cn.blockeco.exchange.domain.company.CompanyId;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.time.Clock;
+import java.time.ZoneOffset;
 import java.util.UUID;
 import java.util.List;
 import java.util.ArrayDeque;
@@ -27,7 +29,7 @@ class PublicStockQueryServiceTest {
     @Test void every_read_returns_a_stage_and_defers_repository_work_to_the_sql_executor() {
         PublicStockRepository repository = mock(PublicStockRepository.class);
         PublicMarketRow row = new PublicMarketRow("红石工业", "BS000001", Money.ofMinor(10), Money.ofMinor(10000), 1000, CompanyStatus.LISTED);
-        when(repository.market()).thenReturn(List.of(row));
+        when(repository.market(any(),any())).thenReturn(List.of(row));
         when(repository.listOfferings(2)).thenReturn(List.of());
         when(repository.findInfo("红石工业")).thenReturn(Optional.empty());
         when(repository.findAnnouncements("红石工业", 2)).thenReturn(List.of());
@@ -35,7 +37,7 @@ class PublicStockQueryServiceTest {
         when(repository.symbols()).thenReturn(List.of());
         QueuedExecutor sqlExecutor = new QueuedExecutor();
 
-        PublicStockQueryService service = new PublicStockQueryService(repository, sqlExecutor);
+        PublicStockQueryService service = new PublicStockQueryService(repository, sqlExecutor, Clock.fixed(Instant.EPOCH, ZoneOffset.UTC), ZoneOffset.UTC);
 
         CompletionStage<List<PublicMarketRow>> market = service.market();
         CompletionStage<?> ipo = service.ipo(2);

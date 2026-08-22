@@ -9,6 +9,9 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.List;
+import cn.blockeco.exchange.application.*;
+import cn.blockeco.exchange.domain.finance.SecuritiesCashAccount;
 
 /** SQL facts for reservations and fills. Every write is part of the caller's transaction. */
 public interface SecondaryTradingRepository {
@@ -26,6 +29,11 @@ public interface SecondaryTradingRepository {
     Optional<LimitOrder> findOrder(UUID orderId);
     Optional<ShareHolding> findHolding(cn.blockeco.exchange.domain.company.CompanyId companyId, UUID playerId);
     Money compensationFund();
+    PortfolioView portfolio(UUID playerId);
+    List<OrderView> orders(UUID playerId, int limit);
+    List<TradeView> trades(UUID playerId, int limit);
+    List<OrderBookLevel> bids(String stockCode, int depth);
+    List<OrderBookLevel> asks(String stockCode, int depth);
 
     record Settlement(LimitOrder buyOrder, LimitOrder sellOrder, Money releasedCash) { }
     final class InsufficientCashException extends IllegalStateException { public InsufficientCashException(String message) { super(message); } }

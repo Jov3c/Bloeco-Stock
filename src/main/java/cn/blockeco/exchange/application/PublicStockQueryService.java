@@ -9,12 +9,16 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
+import java.time.Clock;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 
 /** Fully asynchronous public read model. */
 public final class PublicStockQueryService {
-    private final PublicStockRepository repository; private final Executor sqlExecutor;
-    public PublicStockQueryService(PublicStockRepository repository, Executor sqlExecutor) { this.repository=Objects.requireNonNull(repository); this.sqlExecutor=Objects.requireNonNull(sqlExecutor); }
-    public CompletionStage<List<PublicMarketRow>> market() { return CompletableFuture.supplyAsync(repository::market, sqlExecutor); }
+    private final PublicStockRepository repository; private final Executor sqlExecutor; private final Clock clock; private final ZoneId zone;
+    public PublicStockQueryService(PublicStockRepository repository, Executor sqlExecutor) { this(repository,sqlExecutor,Clock.systemUTC(),ZoneId.of("UTC")); }
+    public PublicStockQueryService(PublicStockRepository repository, Executor sqlExecutor, Clock clock, ZoneId zone) { this.repository=Objects.requireNonNull(repository); this.sqlExecutor=Objects.requireNonNull(sqlExecutor);this.clock=Objects.requireNonNull(clock);this.zone=Objects.requireNonNull(zone); }
+    public CompletionStage<List<PublicMarketRow>> market() { ZonedDateTime start=clock.instant().atZone(zone).toLocalDate().atStartOfDay(zone); return CompletableFuture.supplyAsync(()->repository.market(start.toInstant(),start.plusDays(1).toInstant()), sqlExecutor); }
     public CompletionStage<List<PublicOfferingView>> ipo(int limit) { return CompletableFuture.supplyAsync(()->repository.listOfferings(limit), sqlExecutor); }
     public CompletionStage<Optional<PublicStockInfo>> info(String companyNameOrCode) { return CompletableFuture.supplyAsync(()->repository.findInfo(companyNameOrCode), sqlExecutor); }
     public CompletionStage<List<PublicAnnouncement>> announcements(String companyNameOrCode, int limit) { return CompletableFuture.supplyAsync(()->repository.findAnnouncements(companyNameOrCode,limit), sqlExecutor); }

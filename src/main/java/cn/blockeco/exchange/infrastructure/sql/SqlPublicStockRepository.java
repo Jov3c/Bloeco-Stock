@@ -19,8 +19,16 @@ public final class SqlPublicStockRepository implements PublicStockRepository {
     public SqlPublicStockRepository(DataSource dataSource) { this.dataSource=Objects.requireNonNull(dataSource); }
 
     @Override public List<PublicMarketRow> market() {
-        String sql="SELECT c.display_name,sl.stock_code,sl.issue_reference_price_minor,sl.issued_shares,c.status FROM stock_listings sl JOIN companies c ON c.id=sl.company_id ORDER BY sl.stock_code";
-        try(Connection c=dataSource.getConnection(); PreparedStatement s=c.prepareStatement(sql); ResultSet r=s.executeQuery()) { List<PublicMarketRow> rows=new ArrayList<>(); while(r.next()){long reference=r.getLong(3),shares=r.getLong(4); rows.add(new PublicMarketRow(r.getString(1),r.getString(2),Money.ofMinor(reference),Money.ofMinor(Math.multiplyExact(reference,shares)),shares,CompanyStatus.valueOf(r.getString(5))));} return List.copyOf(rows); } catch(SQLException e){throw failed("list public market",e);}
+        return market(Instant.MIN,Instant.MAX);
+    }
+    @Override public List<PublicMarketRow> market(Instant dayStart,Instant nextDayStart) {
+        Objects.requireNonNull(dayStart);Objects.requireNonNull(nextDayStart); if(!dayStart.isBefore(nextDayStart))throw new IllegalArgumentException("day bounds required");
+        String sql="SELECT c.display_name,sl.stock_code,sl.issue_reference_price_minor,sl.issued_shares,c.status,"+
+            "COALESCE((SELECT t.price_minor FROM stock_trades t WHERE t.company_id=sl.company_id ORDER BY t.occurred_at DESC,t.id DESC LIMIT 1),sl.issue_reference_price_minor),"+
+            "COALESCE((SELECT t.price_minor FROM stock_trades t WHERE t.company_id=sl.company_id AND t.occurred_at<? ORDER BY t.occurred_at DESC,t.id DESC LIMIT 1),sl.issue_reference_price_minor),"+
+            "COALESCE((SELECT SUM(t.shares) FROM stock_trades t WHERE t.company_id=sl.company_id AND t.occurred_at>=? AND t.occurred_at<?),0),"+
+            "COALESCE((SELECT SUM(t.notional_minor) FROM stock_trades t WHERE t.company_id=sl.company_id AND t.occurred_at>=? AND t.occurred_at<?),0) FROM stock_listings sl JOIN companies c ON c.id=sl.company_id WHERE c.status='LISTED' ORDER BY sl.stock_code";
+        try(Connection c=dataSource.getConnection();PreparedStatement s=c.prepareStatement(sql)){String start=dayStart.toString(),next=nextDayStart.toString();s.setString(1,start);s.setString(2,start);s.setString(3,next);s.setString(4,start);s.setString(5,next);try(ResultSet r=s.executeQuery()){List<PublicMarketRow> rows=new ArrayList<>();while(r.next()){long ref=r.getLong(3),shares=r.getLong(4),latest=r.getLong(6),previous=r.getLong(7);rows.add(new PublicMarketRow(r.getString(1),r.getString(2),Money.ofMinor(ref),Money.ofMinor(Math.multiplyExact(latest,shares)),shares,CompanyStatus.valueOf(r.getString(5)),Money.ofMinor(latest),Money.ofMinor(Math.subtractExact(latest,previous)),r.getLong(8),Money.ofMinor(r.getLong(9))));}return List.copyOf(rows);}}catch(SQLException e){throw failed("list public market",e);}
     }
     @Override public List<PublicOfferingView> listOfferings(int limit) {
         int bounded=limit(limit); String sql=publicOfferingSql()+" GROUP BY po.id ORDER BY po.announced_at DESC,po.id DESC LIMIT ?";
