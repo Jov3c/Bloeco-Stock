@@ -16,13 +16,22 @@ public final class VaultEconomyGateway implements EconomyGateway {
     public VaultEconomyGateway(Server server, int currencyScale) { this.server = server; this.currencyScale = currencyScale; }
     @Override public Result withdraw(UUID playerId, Money amount) { return invoke(playerId, amount, true); }
     @Override public Result deposit(UUID playerId, Money amount) { return invoke(playerId, amount, false); }
+    @Override public Money balance(UUID playerId) {
+        try {
+            RegisteredServiceProvider<Economy> registration = server.getServicesManager().getRegistration(Economy.class);
+            if (registration == null || registration.getProvider() == null) throw new IllegalStateException("no Vault economy provider registered");
+            double value = registration.getProvider().getBalance(server.getOfflinePlayer(playerId));
+            if (!Double.isFinite(value)) throw new IllegalStateException("Vault returned non-finite balance");
+            return Money.fromMajor(BigDecimal.valueOf(value), currencyScale);
+        } catch (RuntimeException exception) { throw new IllegalStateException("could not read Vault balance", exception); }
+    }
     private Result invoke(UUID playerId, Money amount, boolean withdrawal) {
         try {
             BigDecimal major = amount.toMajor(currencyScale);
             double value = major.doubleValue();
-            if (!Double.isFinite(value) || BigDecimal.valueOf(value).compareTo(major) != 0) return Result.providerFailure("amount cannot round-trip through Vault double");
+            if (!Double.isFinite(value) || BigDecimal.valueOf(value).compareTo(major) != 0) return Result.notCalledFailure("amount cannot round-trip through Vault double");
             RegisteredServiceProvider<Economy> registration = server.getServicesManager().getRegistration(Economy.class);
-            if (registration == null || registration.getProvider() == null) return Result.providerFailure("no Vault economy provider registered");
+            if (registration == null || registration.getProvider() == null) return Result.notCalledFailure("no Vault economy provider registered");
             OfflinePlayer player = server.getOfflinePlayer(playerId);
             Economy provider = registration.getProvider();
             if (withdrawal && !provider.has(player, value)) {
