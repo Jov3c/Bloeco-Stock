@@ -26,17 +26,20 @@ public final class VaultEconomyGateway implements EconomyGateway {
         } catch (RuntimeException exception) { throw new IllegalStateException("could not read Vault balance", exception); }
     }
     private Result invoke(UUID playerId, Money amount, boolean withdrawal) {
+        Economy provider; OfflinePlayer player; double value;
         try {
             BigDecimal major = amount.toMajor(currencyScale);
-            double value = major.doubleValue();
+            value = major.doubleValue();
             if (!Double.isFinite(value) || BigDecimal.valueOf(value).compareTo(major) != 0) return Result.notCalledFailure("amount cannot round-trip through Vault double");
             RegisteredServiceProvider<Economy> registration = server.getServicesManager().getRegistration(Economy.class);
             if (registration == null || registration.getProvider() == null) return Result.notCalledFailure("no Vault economy provider registered");
-            OfflinePlayer player = server.getOfflinePlayer(playerId);
-            Economy provider = registration.getProvider();
+            player = server.getOfflinePlayer(playerId);
+            provider = registration.getProvider();
             if (withdrawal && !provider.has(player, value)) {
                 return Result.insufficientFunds("provider reports insufficient funds");
             }
+        } catch (RuntimeException exception) { return Result.notCalledFailure(exception.getMessage()); }
+        try {
             EconomyResponse response = withdrawal ? provider.withdrawPlayer(player, value) : provider.depositPlayer(player, value);
             if (response != null && response.transactionSuccess()) return Result.success(response.errorMessage);
             String message = response == null ? "Vault economy returned no response" : response.errorMessage;
