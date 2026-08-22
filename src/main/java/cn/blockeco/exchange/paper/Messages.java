@@ -38,7 +38,13 @@ public final class Messages {
     public Component invalidStockMoney() { return message("stock-invalid-money", "金额必须为正数，且小数位必须与服务器货币精度一致。"); }
     public Component marketUnavailable() { return message("stock-market-unavailable", "证券交易功能暂不可用，请稍后再试。"); }
     public Component cash(PortfolioView view) { return message("stock-cash", "证券账户：可用=%available% 冻结=%reserved%").replaceText(b->b.matchLiteral("%available%").replacement(amount(view.availableCash()))).replaceText(b->b.matchLiteral("%reserved%").replacement(amount(view.reservedCash()))); }
-    public Component cashResult(SecuritiesCashResult result) { return message("stock-cash-result", "资金操作=%id% 状态=%state%：%detail%").replaceText(b->b.matchLiteral("%id%").replacement(result.operationId().toString())).replaceText(b->b.matchLiteral("%state%").replacement(displayState(result.state()))).replaceText(b->b.matchLiteral("%detail%").replacement(result.detail())); }
+    /** Do not expose Vault/provider exception text to players: it is operational detail, not UI. */
+    public Component cashResult(SecuritiesCashResult result) {
+        return message("stock-cash-result", "资金操作=%id% 状态=%state%：%outcome%")
+                .replaceText(b -> b.matchLiteral("%id%").replacement(result.operationId().toString()))
+                .replaceText(b -> b.matchLiteral("%state%").replacement(displayState(result.state())))
+                .replaceText(b -> b.matchLiteral("%outcome%").replacement(cashOutcome(result.state())));
+    }
     public List<Component> portfolio(PortfolioView view) { java.util.ArrayList<Component> lines=new java.util.ArrayList<>(); lines.add(cash(view)); if(view.holdings().isEmpty()) lines.add(message("stock-portfolio-empty","当前没有持仓。")); else view.holdings().forEach(h->lines.add(message("stock-portfolio-row","%company% [%code%] 可用=%available% 冻结=%reserved% 最新=%price%").replaceText(b->b.matchLiteral("%company%").replacement(h.companyName())).replaceText(b->b.matchLiteral("%code%").replacement(h.stockCode())).replaceText(b->b.matchLiteral("%available%").replacement(String.valueOf(h.availableShares()))).replaceText(b->b.matchLiteral("%reserved%").replacement(String.valueOf(h.reservedShares()))).replaceText(b->b.matchLiteral("%price%").replacement(amount(h.latestPrice()))))); return List.copyOf(lines); }
     public Component orderResult(OrderPlacementResult result) { return message("stock-order-result","订单=%id% %side% %code% 剩余=%remaining% 状态=%state%").replaceText(b->b.matchLiteral("%id%").replacement(result.order().id().toString())).replaceText(b->b.matchLiteral("%side%").replacement(result.order().side()==cn.blockeco.exchange.domain.trading.LimitOrder.Side.BUY?"买入":"卖出")).replaceText(b->b.matchLiteral("%code%").replacement(result.order().stockCode())).replaceText(b->b.matchLiteral("%remaining%").replacement(String.valueOf(result.order().remainingShares()))).replaceText(b->b.matchLiteral("%state%").replacement(displayState(result.order().state()))); }
     public Component order(OrderView value) { return message("stock-order-row","订单=%id% %side% %code% 限价=%price% 剩余=%remaining%/%total% 状态=%state%").replaceText(b->b.matchLiteral("%id%").replacement(value.id().toString())).replaceText(b->b.matchLiteral("%side%").replacement(value.side()==cn.blockeco.exchange.domain.trading.LimitOrder.Side.BUY?"买":"卖")).replaceText(b->b.matchLiteral("%code%").replacement(value.stockCode())).replaceText(b->b.matchLiteral("%price%").replacement(amount(value.limitPrice()))).replaceText(b->b.matchLiteral("%remaining%").replacement(String.valueOf(value.remainingShares()))).replaceText(b->b.matchLiteral("%total%").replacement(String.valueOf(value.originalShares()))).replaceText(b->b.matchLiteral("%state%").replacement(displayState(value.state()))); }
@@ -56,7 +62,7 @@ public final class Messages {
     public Component stockNotFound() { return message("stock-not-found", "未找到公司或股票代码。 "); }
     public Component openIpoNotFound() { return message("stock-open-ipo-not-found", "该公司当前没有开放认购的 IPO。 "); }
     public Component announcementsEmpty() { return message("stock-announcements-empty", "当前没有公开公告。 "); }
-    public Component marketRow(PublicMarketRow row) { return message("stock-market-row", "%company% [%code%] 参考价（暂无成交）=%price% 市值=%capitalization% 已发行=%shares% 状态=%state%").replaceText(b->b.matchLiteral("%company%").replacement(row.companyName())).replaceText(b->b.matchLiteral("%code%").replacement(row.stockCode())).replaceText(b->b.matchLiteral("%price%").replacement(amount(row.issueReferencePrice()))).replaceText(b->b.matchLiteral("%capitalization%").replacement(amount(row.marketCapitalization()))).replaceText(b->b.matchLiteral("%shares%").replacement(String.valueOf(row.issuedShares()))).replaceText(b->b.matchLiteral("%state%").replacement(displayState(row.status()))); }
+    public Component marketRow(PublicMarketRow row) { return message("stock-market-row", "%company% [%code%] 最新=%latest% 涨跌=%change% 成交量=%volume% 成交额=%turnover% 市值=%capitalization% 已发行=%shares% 状态=%state%").replaceText(b->b.matchLiteral("%company%").replacement(row.companyName())).replaceText(b->b.matchLiteral("%code%").replacement(row.stockCode())).replaceText(b->b.matchLiteral("%latest%").replacement(amount(row.latestPrice()))).replaceText(b->b.matchLiteral("%change%").replacement(signedAmount(row.change()))).replaceText(b->b.matchLiteral("%volume%").replacement(String.valueOf(row.volume()))).replaceText(b->b.matchLiteral("%turnover%").replacement(amount(row.turnover()))).replaceText(b->b.matchLiteral("%capitalization%").replacement(amount(row.marketCapitalization()))).replaceText(b->b.matchLiteral("%shares%").replacement(String.valueOf(row.issuedShares()))).replaceText(b->b.matchLiteral("%state%").replacement(displayState(row.status()))); }
     public Component stockIpoRow(PublicOfferingView view) { return publicIpo(view); }
     public Component stockInfo(PublicStockInfo info) { return message("stock-info-row", "%company% 代码=%code% 状态=%state% 参考价（暂无成交）=%price% 已发行=%shares%").replaceText(b->b.matchLiteral("%company%").replacement(info.companyName())).replaceText(b->b.matchLiteral("%code%").replacement(info.stockCode().orElse("暂无"))).replaceText(b->b.matchLiteral("%state%").replacement(displayState(info.status()))).replaceText(b->b.matchLiteral("%price%").replacement(info.issueReferencePrice().map(this::amount).orElse("暂无"))).replaceText(b->b.matchLiteral("%shares%").replacement(String.valueOf(info.issuedShares()))); }
     public Component announcement(PublicAnnouncement announcement) { return message("stock-announcement-row", "%company% 公告[%time%] %body%").replaceText(b->b.matchLiteral("%company%").replacement(announcement.companyName())).replaceText(b->b.matchLiteral("%time%").replacement(announcement.publishedAt().toString())).replaceText(b->b.matchLiteral("%body%").replacement(announcement.body())); }
@@ -79,7 +85,7 @@ public final class Messages {
     public Component noPublicIpos() { return message("ipo-public-empty", "当前没有可公开查询的 IPO。"); }
     public Component publicIpoNotFound() { return message("ipo-public-not-found", "未找到该公开 IPO。"); }
     public Component ipoPublicQueryFailed() { return message("ipo-public-query-failed", "公开 IPO 查询失败，请稍后再试。"); }
-    public Component publicIpo(PublicOfferingView view) { return message("ipo-public-row", "发行=%id% 公司=%company% 状态=%state% 目标=%target% 发行价=%price% 最大=%maximum% 已发行=%issued% 可认购=%available% 公告=%announced% 开放=%opens% 关闭=%closes%").replaceText(b->b.matchLiteral("%id%").replacement(view.offeringId().toString())).replaceText(b->b.matchLiteral("%company%").replacement(view.companyDisplayName())).replaceText(b->b.matchLiteral("%state%").replacement(displayState(view.state()))).replaceText(b->b.matchLiteral("%target%").replacement(amount(view.target()))).replaceText(b->b.matchLiteral("%price%").replacement(amount(view.issuePrice()))).replaceText(b->b.matchLiteral("%maximum%").replacement(String.valueOf(view.maximumShares()))).replaceText(b->b.matchLiteral("%issued%").replacement(String.valueOf(view.issuedShares()))).replaceText(b->b.matchLiteral("%available%").replacement(String.valueOf(view.availableShares()))).replaceText(b->b.matchLiteral("%announced%").replacement(String.valueOf(view.announcedAt()))).replaceText(b->b.matchLiteral("%opens%").replacement(String.valueOf(view.opensAt()))).replaceText(b->b.matchLiteral("%closes%").replacement(String.valueOf(view.closesAt()))); }
+    public Component publicIpo(PublicOfferingView view) { return message("ipo-public-row", "发行=%id% 公司=%company% 状态=%state% 目标=%target% 发行价=%price% 最大=%maximum% 已发行=%issued% 可认购=%available% 公告=%announced% 开放=%opens% 关闭=%closes%").replaceText(b->b.matchLiteral("%id%").replacement(view.offeringId().toString())).replaceText(b->b.matchLiteral("%company%").replacement(view.companyDisplayName())).replaceText(b->b.matchLiteral("%state%").replacement(displayIpoState(view.state()))).replaceText(b->b.matchLiteral("%target%").replacement(amount(view.target()))).replaceText(b->b.matchLiteral("%price%").replacement(amount(view.issuePrice()))).replaceText(b->b.matchLiteral("%maximum%").replacement(String.valueOf(view.maximumShares()))).replaceText(b->b.matchLiteral("%issued%").replacement(String.valueOf(view.issuedShares()))).replaceText(b->b.matchLiteral("%available%").replacement(String.valueOf(view.availableShares()))).replaceText(b->b.matchLiteral("%announced%").replacement(String.valueOf(view.announcedAt()))).replaceText(b->b.matchLiteral("%opens%").replacement(String.valueOf(view.opensAt()))).replaceText(b->b.matchLiteral("%closes%").replacement(String.valueOf(view.closesAt()))); }
     public Component ipoProcessing() { return message("ipo-processing", "IPO 认购正在处理中。"); }
     public Component ipoSubscriptionResult(cn.blockeco.exchange.application.SubscriptionResult.Status status) { return switch(status){case SUCCESS->message("ipo-subscribe-success","IPO 认购已完成。");case INSUFFICIENT_FUNDS->message("ipo-subscribe-insufficient","余额不足，认购未执行。");case NOT_OPEN->message("ipo-subscribe-not-open","该 IPO 当前不可认购。");case SOLD_OUT->message("ipo-subscribe-sold-out","该 IPO 已售罄。");case INVALID->message("ipo-subscribe-invalid","认购参数无效。");case RECOVERY_REQUIRED->message("ipo-subscribe-recovery","认购状态需要管理员恢复，请勿重复付款。");case PROVIDER_FAILURE->message("ipo-subscribe-provider-failure","经济服务失败，认购未完成。");}; }
     public Component assetBound() { return message("asset-bound", "资产绑定已完成。"); }
@@ -118,6 +124,24 @@ public final class Messages {
     public Component ipoSubscriptionRecoveryRecord(cn.blockeco.exchange.application.IpoSubscriptionRecoveryRecord record) { return message("ipo-subscription-recovery-record", "IPO 恢复：操作=%id% 发行=%offering% 公司=%company% 玩家=%player% 股数=%shares% 金额=%amount% 状态=%state% 时间=%time% 原因=%reason%").replaceText(b->b.matchLiteral("%id%").replacement(record.subscriptionId().toString())).replaceText(b->b.matchLiteral("%offering%").replacement(record.offeringId().toString())).replaceText(b->b.matchLiteral("%company%").replacement(record.companyId().value().toString())).replaceText(b->b.matchLiteral("%player%").replacement(record.playerId().toString())).replaceText(b->b.matchLiteral("%shares%").replacement(String.valueOf(record.shares()))).replaceText(b->b.matchLiteral("%amount%").replacement(String.valueOf(record.amount().minorUnits()))).replaceText(b->b.matchLiteral("%state%").replacement(displayState(record.state()))).replaceText(b->b.matchLiteral("%time%").replacement(record.updatedAt().toString())).replaceText(b->b.matchLiteral("%reason%").replacement(record.reason())); }
     public Component result(String text) { return Component.text(text); }
 
+    private String signedAmount(cn.blockeco.exchange.domain.money.Money value) {
+        String rendered = amount(value);
+        return value.minorUnits() > 0 ? "+" + rendered : rendered;
+    }
+
+    private String cashOutcome(cn.blockeco.exchange.domain.finance.SecuritiesCashOperationState state) {
+        return switch (state) {
+            case COMPLETED -> "已完成，请以证券账户余额为准。";
+            case PREPARED, PLAYER_WITHDRAWN, ESCROW_DEPOSITED, ESCROW_WITHDRAWN, PLAYER_DEPOSITED -> "正在处理，请勿重复提交。";
+            case FAILED -> "未完成，资金未发生可确认变动。";
+            case AMBIGUOUS -> "状态待人工核对，请勿重复提交。";
+        };
+    }
+
+    private String displayIpoState(Object state) {
+        return "OPEN".equals(String.valueOf(state)) ? "开放认购" : displayState(state);
+    }
+
     private String displayState(Object state) {
         return switch (String.valueOf(state)) {
             case "PENDING_ASSET_BINDING" -> "待绑定资产";
@@ -142,7 +166,7 @@ public final class Messages {
             case "AMBIGUOUS" -> "待人工核对";
             case "REJECTED" -> "已拒绝";
             case "ANNOUNCED" -> "已公告";
-            case "OPEN" -> "开放认购";
+            case "OPEN" -> "待成交";
             case "CLOSED" -> "已关闭";
             default -> String.valueOf(state);
         };

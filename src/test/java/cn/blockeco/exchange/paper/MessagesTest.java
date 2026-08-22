@@ -5,7 +5,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import cn.blockeco.exchange.domain.company.CompanyStatus;
 import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.application.PublicMarketRow;
+import cn.blockeco.exchange.application.SecuritiesCashResult;
 import cn.blockeco.exchange.domain.registration.RegistrationSagaState;
+import cn.blockeco.exchange.domain.finance.SecuritiesCashOperationState;
 import java.math.BigDecimal;
 import java.util.List;
 import net.kyori.adventure.text.Component;
@@ -15,6 +17,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.configuration.file.YamlConfiguration;
 
 import java.nio.charset.StandardCharsets;
 import java.util.stream.Stream;
@@ -28,8 +31,35 @@ class MessagesTest {
         String config = new String(getClass().getResourceAsStream("/config.yml").readAllBytes(),
                 StandardCharsets.UTF_8);
 
-        assertThat(config).contains("公司创建正在处理中", "%name%", "%state%", "%id%");
+        assertThat(config).contains("公司创建正在处理中", "%name%", "%state%", "%id%",
+                "deposit <金额>", "withdraw <金额>", "buy <代码>", "sell <代码>",
+                "cancel <订单UUID>", "portfolio", "orders [1-50]", "trades [1-50]", "book <代码>");
         assertThat(config).doesNotContain("Company registration is processing.");
+    }
+
+    @Test
+    void actual_default_config_renders_secondary_usage_and_live_market_fields() throws Exception {
+        YamlConfiguration config = YamlConfiguration.loadConfiguration(new java.io.InputStreamReader(
+                getClass().getResourceAsStream("/config.yml"), StandardCharsets.UTF_8));
+        Messages messages = new Messages(config);
+        PublicMarketRow row = new PublicMarketRow("红石工业", "BS000001", Money.ofMinor(1000),
+                Money.ofMinor(1400), 10, CompanyStatus.LISTED, Money.ofMinor(140), Money.ofMinor(20),
+                7, Money.ofMinor(980));
+
+        assertThat(plain(messages.usageStock())).contains("market", "book", "cash", "deposit", "withdraw",
+                "buy", "sell", "cancel", "portfolio", "orders", "trades");
+        assertThat(plain(messages.marketRow(row))).contains("最新=1.40", "涨跌=+0.20", "成交量=7",
+                "成交额=9.80", "市值=14.00").doesNotContain("暂无成交");
+    }
+
+    @Test
+    void cash_result_never_exposes_provider_detail_and_uses_controlled_chinese_outcome() {
+        Messages messages = new Messages(null);
+        SecuritiesCashResult result = new SecuritiesCashResult(java.util.UUID.randomUUID(),
+                SecuritiesCashOperationState.AMBIGUOUS, "Vault provider IllegalStateException: secret");
+
+        assertThat(plain(messages.cashResult(result))).contains("待人工核对", "请勿重复提交")
+                .doesNotContain("Vault", "provider", "secret", "IllegalStateException");
     }
 
     @Test
@@ -116,9 +146,11 @@ class MessagesTest {
         ConfigurationSection root = mock(ConfigurationSection.class);
         when(root.getInt("currency.scale", 2)).thenReturn(2);
         Messages messages = new Messages(root);
-        PublicMarketRow row = new PublicMarketRow("红石工业", "BS000001", Money.ofMinor(1000), Money.ofMinor(123400), 10, CompanyStatus.LISTED);
+        PublicMarketRow row = new PublicMarketRow("红石工业", "BS000001", Money.ofMinor(1000), Money.ofMinor(123400), 10, CompanyStatus.LISTED,
+                Money.ofMinor(1234), Money.ofMinor(-12), 42, Money.ofMinor(51828));
 
-        assertThat(plain(messages.marketRow(row))).contains("参考价（暂无成交）=10.00", "市值=1234.00").doesNotContain("=1000", "=123400");
+        assertThat(plain(messages.marketRow(row))).contains("最新=12.34", "涨跌=-0.12", "成交额=518.28", "市值=1234.00")
+                .doesNotContain("暂无成交", "=1000", "=123400");
     }
 
     private static Stream<Arguments> companyStates() {
