@@ -20,7 +20,7 @@ public final class SqlSecondaryTradingRepository implements SecondaryTradingRepo
     @Override public LimitOrder reserveSell(Connection c, LimitOrder order)throws SQLException { requireTransaction(c); requireNew(order, LimitOrder.Side.SELL); LimitOrder accepted=withSequence(order,nextSequence(c)); reserveShares(c,accepted.companyId(),accepted.playerId(),accepted.remainingShares()); insertOrder(c,accepted); return accepted; }
     @Override public boolean isListed(Connection c, LimitOrder order) throws SQLException { return findListing(c, order.stockCode()).filter(listing -> listing.companyId().equals(order.companyId())).isPresent(); }
     @Override public Optional<cn.blockeco.exchange.domain.finance.StockListing> findListing(Connection c, String code) throws SQLException {
-        try (PreparedStatement s=c.prepareStatement("SELECT company_id,stock_code,issue_reference_price_minor,issued_shares,listed_at FROM stock_listings WHERE stock_code=?")) {
+        try (PreparedStatement s=c.prepareStatement("SELECT sl.company_id,sl.stock_code,sl.issue_reference_price_minor,sl.issued_shares,sl.listed_at FROM stock_listings sl JOIN companies c ON c.id=sl.company_id AND c.status='LISTED' WHERE sl.stock_code=?")) {
             s.setString(1,code); try(ResultSet r=s.executeQuery()) { return r.next()?Optional.of(new cn.blockeco.exchange.domain.finance.StockListing(new CompanyId(UUID.fromString(r.getString(1))),r.getString(2),Money.ofMinor(r.getLong(3)),r.getLong(4),Instant.parse(r.getString(5)))):Optional.empty(); }
         }
     }
