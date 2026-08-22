@@ -21,15 +21,27 @@ public record Trade(
     public Trade {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(companyId, "companyId");
-        if (stockCode == null || !stockCode.matches("BS\\d{6}")) throw new IllegalArgumentException("stockCode must be a stock code");
+        if (!isValidStockCode(stockCode)) throw new IllegalArgumentException("stockCode must be a bounded stock code");
         Objects.requireNonNull(buyOrderId, "buyOrderId");
         Objects.requireNonNull(sellOrderId, "sellOrderId");
+        if (buyOrderId.equals(sellOrderId)) throw new IllegalArgumentException("buyOrderId and sellOrderId must differ");
         if (shares <= 0) throw new IllegalArgumentException("shares must be positive");
         Objects.requireNonNull(price, "price");
         if (price.minorUnits() <= 0) throw new IllegalArgumentException("price must be positive");
         Objects.requireNonNull(notional, "notional");
         if (notional.minorUnits() <= 0) throw new IllegalArgumentException("notional must be positive");
         Objects.requireNonNull(buyerFee, "buyerFee").requireNonNegative("buyerFee");
+        if (notional.minorUnits() != Math.multiplyExact(price.minorUnits(), shares)) {
+            throw new IllegalArgumentException("notional must equal price times shares");
+        }
+        if (buyerFee.minorUnits() > notional.minorUnits()) {
+            throw new IllegalArgumentException("buyerFee must not exceed notional");
+        }
         Objects.requireNonNull(occurredAt, "occurredAt");
+    }
+
+    private static boolean isValidStockCode(String stockCode) {
+        return stockCode != null && stockCode.matches("BS\\d{6}")
+                && Integer.parseInt(stockCode.substring(2)) >= 1;
     }
 }

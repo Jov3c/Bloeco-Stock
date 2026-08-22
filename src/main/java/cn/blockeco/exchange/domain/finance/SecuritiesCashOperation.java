@@ -25,10 +25,35 @@ public record SecuritiesCashOperation(
         }
         Objects.requireNonNull(direction, "direction");
         Objects.requireNonNull(state, "state");
-        if (lastConfirmedExternalStage != null && !lastConfirmedExternalStage.isConfirmedExternalStage()) {
-            throw new IllegalArgumentException("lastConfirmedExternalStage must be an external stage");
-        }
+        validateStage(direction, state, lastConfirmedExternalStage);
         Objects.requireNonNull(createdAt, "createdAt");
         Objects.requireNonNull(updatedAt, "updatedAt");
+    }
+
+    private static void validateStage(SecuritiesCashDirection direction, SecuritiesCashOperationState state,
+            SecuritiesCashOperationState lastConfirmedExternalStage) {
+        boolean valid = switch (direction) {
+            case DEPOSIT -> switch (state) {
+                case PREPARED, FAILED -> lastConfirmedExternalStage == null;
+                case PLAYER_WITHDRAWN -> lastConfirmedExternalStage == SecuritiesCashOperationState.PLAYER_WITHDRAWN;
+                case ESCROW_DEPOSITED, COMPLETED -> lastConfirmedExternalStage == SecuritiesCashOperationState.ESCROW_DEPOSITED;
+                case AMBIGUOUS -> lastConfirmedExternalStage == null
+                        || lastConfirmedExternalStage == SecuritiesCashOperationState.PLAYER_WITHDRAWN
+                        || lastConfirmedExternalStage == SecuritiesCashOperationState.ESCROW_DEPOSITED;
+                default -> false;
+            };
+            case WITHDRAW -> switch (state) {
+                case PREPARED, FAILED -> lastConfirmedExternalStage == null;
+                case ESCROW_WITHDRAWN -> lastConfirmedExternalStage == SecuritiesCashOperationState.ESCROW_WITHDRAWN;
+                case PLAYER_DEPOSITED, COMPLETED -> lastConfirmedExternalStage == SecuritiesCashOperationState.PLAYER_DEPOSITED;
+                case AMBIGUOUS -> lastConfirmedExternalStage == null
+                        || lastConfirmedExternalStage == SecuritiesCashOperationState.ESCROW_WITHDRAWN
+                        || lastConfirmedExternalStage == SecuritiesCashOperationState.PLAYER_DEPOSITED;
+                default -> false;
+            };
+        };
+        if (!valid) {
+            throw new IllegalArgumentException("state and lastConfirmedExternalStage do not match direction");
+        }
     }
 }

@@ -8,6 +8,7 @@ import cn.blockeco.exchange.domain.company.CompanyId;
 import cn.blockeco.exchange.domain.company.DividendRate;
 import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.domain.trading.LimitOrder;
+import cn.blockeco.exchange.domain.trading.Trade;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
@@ -111,5 +112,62 @@ class FinanceValuesTest {
                         ANNOUNCED_AT, LimitOrder.State.OPEN))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("remainingShares");
+    }
+
+    @Test
+    void securities_cash_operation_rejects_a_cross_direction_confirmed_stage() {
+        assertThatThrownBy(() -> new SecuritiesCashOperation(
+                        UUID.randomUUID(), UUID.randomUUID(), Money.ofMinor(10), SecuritiesCashDirection.DEPOSIT,
+                        SecuritiesCashOperationState.AMBIGUOUS, SecuritiesCashOperationState.ESCROW_WITHDRAWN,
+                        null, ANNOUNCED_AT, ANNOUNCED_AT))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("direction");
+    }
+
+    @Test
+    void active_buy_order_rejects_a_zero_cash_reserve() {
+        assertThatThrownBy(() -> new LimitOrder(
+                        UUID.randomUUID(), COMPANY_ID, "BS000001", UUID.randomUUID(), LimitOrder.Side.BUY,
+                        Money.ofMinor(10), 10, 10, 1, Money.zero(), Money.zero(), Money.zero(), 100,
+                        ANNOUNCED_AT, LimitOrder.State.OPEN))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("reservedCash");
+    }
+
+    @Test
+    void sell_order_rejects_buy_only_money_fields() {
+        assertThatThrownBy(() -> new LimitOrder(
+                        UUID.randomUUID(), COMPANY_ID, "BS000001", UUID.randomUUID(), LimitOrder.Side.SELL,
+                        Money.ofMinor(10), 10, 10, 1, Money.ofMinor(1), Money.zero(), Money.zero(), 0,
+                        ANNOUNCED_AT, LimitOrder.State.OPEN))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("sell");
+    }
+
+    @Test
+    void filled_buy_order_rejects_zero_notional_after_shares_filled() {
+        assertThatThrownBy(() -> new LimitOrder(
+                        UUID.randomUUID(), COMPANY_ID, "BS000001", UUID.randomUUID(), LimitOrder.Side.BUY,
+                        Money.ofMinor(10), 10, 0, 1, Money.zero(), Money.zero(), Money.zero(), 100,
+                        ANNOUNCED_AT, LimitOrder.State.FILLED))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("filledNotional");
+    }
+
+    @Test
+    void trade_rejects_out_of_range_code_identical_orders_and_inexact_notional() {
+        UUID orderId = UUID.randomUUID();
+        assertThatThrownBy(() -> new Trade(UUID.randomUUID(), COMPANY_ID, "BS000000", orderId, orderId,
+                        2, Money.ofMinor(10), Money.ofMinor(19), Money.zero(), ANNOUNCED_AT))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("stockCode");
+        assertThatThrownBy(() -> new Trade(UUID.randomUUID(), COMPANY_ID, "BS000001", orderId, orderId,
+                        2, Money.ofMinor(10), Money.ofMinor(20), Money.zero(), ANNOUNCED_AT))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("buyOrderId");
+        assertThatThrownBy(() -> new Trade(UUID.randomUUID(), COMPANY_ID, "BS000001", orderId, UUID.randomUUID(),
+                        2, Money.ofMinor(10), Money.ofMinor(19), Money.zero(), ANNOUNCED_AT))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("notional");
     }
 }

@@ -16,6 +16,8 @@ import org.junit.jupiter.api.Test;
 
 class MigrationTest {
 
+    private static final Instant ANNOUNCED_AT = Instant.parse("2026-08-14T12:00:00Z");
+
     @Test
     void published_v001_fixture_is_byte_identical_to_the_current_v001_migration() throws Exception {
         assertThat(MigrationTest.class.getResourceAsStream("/legacy/V001-published.sql").readAllBytes())
@@ -270,6 +272,56 @@ class MigrationTest {
                 assertThat(singleLong(connection, "SELECT COUNT(*) FROM escrow_ledger_entries "
                         + "WHERE liability_kind = 'COMPANY_TREASURY'"))
                         .isEqualTo(1);
+                assertThat(singleString(connection, "SELECT occurred_at FROM escrow_ledger_entries "
+                        + "WHERE liability_kind = 'COMPANY_TREASURY'"))
+                        .isEqualTo(Instant.parse("2026-08-14T12:00:00Z").toString());
+            }
+        } finally {
+            Files.deleteIfExists(databaseFile);
+        }
+    }
+
+    @Test
+    void v007_rejects_invalid_cross_direction_states_orders_and_trade_mutation() throws Exception {
+        Path databaseFile = Files.createTempFile("blockeco-v007-constraints-", ".db");
+        try (Database database = new Database("jdbc:sqlite:" + databaseFile)) {
+            database.migrate();
+            try (Connection connection = database.dataSource().getConnection()) {
+                String company = "00000000-0000-0000-0000-000000000009";
+                insertCompany(connection, company);
+                try (PreparedStatement listing = connection.prepareStatement(
+                        "INSERT INTO stock_listings VALUES (?, 'BS000009', 10, 100, ?)")) {
+                    listing.setString(1, company); listing.setString(2, ANNOUNCED_AT.toString()); listing.executeUpdate();
+                }
+                try (PreparedStatement operation = connection.prepareStatement("INSERT INTO securities_cash_operations "
+                        + "VALUES (?, ?, 1, 'DEPOSIT', 'ESCROW_WITHDRAWN', 'ESCROW_WITHDRAWN', NULL, ?, ?)")) {
+                    operation.setString(1, UUID.randomUUID().toString()); operation.setString(2, UUID.randomUUID().toString());
+                    operation.setString(3, ANNOUNCED_AT.toString()); operation.setString(4, ANNOUNCED_AT.toString());
+                    assertThatThrownBy(operation::executeUpdate).isInstanceOf(Exception.class);
+                }
+                String buy = UUID.randomUUID().toString();
+                String sell = UUID.randomUUID().toString();
+                try (PreparedStatement order = connection.prepareStatement("INSERT INTO stock_orders VALUES "
+                        + "(?, ?, 'BS000009', ?, ?, 10, 10, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+                    insertOrder(order, buy, company, "buyer", "BUY", 10, 1, 0, 0, 0, 100, "OPEN");
+                    assertThatThrownBy(order::executeUpdate).isInstanceOf(Exception.class);
+                    insertOrder(order, buy, company, "buyer", "BUY", 10, 1, 101, 0, 0, 100, "OPEN");
+                    order.executeUpdate();
+                    insertOrder(order, sell, company, "seller", "SELL", 10, 2, 1, 0, 0, 0, "OPEN");
+                    assertThatThrownBy(order::executeUpdate).isInstanceOf(Exception.class);
+                    insertOrder(order, sell, company, "seller", "SELL", 10, 2, 0, 0, 0, 0, "OPEN");
+                    order.executeUpdate();
+                }
+                try (PreparedStatement trade = connection.prepareStatement("INSERT INTO stock_trades VALUES "
+                        + "(?, ?, 'BS000009', ?, ?, 1, 10, 10, 0, ?)")) {
+                    trade.setString(1, UUID.randomUUID().toString()); trade.setString(2, company);
+                    trade.setString(3, sell); trade.setString(4, buy); trade.setString(5, ANNOUNCED_AT.toString());
+                    assertThatThrownBy(trade::executeUpdate).isInstanceOf(Exception.class);
+                    trade.setString(3, buy); trade.setString(4, sell); trade.executeUpdate();
+                    try (PreparedStatement delete = connection.prepareStatement("DELETE FROM stock_trades WHERE buy_order_id = ?")) {
+                        delete.setString(1, buy); assertThatThrownBy(delete::executeUpdate).isInstanceOf(Exception.class);
+                    }
+                }
             }
         } finally {
             Files.deleteIfExists(databaseFile);
@@ -301,6 +353,22 @@ class MigrationTest {
             rows.next();
             return rows.getLong(1);
         }
+    }
+
+    private String singleString(Connection connection, String sql) throws Exception {
+        try (PreparedStatement statement = connection.prepareStatement(sql); ResultSet rows = statement.executeQuery()) {
+            rows.next();
+            return rows.getString(1);
+        }
+    }
+
+    private void insertOrder(PreparedStatement order, String id, String company, String player, String side,
+            long remaining, long priority, long reservedCash, long filledNotional, long feeCharged, int feeBps,
+            String state) throws Exception {
+        order.setString(1, id); order.setString(2, company); order.setString(3, player); order.setString(4, side);
+        order.setLong(5, remaining); order.setLong(6, priority); order.setLong(7, reservedCash);
+        order.setLong(8, filledNotional); order.setLong(9, feeCharged); order.setInt(10, feeBps);
+        order.setString(11, ANNOUNCED_AT.toString()); order.setString(12, state);
     }
 
     private String checksum(Connection connection, String version) throws Exception {

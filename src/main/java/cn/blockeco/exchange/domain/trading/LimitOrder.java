@@ -29,7 +29,7 @@ public record LimitOrder(
     public LimitOrder {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(companyId, "companyId");
-        if (stockCode == null || !stockCode.matches("BS\\d{6}")) throw new IllegalArgumentException("stockCode must be a stock code");
+        if (!isValidStockCode(stockCode)) throw new IllegalArgumentException("stockCode must be a bounded stock code");
         Objects.requireNonNull(playerId, "playerId");
         Objects.requireNonNull(side, "side");
         Objects.requireNonNull(limitPrice, "limitPrice");
@@ -43,11 +43,31 @@ public record LimitOrder(
         if (feeBps < 0 || feeBps > 10_000) throw new IllegalArgumentException("feeBps must be between 0 and 10000");
         Objects.requireNonNull(acceptedAt, "acceptedAt");
         Objects.requireNonNull(state, "state");
-        if ((state == State.OPEN || state == State.PARTIALLY_FILLED) && remainingShares == 0) {
-            throw new IllegalArgumentException("remainingShares must be positive for an active order");
+        boolean sharesMatchState = switch (state) {
+            case OPEN -> remainingShares == originalShares;
+            case PARTIALLY_FILLED -> remainingShares > 0 && remainingShares < originalShares;
+            case FILLED -> remainingShares == 0;
+            case CANCELLED, SELF_TRADE_PREVENTED -> remainingShares > 0;
+        };
+        if (!sharesMatchState) throw new IllegalArgumentException("remainingShares do not match order state");
+        if (side == Side.BUY) {
+            boolean active = state == State.OPEN || state == State.PARTIALLY_FILLED;
+            if ((active && reservedCash.minorUnits() <= 0) || (!active && reservedCash.minorUnits() != 0)) {
+                throw new IllegalArgumentException("reservedCash does not match buy order state");
+            }
+            boolean hasFilledShares = remainingShares < originalShares;
+            if ((hasFilledShares && filledNotional.minorUnits() <= 0)
+                    || (!hasFilledShares && filledNotional.minorUnits() != 0)) {
+                throw new IllegalArgumentException("filledNotional does not match filled shares");
+            }
+        } else if (reservedCash.minorUnits() != 0 || filledNotional.minorUnits() != 0
+                || feeCharged.minorUnits() != 0 || feeBps != 0) {
+            throw new IllegalArgumentException("sell orders must not contain buy money fields");
         }
-        if (state == State.FILLED && remainingShares != 0) {
-            throw new IllegalArgumentException("filled order must have no remainingShares");
-        }
+    }
+
+    private static boolean isValidStockCode(String stockCode) {
+        return stockCode != null && stockCode.matches("BS\\d{6}")
+                && Integer.parseInt(stockCode.substring(2)) >= 1;
     }
 }
