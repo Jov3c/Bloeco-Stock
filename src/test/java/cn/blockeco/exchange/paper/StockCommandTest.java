@@ -188,6 +188,141 @@ class StockCommandTest {
         verify(player, never()).sendMessage(any(Component.class));
     }
 
+    @Test void routes_every_secondary_mutation_with_exact_parsed_arguments() {
+        SecuritiesCashService cash = mock(SecuritiesCashService.class);
+        SecondaryMarketService trading = mock(SecondaryMarketService.class);
+        SecondaryMarketQueryService reads = mock(SecondaryMarketQueryService.class);
+        when(cash.deposit(any(), any())).thenReturn(new CompletableFuture<>());
+        when(cash.withdraw(any(), any())).thenReturn(new CompletableFuture<>());
+        when(trading.placeBuy(any(), anyString(), anyLong(), any())).thenReturn(new CompletableFuture<>());
+        when(trading.placeSell(any(), anyString(), anyLong(), any())).thenReturn(new CompletableFuture<>());
+        when(trading.cancel(any(), any())).thenReturn(new CompletableFuture<>());
+        UUID playerId = UUID.randomUUID(); UUID orderId = UUID.randomUUID();
+        Player player = player(true); when(player.getUniqueId()).thenReturn(playerId);
+        StockCommand command = secondary(cash, trading, reads, DIRECT_MAIN, () -> true);
+
+        command.onCommand(player, mock(Command.class), "stock", new String[] {"deposit", "12.34"});
+        command.onCommand(player, mock(Command.class), "stock", new String[] {"withdraw", "5.67"});
+        command.onCommand(player, mock(Command.class), "stock", new String[] {"buy", "BS000001", "23", "8.90"});
+        command.onCommand(player, mock(Command.class), "stock", new String[] {"sell", "BS000002", "7", "6.54"});
+        command.onCommand(player, mock(Command.class), "stock", new String[] {"cancel", orderId.toString()});
+
+        verify(cash).deposit(playerId, Money.ofMinor(1234));
+        verify(cash).withdraw(playerId, Money.ofMinor(567));
+        verify(trading).placeBuy(playerId, "BS000001", 23, Money.ofMinor(890));
+        verify(trading).placeSell(playerId, "BS000002", 7, Money.ofMinor(654));
+        verify(trading).cancel(playerId, orderId);
+    }
+
+    @Test void routes_every_secondary_read_with_exact_player_and_history_limits() {
+        SecondaryMarketQueryService reads = mock(SecondaryMarketQueryService.class);
+        when(reads.portfolio(any())).thenReturn(new CompletableFuture<>());
+        when(reads.orders(any(), anyInt())).thenReturn(new CompletableFuture<>());
+        when(reads.trades(any(), anyInt())).thenReturn(new CompletableFuture<>());
+        UUID playerId = UUID.randomUUID(); Player player = player(true); when(player.getUniqueId()).thenReturn(playerId);
+        StockCommand command = secondary(mock(SecuritiesCashService.class), mock(SecondaryMarketService.class), reads, DIRECT_MAIN, () -> true);
+
+        command.onCommand(player, mock(Command.class), "stock", new String[] {"cash"});
+        command.onCommand(player, mock(Command.class), "stock", new String[] {"portfolio"});
+        command.onCommand(player, mock(Command.class), "stock", new String[] {"orders"});
+        command.onCommand(player, mock(Command.class), "stock", new String[] {"orders", "1"});
+        command.onCommand(player, mock(Command.class), "stock", new String[] {"trades", "50"});
+
+        verify(reads, times(2)).portfolio(playerId);
+        verify(reads).orders(playerId, 10);
+        verify(reads).orders(playerId, 1);
+        verify(reads).trades(playerId, 50);
+    }
+
+    @Test void synchronous_service_failure_is_localized_and_never_escapes_command_dispatch() {
+        SecuritiesCashService cash = mock(SecuritiesCashService.class);
+        when(cash.deposit(any(), any())).thenThrow(new IllegalStateException("Vault provider English secret"));
+        Player player = player(true);
+        StockCommand command = secondary(cash, mock(SecondaryMarketService.class), mock(SecondaryMarketQueryService.class), DIRECT_MAIN, () -> true);
+
+        boolean handled = command.onCommand(player, mock(Command.class), "stock", new String[] {"deposit", "1.00"});
+
+        assertThat(handled).isTrue();
+        verify(player).sendMessage(org.mockito.ArgumentMatchers.<Component>argThat(c -> plain(c).equals("股票查询失败，请稍后再试。")));
+        verify(player, never()).sendMessage(org.mockito.ArgumentMatchers.<Component>argThat(c -> plain(c).contains("Vault")));
+    }
+
+    @Test void successful_async_reply_is_sent_only_after_queued_main_work_runs() {
+        SecondaryMarketQueryService reads = mock(SecondaryMarketQueryService.class);
+        CompletableFuture<cn.blockeco.exchange.application.PortfolioView> future = new CompletableFuture<>();
+        when(reads.portfolio(any())).thenReturn(future);
+        java.util.ArrayList<java.util.function.Supplier<?>> scheduled = new java.util.ArrayList<>();
+        MainThreadExecutor queuedMain = queued(scheduled);
+        Player player = player(true);
+        StockCommand command = secondary(mock(SecuritiesCashService.class), mock(SecondaryMarketService.class), reads, queuedMain, () -> true);
+
+        assertThat(command.onCommand(player, mock(Command.class), "stock", new String[] {"cash"})).isTrue();
+        verify(player, never()).sendMessage(any(Component.class));
+        future.complete(new cn.blockeco.exchange.application.PortfolioView(Money.ofMinor(100), Money.zero(), List.of()));
+        verify(player, never()).sendMessage(any(Component.class));
+        assertThat(scheduled).hasSize(1);
+        scheduled.getFirst().get();
+        verify(player).sendMessage(org.mockito.ArgumentMatchers.<Component>argThat(c -> plain(c).contains("可用=1.00")));
+    }
+
+    @Test void queued_reply_is_suppressed_when_acceptance_closes_after_completion() {
+        SecondaryMarketQueryService reads = mock(SecondaryMarketQueryService.class);
+        CompletableFuture<cn.blockeco.exchange.application.PortfolioView> future = new CompletableFuture<>();
+        when(reads.portfolio(any())).thenReturn(future);
+        java.util.ArrayList<java.util.function.Supplier<?>> scheduled = new java.util.ArrayList<>();
+        java.util.concurrent.atomic.AtomicBoolean accepting = new java.util.concurrent.atomic.AtomicBoolean(true);
+        Player player = player(true);
+        StockCommand command = secondary(mock(SecuritiesCashService.class), mock(SecondaryMarketService.class), reads, queued(scheduled), accepting::get);
+
+        command.onCommand(player, mock(Command.class), "stock", new String[] {"cash"});
+        future.complete(new cn.blockeco.exchange.application.PortfolioView(Money.ofMinor(100), Money.zero(), List.of()));
+        accepting.set(false);
+        scheduled.getFirst().get();
+
+        verify(player, never()).sendMessage(any(Component.class));
+    }
+
+    @Test void currency_scales_zero_and_eight_are_exact_and_reject_excess_fraction_first() {
+        SecuritiesCashService zeroCash = mock(SecuritiesCashService.class);
+        when(zeroCash.deposit(any(), any())).thenReturn(new CompletableFuture<>());
+        Player zeroPlayer = player(true); UUID zeroId = zeroPlayer.getUniqueId();
+        StockCommand zero = new StockCommand(mock(PublicStockQueryService.class), mock(PrimaryOfferingService.class), zeroCash,
+                mock(SecondaryMarketService.class), mock(SecondaryMarketQueryService.class), DIRECT_MAIN, () -> true, new Messages(null), 0);
+        zero.setAccepting(true);
+        zero.onCommand(zeroPlayer, mock(Command.class), "stock", new String[] {"deposit", "12"});
+        zero.onCommand(zeroPlayer, mock(Command.class), "stock", new String[] {"deposit", "1.1"});
+        verify(zeroCash).deposit(zeroId, Money.ofMinor(12));
+        verify(zeroCash, times(1)).deposit(any(), any());
+
+        SecuritiesCashService eightCash = mock(SecuritiesCashService.class);
+        when(eightCash.withdraw(any(), any())).thenReturn(new CompletableFuture<>());
+        Player eightPlayer = player(true); UUID eightId = eightPlayer.getUniqueId();
+        StockCommand eight = new StockCommand(mock(PublicStockQueryService.class), mock(PrimaryOfferingService.class), eightCash,
+                mock(SecondaryMarketService.class), mock(SecondaryMarketQueryService.class), DIRECT_MAIN, () -> true, new Messages(null), 8);
+        eight.setAccepting(true);
+        eight.onCommand(eightPlayer, mock(Command.class), "stock", new String[] {"withdraw", "1.23456789"});
+        verify(eightCash).withdraw(eightId, Money.ofMinor(123456789));
+    }
+
+    @Test void help_contains_public_commands_and_only_granted_private_command_families() {
+        Player player = mock(Player.class);
+        when(player.hasPermission("blockeco.stock.cash")).thenReturn(true);
+        java.util.ArrayList<String> lines = new java.util.ArrayList<>();
+        doAnswer(call -> { lines.add(plain(call.getArgument(0, Component.class))); return null; })
+                .when(player).sendMessage(any(Component.class));
+        StockCommand command = secondary(mock(SecuritiesCashService.class), mock(SecondaryMarketService.class), mock(SecondaryMarketQueryService.class), DIRECT_MAIN, () -> true);
+
+        command.onCommand(player, mock(Command.class), "stock", new String[] {"help"});
+
+        String help = String.join("\n", lines);
+        assertThat(help).contains("market", "book", "cash", "deposit", "withdraw")
+                .doesNotContain("buy/sell", "cancel", "portfolio", "orders", "trades", "subscribe");
+    }
+
+    private static MainThreadExecutor queued(java.util.List<java.util.function.Supplier<?>> scheduled) {
+        return new MainThreadExecutor() { @Override public <T> CompletionStage<T> submit(java.util.function.Supplier<T> work) { scheduled.add(work); return new CompletableFuture<>(); } };
+    }
+
     private static StockCommand secondary(SecuritiesCashService cash, SecondaryMarketService trading, SecondaryMarketQueryService reads, MainThreadExecutor main, BooleanSupplier accepting) {
         StockCommand command = new StockCommand(mock(PublicStockQueryService.class), mock(PrimaryOfferingService.class), cash, trading, reads, main, accepting, new Messages(null), 2);
         command.setAccepting(true);

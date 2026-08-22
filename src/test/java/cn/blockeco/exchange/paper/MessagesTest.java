@@ -63,6 +63,24 @@ class MessagesTest {
     }
 
     @Test
+    void distinguishes_secondary_open_order_from_open_ipo() {
+        Messages messages = new Messages(null);
+        cn.blockeco.exchange.application.OrderView order = new cn.blockeco.exchange.application.OrderView(
+                java.util.UUID.randomUUID(), "BS000001", cn.blockeco.exchange.domain.trading.LimitOrder.Side.BUY,
+                Money.ofMinor(100), 2, 2, Money.ofMinor(200), java.time.Instant.parse("2026-08-22T00:00:00Z"),
+                cn.blockeco.exchange.domain.trading.LimitOrder.State.OPEN);
+        cn.blockeco.exchange.domain.finance.PublicOfferingView ipo = new cn.blockeco.exchange.domain.finance.PublicOfferingView(
+                java.util.UUID.randomUUID(), new cn.blockeco.exchange.domain.company.CompanyId(java.util.UUID.randomUUID()),
+                "红石工业", cn.blockeco.exchange.domain.finance.PrimaryOfferingState.OPEN,
+                Money.ofMinor(1000), Money.ofMinor(100), 10, 0, 0, 10,
+                java.time.Instant.parse("2026-08-20T00:00:00Z"), java.time.Instant.parse("2026-08-21T00:00:00Z"),
+                java.time.Instant.parse("2026-08-23T00:00:00Z"));
+
+        assertThat(plain(messages.order(order))).contains("状态=待成交").doesNotContain("开放认购");
+        assertThat(plain(messages.publicIpo(ipo))).contains("状态=开放认购").doesNotContain("待成交");
+    }
+
+    @Test
     void localizes_company_and_recovery_states_without_localizing_storage_values() {
         Messages messages = new Messages(null);
 
