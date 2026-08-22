@@ -12,6 +12,7 @@ import java.time.Duration;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 import org.junit.jupiter.api.Test;
 import org.mockito.stubbing.Answer;
@@ -136,6 +137,32 @@ class SecuritiesCashServiceTest {
         order.verify(repo).prepareOperation(eq(connection),any()); order.verify(gateway).withdrawPlayer(player,Money.ofMinor(100));
         order.verify(repo).transitionOperation(eq(connection),any(),eq(SecuritiesCashOperationState.PREPARED),eq(SecuritiesCashOperationState.PLAYER_WITHDRAWN),eq(SecuritiesCashOperationState.PLAYER_WITHDRAWN),anyString(),any());
         order.verify(gateway).depositEscrow(Money.ofMinor(100));
+    }
+    @Test void shutdown_after_prepare_fails_without_calling_even_the_first_external_leg() throws Exception {
+        SecuritiesCashRepository repository=mock(SecuritiesCashRepository.class); SecuritiesCashGateway gateway=mock(SecuritiesCashGateway.class,CALLS_REAL_METHODS);
+        TransactionRunner tx=mock(TransactionRunner.class); Connection connection=mock(Connection.class); when(connection.getAutoCommit()).thenReturn(false);
+        doAnswer((Answer<Object>) invocation -> ((TransactionRunner.SqlWork<?>) invocation.getArgument(0)).execute(connection)).when(tx).inTransaction(any());
+        UUID player=UUID.randomUUID(); java.util.concurrent.atomic.AtomicBoolean accepting=new java.util.concurrent.atomic.AtomicBoolean(true);
+        when(repository.findActiveOperation(player)).thenReturn(Optional.empty()); doAnswer(ignored -> { accepting.set(false); return null; }).when(repository).prepareOperation(any(),any());
+        SecuritiesCashService service=new SecuritiesCashService(repository,tx,gateway,(Executor)Runnable::run,()->Instant.EPOCH,Duration.ofSeconds(1),accepting::get);
+
+        SecuritiesCashResult result=service.deposit(player,Money.ofMinor(100)).toCompletableFuture().join();
+
+        assertThat(result.state()).isEqualTo(SecuritiesCashOperationState.FAILED);
+        verifyNoInteractions(gateway);
+        verify(repository).transitionOperation(any(),any(),eq(SecuritiesCashOperationState.PREPARED),eq(SecuritiesCashOperationState.FAILED),isNull(),anyString(),any());
+    }
+    @Test void quiesce_rejects_new_sagas_after_registered_work_has_finished() throws Exception {
+        Fixture f=fixture(); CompletableFuture<EconomyGateway.Result> first=new CompletableFuture<>();
+        when(f.gateway.withdrawPlayer(f.player,Money.ofMinor(100))).thenReturn(first);
+        CompletionStage<SecuritiesCashResult> operation=f.service.deposit(f.player,Money.ofMinor(100));
+        CompletionStage<Void> quiesce=f.service.quiesce();
+
+        assertThat(quiesce.toCompletableFuture()).isNotDone();
+        org.assertj.core.api.Assertions.assertThatThrownBy(()->f.service.deposit(UUID.randomUUID(),Money.ofMinor(1)).toCompletableFuture().join()).hasCauseInstanceOf(IllegalStateException.class);
+        first.complete(EconomyGateway.Result.notCalledFailure("stopped"));
+        operation.toCompletableFuture().join();
+        assertThat(quiesce.toCompletableFuture()).isCompleted();
     }
     private static Fixture fixture() throws Exception { return fixture(Duration.ofSeconds(1)); }
     private static Fixture fixture(Duration timeout) throws Exception { SecuritiesCashRepository repository=mock(SecuritiesCashRepository.class); SecuritiesCashGateway gateway=mock(SecuritiesCashGateway.class,CALLS_REAL_METHODS); TransactionRunner tx=mock(TransactionRunner.class); Connection connection=mock(Connection.class); when(connection.getAutoCommit()).thenReturn(false); doAnswer((Answer<Object>) invocation -> ((TransactionRunner.SqlWork<?>)invocation.getArgument(0)).execute(connection)).when(tx).inTransaction(any()); UUID player=UUID.randomUUID(); when(repository.findActiveOperation(player)).thenReturn(Optional.empty()); return new Fixture(repository,gateway,player,new SecuritiesCashService(repository,tx,gateway,(Executor)Runnable::run,()->Instant.parse("2026-08-22T00:00:00Z"),timeout)); }

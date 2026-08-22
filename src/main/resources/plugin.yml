@@ -9,7 +9,7 @@ commands:
     usage: /company <create|info|asset bind|ipo <announce|subscribe|list|info>|recovery>
   stockadmin:
     description: 管理 BlockStock 运行时配置
-    usage: /stockadmin config [min-capital <金额>]
+    usage: /stockadmin config [min-capital <金额>]|recovery cash|reconcile
   stock:
     description: 查询 BlockStock 公开股票与 IPO
     usage: /stock help|market|ipo|info|announcements|subscribe|cash|deposit|withdraw|buy|sell|cancel|portfolio|orders|trades|book

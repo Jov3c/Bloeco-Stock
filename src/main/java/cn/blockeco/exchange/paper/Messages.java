@@ -69,6 +69,33 @@ public final class Messages {
     public List<Component> stockHelp(org.bukkit.command.CommandSender sender) { java.util.ArrayList<Component> lines = new java.util.ArrayList<>(List.of(message("stock-help-root", "BlockStock 股票命令："), message("stock-help-public", "公开行情：/stock market；盘口：/stock book <代码>（固定买卖各五档）；IPO：ipo、info、announcements。"))); if (sender instanceof org.bukkit.entity.Player player) { if(player.hasPermission("blockeco.stock.subscribe"))lines.add(message("stock-help-subscribe", "认购：/stock subscribe <公司名|代码> <正整数股>")); if(player.hasPermission("blockeco.stock.cash"))lines.add(message("stock-help-cash", "证券账户：cash；入金：deposit <金额>；出金：withdraw <金额>。资金与个人钱包分开，处理中不可重复操作。")); if(player.hasPermission("blockeco.stock.trade"))lines.add(message("stock-help-trade", "交易：buy/sell <代码> <正整数股> <限价>；撤单：cancel <订单UUID>。仅限价单，买方支付手续费，禁止自成交。")); if(player.hasPermission("blockeco.stock.portfolio"))lines.add(message("stock-help-portfolio", "持仓：portfolio。")); if(player.hasPermission("blockeco.stock.orders"))lines.add(message("stock-help-orders", "委托：orders [1-50]。")); if(player.hasPermission("blockeco.stock.trades"))lines.add(message("stock-help-trades", "成交：trades [1-50]。")); } return List.copyOf(lines); }
     public Component minimumCapital(CompanyCreationRules rules) { return message("stockadmin-minimum-capital", "当前最低注册资本：%capital%").replaceText(b -> b.matchLiteral("%capital%").replacement(rules.minimumCapitalMajor())); }
     public Component usageStockAdminConfig() { return message("usage-stockadmin-config", "用法：/stockadmin config [min-capital <金额>]"); }
+    public Component usageStockAdminRecovery() { return message("usage-stockadmin-recovery", "用法：/stockadmin recovery <cash|reconcile>"); }
+    public Component recoveryUnavailable() { return message("stockadmin-recovery-unavailable", "恢复诊断暂不可用，请稍后再试。"); }
+    public List<Component> secondaryRecovery(cn.blockeco.exchange.application.SecondaryMarketRecoveryService.RecoverySnapshot snapshot) {
+        java.util.ArrayList<Component> lines = new java.util.ArrayList<>();
+        var reconciliation = snapshot.reconciliation();
+        lines.add(message("stockadmin-recovery-summary", "证券恢复：物理托管=%physical% 最终负债=%liabilities% 已确认差额=%difference% 不确定外部金额=%uncertain% 变更=%gate%")
+                .replaceText(b -> b.matchLiteral("%physical%").replacement(amount(reconciliation.physicalBalance())))
+                .replaceText(b -> b.matchLiteral("%liabilities%").replacement(amount(reconciliation.finalLiabilities())))
+                .replaceText(b -> b.matchLiteral("%difference%").replacement(amount(reconciliation.confirmedDifference())))
+                .replaceText(b -> b.matchLiteral("%uncertain%").replacement(amount(reconciliation.uncertainExternalAmount())))
+                .replaceText(b -> b.matchLiteral("%gate%").replacement(snapshot.mutationsBlocked() ? "已关闭" : "可用")));
+        snapshot.operations().forEach(operation -> lines.add(message("stockadmin-recovery-cash-row", "现金操作=%id% 方向=%direction% 状态=%state% 已确认=%stage% 金额=%amount% 原因=%reason%")
+                .replaceText(b -> b.matchLiteral("%id%").replacement(operation.id().toString()))
+                .replaceText(b -> b.matchLiteral("%direction%").replacement(operation.direction() == cn.blockeco.exchange.domain.finance.SecuritiesCashDirection.DEPOSIT ? "入金" : "出金"))
+                .replaceText(b -> b.matchLiteral("%state%").replacement(displayState(operation.state())))
+                .replaceText(b -> b.matchLiteral("%stage%").replacement(operation.lastConfirmedExternalStage() == null ? "无" : displayState(operation.lastConfirmedExternalStage())))
+                .replaceText(b -> b.matchLiteral("%amount%").replacement(amount(operation.amount())))
+                .replaceText(b -> b.matchLiteral("%reason%").replacement(operation.detail()))));
+        snapshot.legacyIssues().forEach(issue -> lines.add(message("stockadmin-recovery-legacy-row", "遗留=%source% 操作=%id% 状态=%state% 已确认=%stage% 金额=%amount% 原因=%reason%")
+                .replaceText(b -> b.matchLiteral("%source%").replacement(issue.source()))
+                .replaceText(b -> b.matchLiteral("%id%").replacement(issue.operationId().toString()))
+                .replaceText(b -> b.matchLiteral("%state%").replacement(issue.state()))
+                .replaceText(b -> b.matchLiteral("%stage%").replacement(issue.lastConfirmedStage().isBlank() ? "无" : issue.lastConfirmedStage()))
+                .replaceText(b -> b.matchLiteral("%amount%").replacement(amount(issue.amount())))
+                .replaceText(b -> b.matchLiteral("%reason%").replacement(issue.reason()))));
+        return List.copyOf(lines);
+    }
     public Component invalidMinimumCapital() { return message("invalid-minimum-capital", "最低注册资本必须是正数，且小数位必须与货币精度一致。"); }
     public Component minimumCapitalSaveFailed() { return message("minimum-capital-save-failed", "最低注册资本保存失败，当前规则未改变。"); }
     public Component minimumCapitalSaved(String amount) { return message("minimum-capital-saved", "最低注册资本已更新为 %capital%。").replaceText(b -> b.matchLiteral("%capital%").replacement(amount)); }

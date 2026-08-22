@@ -1,6 +1,6 @@
 # BlockStock
 
-BlockStock 是 Minecraft 经济与公司交易所的**仅服务端** Paper 插件基础。在 Phase 1 中，玩家无需安装客户端模组或资源包。本构建可安全地创建持久化公司、通过 Vault 扣除注册资金，并让管理员查看恢复信息。交易、图表、土地/商店/生产适配器、分红与退市将在后续阶段提供。
+BlockStock 是 Minecraft 经济与公司交易所的**仅服务端** Paper 插件。玩家无需安装客户端模组或资源包。当前版本提供公司/IPO、Vault 隔离的证券账户、限价委托撮合、个人持仓和成交、公开行情/五档盘口，以及停服后只读恢复诊断。K 线、土地/商店/生产适配器、分红、增发投票、回购与退市仍在后续阶段提供。
 
 ## 环境要求
 
@@ -54,6 +54,8 @@ Paper 完成保存，再让 BlockStock 的下一次启动完成迁移。
 | 配置键 | 默认值 | 说明 |
 | --- | --- | --- |
 | `currency.scale` | `2` | 经济适配器接受的小数位数；有效范围为 0–8。 |
+| `market.fee-bps` | `10` | 买方成交手续费（万分比）；有效范围为 0–10000，并在委托创建时快照。 |
+| `market.time-zone` | `Asia/Shanghai` | 日内行情、日 K 统计所用的 Java `ZoneId`。 |
 | `company.registration-fee` | `'1000.00'` | 成功注册时从流通中移除的正数费用。 |
 | `company.minimum-capital` | `'10000.00'` | 转入新公司内部金库的正数资本。 |
 | `company.initial-shares` | `1000` | 保留的 Phase 1/IPO 设置。初始公司固定使用 1,000 股。 |
@@ -79,6 +81,7 @@ Paper 完成保存，再让 BlockStock 的下一次启动完成迁移。
 | `/company ipo subscribe <发行UUID> <整数股>` | `blockeco.company.ipo.subscribe`（默认：true） | 仅玩家可用，认购公开 IPO。 |
 | `/stockadmin config` | `blockstock.admin.config`（默认：op） | 显示当前最低注册资本。 |
 | `/stockadmin config min-capital <金额>` | `blockstock.admin.config`（默认：op） | 保存并立即发布下一笔公司注册使用的最低注册资本。金额必须为正数，且小数位必须恰好符合 `currency.scale`。 |
+| `/stockadmin recovery cash`、`/stockadmin reconcile` | `blockeco.admin.recovery`（默认：op） | 严格只读地显示证券现金操作、旧资本/IPO 歧义、物理托管、负债、差额和不确定金额；不会重试、退款或改写任何状态。 |
 
 直接执行 `/company` 会按调用者权限显示中文指引：可创建的玩家会看到“BlockStock
 公司命令：”、`/company create <名称> <实缴资本> <DIVIDENDS>`，以及创建费、最低注册资本、
@@ -165,6 +168,12 @@ Phase 1 的权威数据是 `plugins/BlockStock/blockeco.db` 中的 SQLite 数据
 `/stock` 和 `/stock help` 在启动期间提供静态中文帮助。其他子命令会在首个公开代码缓存刷新成功前仅提示初始化，且不会访问 SQLite 或 Vault。Tab 补全只读不可变缓存快照，不在 Paper 主线程执行 SQL。
 
 本次已在 0 人在线时备份数据并重启本地 Paper 1.21.4 服务器，实际通过 console 中文帮助、空市场、空 IPO、详情/公告空结果和控制台禁止认购检查；V006 已应用，服务器再次启动到 ready 并保持在线。真实 authenticated-player IPO（含认购、关闭上市、代码分配）和客户端 Tab 补全仍没有现场证据，因此状态为**未执行**。详见 [IPO 上市与 stock 烟测](docs/operations/ipo-listing-and-stock-smoke.md)。
+
+## 二级市场与恢复门禁
+
+`/stock market` 显示所有已上市公司的最新成交价、涨跌、成交量、成交额与市值；`/stock book <代码>` 显示匿名买卖各五档。玩家使用 `/stock deposit`、`withdraw` 将个人钱包与证券账户之间转账，使用 `buy`、`sell`、`cancel` 管理限价委托，使用 `cash`、`portfolio`、`orders`、`trades` 查看个人只读数据。买方手续费由 `market.fee-bps` 决定，撮合和全部 SQLite 变更在同一 SQL 串行执行器上完成。
+
+启动时，BlockStock 先完成能由本地状态证明的最终资金阶段，再读取剩余现金、资本与 IPO 歧义，随后在 Paper 主线程读取真实托管余额并进行对账。公开行情可在维护状态下继续读取；若任一未决资金操作、旧歧义或已确认差额存在，入金、出金、买卖和撤单会返回中文维护提示。`/stockadmin recovery cash` 是唯一用于观察该状态的管理员入口，不会猜测外部资金是否移动。详细测试步骤见 [二级市场烟测清单](docs/operations/secondary-market-smoke.md)。
 
 ## 兼容性来源
 

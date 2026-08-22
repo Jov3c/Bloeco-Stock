@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.Executor;
+import java.util.concurrent.CompletionStage;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
@@ -21,12 +22,16 @@ import org.bukkit.entity.Player;
 /** Administrative runtime configuration for the single mutable company creation rule. */
 public final class StockAdminConfigCommand implements CommandExecutor, TabCompleter {
     static final String PERMISSION = "blockstock.admin.config";
+    static final String RECOVERY_PERMISSION = "blockeco.admin.recovery";
     private final MutableCompanyCreationRules rules; private final ConfigStore config; private final AuditLog audit;
     public interface ConfigStore { void persistMinimumCapital(String value) throws java.io.IOException; }
-    private final TransactionRunner transactions; private final Executor sql; private final AppClock clock; private final Messages messages; private final MainThreadExecutor main;
-    public StockAdminConfigCommand(MutableCompanyCreationRules rules, ConfigStore config, AuditLog audit, TransactionRunner transactions, Executor sql, AppClock clock, Messages messages) { this(rules, config, audit, transactions, sql, clock, messages, new MainThreadExecutor() { @Override public <T> java.util.concurrent.CompletionStage<T> submit(java.util.function.Supplier<T> work) { return java.util.concurrent.CompletableFuture.completedFuture(work.get()); } }); }
-    public StockAdminConfigCommand(MutableCompanyCreationRules rules, ConfigStore config, AuditLog audit, TransactionRunner transactions, Executor sql, AppClock clock, Messages messages, MainThreadExecutor main) { this.rules=rules; this.config=config; this.audit=audit; this.transactions=transactions; this.sql=sql; this.clock=clock; this.messages=messages; this.main=main; }
+    private final TransactionRunner transactions; private final Executor sql; private final AppClock clock; private final Messages messages; private final MainThreadExecutor main; private final RecoveryInspector recovery;
+    public interface RecoveryInspector { CompletionStage<cn.blockeco.exchange.application.SecondaryMarketRecoveryService.RecoverySnapshot> inspect(); }
+    public StockAdminConfigCommand(MutableCompanyCreationRules rules, ConfigStore config, AuditLog audit, TransactionRunner transactions, Executor sql, AppClock clock, Messages messages) { this(rules, config, audit, transactions, sql, clock, messages, new MainThreadExecutor() { @Override public <T> java.util.concurrent.CompletionStage<T> submit(java.util.function.Supplier<T> work) { return java.util.concurrent.CompletableFuture.completedFuture(work.get()); } }, null); }
+    public StockAdminConfigCommand(MutableCompanyCreationRules rules, ConfigStore config, AuditLog audit, TransactionRunner transactions, Executor sql, AppClock clock, Messages messages, MainThreadExecutor main) { this(rules, config, audit, transactions, sql, clock, messages, main, null); }
+    public StockAdminConfigCommand(MutableCompanyCreationRules rules, ConfigStore config, AuditLog audit, TransactionRunner transactions, Executor sql, AppClock clock, Messages messages, MainThreadExecutor main, RecoveryInspector recovery) { this.rules=rules; this.config=config; this.audit=audit; this.transactions=transactions; this.sql=sql; this.clock=clock; this.messages=messages; this.main=main; this.recovery=recovery; }
     @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        if (args.length > 0 && ("recovery".equalsIgnoreCase(args[0]) || "reconcile".equalsIgnoreCase(args[0]))) return recovery(sender, args);
         if (!sender.hasPermission(PERMISSION)) { sender.sendMessage(messages.noPermission()); return true; }
         if (args.length == 1 && "config".equalsIgnoreCase(args[0])) { sender.sendMessage(messages.minimumCapital(rules.current())); return true; }
         if (args.length != 3 || !"config".equalsIgnoreCase(args[0]) || !"min-capital".equalsIgnoreCase(args[1])) { sender.sendMessage(messages.usageStockAdminConfig()); return true; }
@@ -42,10 +47,31 @@ public final class StockAdminConfigCommand implements CommandExecutor, TabComple
         sql.execute(() -> { try { transactions.inTransaction(connection -> { audit.append(connection, event); return null; }); } catch (RuntimeException failure) { main.submit(() -> { sender.sendMessage(messages.minimumCapitalAuditFailed()); return null; }); } });
         return true;
     }
+    private boolean recovery(CommandSender sender, String[] args) {
+        if (!sender.hasPermission(RECOVERY_PERMISSION)) { sender.sendMessage(messages.noPermission()); return true; }
+        boolean valid = (args.length == 1 && "reconcile".equalsIgnoreCase(args[0]))
+                || (args.length == 2 && "recovery".equalsIgnoreCase(args[0]) && "cash".equalsIgnoreCase(args[1]));
+        if (!valid) { sender.sendMessage(messages.usageStockAdminRecovery()); return true; }
+        if (recovery == null) { sender.sendMessage(messages.recoveryUnavailable()); return true; }
+        try {
+            recovery.inspect().whenComplete((snapshot, failure) -> main.submit(() -> {
+                if (failure != null) sender.sendMessage(messages.recoveryUnavailable());
+                else messages.secondaryRecovery(snapshot).forEach(sender::sendMessage);
+                return null;
+            }));
+        } catch (RuntimeException failure) { sender.sendMessage(messages.recoveryUnavailable()); }
+        return true;
+    }
     @Override public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) { return complete(sender, args); }
     List<String> complete(CommandSender sender, String[] args) {
+        if (args.length == 1) {
+            java.util.ArrayList<String> roots=new java.util.ArrayList<>();
+            if(sender.hasPermission(PERMISSION)) roots.add("config");
+            if(sender.hasPermission(RECOVERY_PERMISSION)) { roots.add("recovery"); roots.add("reconcile"); }
+            return filter(roots, args[0]);
+        }
+        if (args.length == 2 && "recovery".equalsIgnoreCase(args[0])) return sender.hasPermission(RECOVERY_PERMISSION) ? filter(List.of("cash"), args[1]) : List.of();
         if (!sender.hasPermission(PERMISSION)) return List.of();
-        if (args.length == 1) return filter(List.of("config"), args[0]);
         if (args.length == 2 && "config".equalsIgnoreCase(args[0])) return filter(List.of("min-capital"), args[1]);
         return List.of();
     }

@@ -173,6 +173,17 @@ class BlockecoPluginTest {
     }
 
     @Test
+    void market_configuration_accepts_configured_shanghai_zone_and_rejects_invalid_values() {
+        assertThat(BlockecoPlugin.validateMarketConfiguration(10, "Asia/Shanghai").getId()).isEqualTo("Asia/Shanghai");
+        assertThatThrownBy(() -> BlockecoPlugin.validateMarketConfiguration(-1, "Asia/Shanghai"))
+                .hasMessageContaining("fee-bps");
+        assertThatThrownBy(() -> BlockecoPlugin.validateMarketConfiguration(10_001, "Asia/Shanghai"))
+                .hasMessageContaining("fee-bps");
+        assertThatThrownBy(() -> BlockecoPlugin.validateMarketConfiguration(10, "not/a-zone"))
+                .hasMessageContaining("time-zone");
+    }
+
+    @Test
     void plugin_metadata_entrypoint_exists_and_is_a_java_plugin() {
         Class<?> entrypoint = assertDoesNotThrow(() -> Class.forName(declaredEntrypointClass()));
 

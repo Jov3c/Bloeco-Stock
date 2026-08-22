@@ -94,7 +94,39 @@ class StockAdminConfigCommandTest {
         assertThat(messages(op)).contains("最低注册资本已更新为 25000.50。", "最低注册资本已保存，但审计写入失败；请检查数据库。 ");
     }
 
+    @Test
+    void recovery_diagnostics_are_read_only_permission_scoped_and_support_both_aliases() {
+        StockAdminConfigCommand.RecoveryInspector inspector = mock(StockAdminConfigCommand.RecoveryInspector.class);
+        var reconciliation = new cn.blockeco.exchange.domain.finance.EscrowReconciliation(Money.ofMinor(100), Money.ofMinor(100), Money.zero(), Money.zero(), Money.zero(), Money.zero(), Money.zero());
+        var snapshot = new cn.blockeco.exchange.application.SecondaryMarketRecoveryService.RecoverySnapshot(List.of(), List.of(), List.of(), List.of(), reconciliation, false);
+        when(inspector.inspect()).thenReturn(java.util.concurrent.CompletableFuture.completedFuture(snapshot));
+        StockAdminConfigCommand command = new StockAdminConfigCommand(live, mock(ConfigStore.class), mock(AuditLog.class), directTransactions(), Runnable::run,
+                () -> Instant.EPOCH, new Messages(null), directMain(), inspector);
+        CommandSender admin = mock(CommandSender.class); when(admin.hasPermission("blockeco.admin.recovery")).thenReturn(true);
+
+        command.onCommand(admin, mock(Command.class), "stockadmin", new String[] {"recovery", "cash"});
+        command.onCommand(admin, mock(Command.class), "stockadmin", new String[] {"reconcile"});
+
+        verify(inspector, times(2)).inspect();
+        assertThat(messages(admin)).anyMatch(message -> message.contains("证券恢复：物理托管"));
+        assertThat(command.complete(admin, new String[] {""})).contains("recovery", "reconcile").doesNotContain("config");
+    }
+
+    @Test
+    void recovery_diagnostics_deny_non_admins_without_inspecting() {
+        StockAdminConfigCommand.RecoveryInspector inspector = mock(StockAdminConfigCommand.RecoveryInspector.class);
+        StockAdminConfigCommand command = new StockAdminConfigCommand(live, mock(ConfigStore.class), mock(AuditLog.class), directTransactions(), Runnable::run,
+                () -> Instant.EPOCH, new Messages(null), directMain(), inspector);
+        CommandSender sender = mock(CommandSender.class);
+
+        command.onCommand(sender, mock(Command.class), "stockadmin", new String[] {"recovery", "cash"});
+
+        verifyNoInteractions(inspector);
+        assertThat(messages(sender)).containsExactly("你没有权限。");
+    }
+
     private StockAdminConfigCommand command(ConfigStore config, AuditLog audit) { return new StockAdminConfigCommand(live, config, audit, directTransactions(), Runnable::run, () -> Instant.parse("2026-08-22T01:02:03Z"), new Messages(null)); }
+    private static cn.blockeco.exchange.ports.MainThreadExecutor directMain() { return new cn.blockeco.exchange.ports.MainThreadExecutor() { @Override public <T> java.util.concurrent.CompletionStage<T> submit(java.util.function.Supplier<T> work) { return java.util.concurrent.CompletableFuture.completedFuture(work.get()); } }; }
     private static TransactionRunner directTransactions() { return new TransactionRunner() { @Override public <T> T inTransaction(SqlWork<T> work) { try { return work.execute(null); } catch (Exception e) { throw new IllegalStateException(e); } } }; }
     private static List<String> messages(CommandSender sender) { ArgumentCaptor<Component> messages = ArgumentCaptor.forClass(Component.class); verify(sender, atLeastOnce()).sendMessage(messages.capture()); return messages.getAllValues().stream().map(message -> PlainTextComponentSerializer.plainText().serialize(message)).toList(); }
     private static CompanyCreationRules rules(String capital) { return new CompanyCreationRules(Money.fromMajor(new BigDecimal("1000.00"), 2), Money.fromMajor(new BigDecimal(capital), 2), 2, 1000, List.of(30, 50, 70)); }

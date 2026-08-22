@@ -319,6 +319,26 @@ class StockCommandTest {
                 .doesNotContain("buy/sell", "cancel", "portfolio", "orders", "trades", "subscribe");
     }
 
+    @Test void reconciliation_maintenance_keeps_reads_available_but_blocks_cash_and_order_mutations_before_services() {
+        SecuritiesCashService cash = mock(SecuritiesCashService.class);
+        SecondaryMarketService trading = mock(SecondaryMarketService.class);
+        SecondaryMarketQueryService reads = mock(SecondaryMarketQueryService.class);
+        when(reads.portfolio(any())).thenReturn(new CompletableFuture<>());
+        StockCommand command = new StockCommand(mock(PublicStockQueryService.class), mock(PrimaryOfferingService.class), cash,
+                trading, reads, DIRECT_MAIN, () -> true, () -> false, new Messages(null), 2);
+        command.setAccepting(true);
+        Player player = player(true);
+
+        command.onCommand(player, mock(Command.class), "stock", new String[] {"cash"});
+        command.onCommand(player, mock(Command.class), "stock", new String[] {"deposit", "1.00"});
+        command.onCommand(player, mock(Command.class), "stock", new String[] {"buy", "BS000001", "1", "1.00"});
+        command.onCommand(player, mock(Command.class), "stock", new String[] {"cancel", UUID.randomUUID().toString()});
+
+        verify(reads).portfolio(player.getUniqueId());
+        verifyNoInteractions(cash, trading);
+        verify(player, times(3)).sendMessage(org.mockito.ArgumentMatchers.<Component>argThat(c -> plain(c).contains("暂不可用")));
+    }
+
     private static MainThreadExecutor queued(java.util.List<java.util.function.Supplier<?>> scheduled) {
         return new MainThreadExecutor() { @Override public <T> CompletionStage<T> submit(java.util.function.Supplier<T> work) { scheduled.add(work); return new CompletableFuture<>(); } };
     }
