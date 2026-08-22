@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.*;
 
 import cn.blockeco.exchange.domain.money.Money;
+import cn.blockeco.exchange.ports.TransactionRunner;
 import java.math.BigDecimal;
 import java.util.List;
 import org.bukkit.command.CommandSender;
@@ -34,6 +35,15 @@ class CompanyTabCompleterTest {
         assertThat(tab.complete(playerWith("blockeco.company.create"), new String[] {"create", "name"})).isEmpty();
         assertThat(tab.complete(playerWith("blockeco.company.info"), new String[] {"info", "红石"})).isEmpty();
         assertThatThrownBy(() -> tab.complete(playerWith("blockeco.company.create"), new String[] {""}).add("x")).isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void stockadmin_completion_exposes_only_configuration_to_authorized_senders() {
+        MutableCompanyCreationRules live = new MutableCompanyCreationRules(new CompanyCreationRules(Money.ofMinor(1), Money.ofMinor(2), 0, 1_000, List.of(50)));
+        StockAdminConfigCommand tab = new StockAdminConfigCommand(live, mock(StockAdminConfigCommand.ConfigStore.class), mock(cn.blockeco.exchange.ports.AuditLog.class), new TransactionRunner() { @Override public <T> T inTransaction(SqlWork<T> work) { throw new AssertionError(); } }, Runnable::run, java.time.Instant::now, new Messages(null));
+        assertThat(tab.complete(playerWith("blockstock.admin.config"), new String[] {""})).containsExactly("config");
+        assertThat(tab.complete(playerWith("blockstock.admin.config"), new String[] {"config", ""})).containsExactly("min-capital");
+        assertThat(tab.complete(mock(CommandSender.class), new String[] {""})).isEmpty();
     }
 
     private static Player playerWith(String... permissions) { Player player = mock(Player.class); for (String permission : permissions) when(player.hasPermission(permission)).thenReturn(true); return player; }

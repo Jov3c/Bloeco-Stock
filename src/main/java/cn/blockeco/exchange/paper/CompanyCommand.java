@@ -7,16 +7,19 @@ import cn.blockeco.exchange.ports.MainThreadExecutor;
 import cn.blockeco.exchange.domain.money.Money;
 import java.math.BigDecimal;
 import java.util.*;
+import java.util.function.Supplier;
 import java.util.concurrent.ConcurrentHashMap;
 import org.bukkit.command.*;
 import org.bukkit.entity.Player;
 
 public final class CompanyCommand implements CommandExecutor {
-    private final CompanyRegistrationService registration; private final CompanyQueryService queries; private final Messages messages; private final MainThreadExecutor mainThread; private final CompanyCreationRules rules; private final AssetBindingService assets; private final PrimaryOfferingService offerings;
+    private final CompanyRegistrationService registration; private final CompanyQueryService queries; private final Messages messages; private final MainThreadExecutor mainThread; private final Supplier<CompanyCreationRules> rules; private final AssetBindingService assets; private final PrimaryOfferingService offerings;
     private final Set<UUID> inFlight = ConcurrentHashMap.newKeySet();
     private volatile boolean accepting = false;
-    public CompanyCommand(CompanyRegistrationService registration, CompanyQueryService queries, Messages messages, MainThreadExecutor mainThread, CompanyCreationRules rules) { this(registration,queries,messages,mainThread,rules,null,null); }
-    public CompanyCommand(CompanyRegistrationService registration, CompanyQueryService queries, Messages messages, MainThreadExecutor mainThread, CompanyCreationRules rules, AssetBindingService assets, PrimaryOfferingService offerings) { this.registration=registration; this.queries=queries; this.messages=messages; this.mainThread=mainThread; this.rules=rules; this.assets=assets; this.offerings=offerings; }
+    public CompanyCommand(CompanyRegistrationService registration, CompanyQueryService queries, Messages messages, MainThreadExecutor mainThread, CompanyCreationRules rules) { this(registration,queries,messages,mainThread,() -> rules,null,null); }
+    public CompanyCommand(CompanyRegistrationService registration, CompanyQueryService queries, Messages messages, MainThreadExecutor mainThread, MutableCompanyCreationRules rules) { this(registration,queries,messages,mainThread,rules::current,null,null); }
+    public CompanyCommand(CompanyRegistrationService registration, CompanyQueryService queries, Messages messages, MainThreadExecutor mainThread, CompanyCreationRules rules, AssetBindingService assets, PrimaryOfferingService offerings) { this(registration,queries,messages,mainThread,() -> rules,assets,offerings); }
+    public CompanyCommand(CompanyRegistrationService registration, CompanyQueryService queries, Messages messages, MainThreadExecutor mainThread, Supplier<CompanyCreationRules> rules, AssetBindingService assets, PrimaryOfferingService offerings) { this.registration=registration; this.queries=queries; this.messages=messages; this.mainThread=mainThread; this.rules=rules; this.assets=assets; this.offerings=offerings; }
     public void setAccepting(boolean accepting) { this.accepting = accepting; }
     public static Optional<RegistrationRequest> parseCreate(UUID player, String[] args, CompanyCreationRules rules) {
         if (args.length < 4 || !"create".equalsIgnoreCase(args[0])) return Optional.empty();
@@ -29,7 +32,7 @@ public final class CompanyCommand implements CommandExecutor {
         return name.isBlank() ? Optional.empty() : Optional.of(new RegistrationRequest(player, name, paidInCapital, percent));
     }
     @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-        if (args.length == 0) { messages.companyHelp(sender instanceof Player && sender.hasPermission("blockeco.company.create"), sender.hasPermission("blockeco.company.info"), sender.hasPermission("blockeco.admin.recovery"), rules).forEach(sender::sendMessage); return true; }
+        if (args.length == 0) { messages.companyHelp(sender instanceof Player && sender.hasPermission("blockeco.company.create"), sender.hasPermission("blockeco.company.info"), sender.hasPermission("blockeco.admin.recovery"), rules.get()).forEach(sender::sendMessage); return true; }
         if (!accepting) { sender.sendMessage(messages.initializing()); return true; }
         if ("create".equalsIgnoreCase(args[0])) return create(sender, args);
         if ("info".equalsIgnoreCase(args[0])) return info(sender, args);
@@ -43,13 +46,14 @@ public final class CompanyCommand implements CommandExecutor {
         return false;
     }
     private boolean bindAsset(CommandSender sender,String[] args) { if (!(sender instanceof Player player)) { sender.sendMessage(messages.playersOnly()); return true; } if(!player.hasPermission("blockeco.company.asset.bind")){player.sendMessage(messages.noPermission());return true;} if(!accepting||assets==null){player.sendMessage(messages.initializing());return true;} if(args.length!=4||!"bind".equalsIgnoreCase(args[1])){player.sendMessage(messages.usageAssetBind());return true;} queries.findByFounder(player.getUniqueId()).whenComplete((company,failure)->{if(failure!=null||company.isEmpty()){mainThread.submit(()->{player.sendMessage(messages.companyNotFound());return null;});return;} assets.bind(company.get().id(),player.getUniqueId(),args[2],args[3]).whenComplete((binding,error)->mainThread.submit(()->{player.sendMessage(error==null?messages.assetBound():messages.assetBindFailed());return null;}));}); return true; }
-    private boolean announce(CommandSender sender,String[] args) { if (!(sender instanceof Player player)) { sender.sendMessage(messages.playersOnly()); return true; } if(!player.hasPermission("blockeco.company.ipo.announce")){player.sendMessage(messages.noPermission());return true;} if(!accepting||offerings==null){player.sendMessage(messages.initializing());return true;} if(args.length!=4||!"announce".equalsIgnoreCase(args[1])){player.sendMessage(messages.usageIpoAnnounce());return true;} Money target,price;try{target=Money.fromMajor(new BigDecimal(args[2]),rules.scale());price=Money.fromMajor(new BigDecimal(args[3]),rules.scale());}catch(RuntimeException e){player.sendMessage(messages.usageIpoAnnounce());return true;} queries.findByFounder(player.getUniqueId()).whenComplete((company,failure)->{if(failure!=null||company.isEmpty()){mainThread.submit(()->{player.sendMessage(messages.companyNotFound());return null;});return;} offerings.announce(company.get().id(),player.getUniqueId(),target,price).whenComplete((offer,error)->mainThread.submit(()->{player.sendMessage(error==null?messages.ipoAnnounced():messages.ipoAnnounceFailed());return null;}));}); return true; }
+    private boolean announce(CommandSender sender,String[] args) { if (!(sender instanceof Player player)) { sender.sendMessage(messages.playersOnly()); return true; } if(!player.hasPermission("blockeco.company.ipo.announce")){player.sendMessage(messages.noPermission());return true;} if(!accepting||offerings==null){player.sendMessage(messages.initializing());return true;} if(args.length!=4||!"announce".equalsIgnoreCase(args[1])){player.sendMessage(messages.usageIpoAnnounce());return true;} CompanyCreationRules snapshot=rules.get(); Money target,price;try{target=Money.fromMajor(new BigDecimal(args[2]),snapshot.scale());price=Money.fromMajor(new BigDecimal(args[3]),snapshot.scale());}catch(RuntimeException e){player.sendMessage(messages.usageIpoAnnounce());return true;} queries.findByFounder(player.getUniqueId()).whenComplete((company,failure)->{if(failure!=null||company.isEmpty()){mainThread.submit(()->{player.sendMessage(messages.companyNotFound());return null;});return;} offerings.announce(company.get().id(),player.getUniqueId(),target,price).whenComplete((offer,error)->mainThread.submit(()->{player.sendMessage(error==null?messages.ipoAnnounced():messages.ipoAnnounceFailed());return null;}));}); return true; }
     private boolean create(CommandSender sender, String[] args) {
         if (!(sender instanceof Player player)) { sender.sendMessage(messages.playersOnly()); return true; }
         if (!player.hasPermission("blockeco.company.create")) { player.sendMessage(messages.noPermission()); return true; }
         if (!accepting) { player.sendMessage(messages.initializing()); return true; }
-        Optional<RegistrationRequest> request = parseCreate(player.getUniqueId(), args, rules);
-        if (request.isEmpty()) { player.sendMessage(messages.usageCreate(rules)); return true; }
+        CompanyCreationRules snapshot = rules.get();
+        Optional<RegistrationRequest> request = parseCreate(player.getUniqueId(), args, snapshot);
+        if (request.isEmpty()) { player.sendMessage(messages.usageCreate(snapshot)); return true; }
         if (!inFlight.add(player.getUniqueId())) { player.sendMessage(messages.duplicateRequest()); return true; }
         player.sendMessage(messages.processing());
         registration.register(request.get()).whenComplete((result, failure) -> mainThread.submit(() -> {

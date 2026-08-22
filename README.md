@@ -63,7 +63,7 @@ Paper 完成保存，再让 BlockStock 的下一次启动完成迁移。
 | `database.pool-size` | `2` | 保留的连接池大小设置；本 Phase 1 构建使用固定的小型 Hikari 配置。 |
 | `messages.*` | 见生成的文件 | 所有面向玩家的命令消息，包括处理中、恢复和查询文本。请在适用处保留 `%name%`、`%state%`、`%id%`、`%player%`、`%amount%`、`%time%` 与 `%error%` 占位符。 |
 
-修改配置后请重启。插件会拒绝无效的小数位，以及非正数费用/资本，不会静默取整。
+修改其他配置后请重启。插件会拒绝无效的小数位，以及非正数费用/资本，不会静默取整。OP 可通过 `/stockadmin config min-capital <金额>` 在运行时调整最低注册资本：成功保存 `config.yml` 后，下一笔开始的注册、中文帮助和补全立即使用新值；已存在公司及已经开始的注册不受影响。先备份 `config.yml`。数据库不可用时配置保存仍可成功，但管理员会收到中文审计失败告警；不得将该次审计视为已写入。
 
 ## 命令与权限
 
@@ -74,6 +74,8 @@ Paper 完成保存，再让 BlockStock 的下一次启动完成迁移。
 | `/company recovery list` | `blockeco.admin.recovery`（默认：op） | 列出未解决/可见的注册记录；绝不强制退款。 |
 | `/company asset bind <adapter> <external-key>` | `blockeco.company.asset.bind`（默认：true） | 将创始人的公司绑定到外部资产；没有已验证适配器时会拒绝。 |
 | `/company ipo announce <目标金额> <发行价>` | `blockeco.company.ipo.announce`（默认：true） | 为已绑定资产的公司公告首次发行；公告 12 小时后才开放认购。 |
+| `/stockadmin config` | `blockstock.admin.config`（默认：op） | 显示当前最低注册资本。 |
+| `/stockadmin config min-capital <金额>` | `blockstock.admin.config`（默认：op） | 保存并立即发布下一笔公司注册使用的最低注册资本。金额必须为正数，且小数位必须恰好符合 `currency.scale`。 |
 
 直接执行 `/company` 会按调用者权限显示中文指引：可创建的玩家会看到“BlockStock
 公司命令：”、`/company create <名称> <实缴资本> <DIVIDENDS>`，以及创建费、最低注册资本、

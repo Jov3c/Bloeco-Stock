@@ -93,6 +93,18 @@ class CompanyCommandTest {
     }
 
     @Test
+    void changed_minimum_is_used_immediately_by_company_parse_and_help() {
+        MutableCompanyCreationRules live = new MutableCompanyCreationRules(rules);
+        live.replaceMinimumCapital(Money.fromMajor(new BigDecimal("25000.50"), 2));
+        Player player = permittedPlayer("blockeco.company.create");
+        CompanyCommand command = new CompanyCommand(mock(CompanyRegistrationService.class), mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN, live);
+
+        assertThat(CompanyCommand.parseCreate(founder, new String[] {"create", "North", "10000.00", "50"}, live.current())).isEmpty();
+        command.onCommand(player, mock(Command.class), "company", new String[0]);
+        assertThat(allPlainMessages(player)).contains("最低注册资本：25000.50");
+    }
+
+    @Test
     void create_parser_joins_multiword_name_before_final_dividend() {
         var result = CompanyCommand.parseCreate(founder, new String[] {"create", "North", "Star", "10000.00", "50"}, rules);
 

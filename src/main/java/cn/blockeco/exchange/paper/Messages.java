@@ -12,6 +12,12 @@ public final class Messages {
     public Component processing() { return message("processing", "公司注册正在处理中。"); }
     public Component initializing() { return message("initializing", "BlockStock 正在初始化，请稍后再试。"); }
     public Component noPermission() { return message("no-permission", "你没有权限。"); }
+    public Component minimumCapital(CompanyCreationRules rules) { return message("stockadmin-minimum-capital", "当前最低注册资本：%capital%").replaceText(b -> b.matchLiteral("%capital%").replacement(rules.minimumCapitalMajor())); }
+    public Component usageStockAdminConfig() { return message("usage-stockadmin-config", "用法：/stockadmin config [min-capital <金额>]"); }
+    public Component invalidMinimumCapital() { return message("invalid-minimum-capital", "最低注册资本必须是正数，且小数位必须与货币精度一致。"); }
+    public Component minimumCapitalSaveFailed() { return message("minimum-capital-save-failed", "最低注册资本保存失败，当前规则未改变。"); }
+    public Component minimumCapitalSaved(String amount) { return message("minimum-capital-saved", "最低注册资本已更新为 %capital%。").replaceText(b -> b.matchLiteral("%capital%").replacement(amount)); }
+    public Component minimumCapitalAuditFailed() { return message("minimum-capital-audit-failed", "最低注册资本已保存，但审计写入失败；请检查数据库。 "); }
     public Component playersOnly() { return message("players-only", "此命令只能由玩家执行。"); }
     public Component usageCreate(CompanyCreationRules rules) { return message("usage-create", "用法：/company create <名称> <实缴资本> <DIVIDENDS>").replaceText(b -> b.matchLiteral("DIVIDENDS").replacement(rules.dividendChoices())); }
     public Component usageInfo() { return message("usage-info", "用法：/company info <名称>"); }

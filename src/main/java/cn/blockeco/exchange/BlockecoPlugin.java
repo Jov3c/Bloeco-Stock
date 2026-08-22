@@ -18,6 +18,8 @@ import cn.blockeco.exchange.infrastructure.vault.VaultEconomyGateway;
 import cn.blockeco.exchange.infrastructure.vault.VaultTreasuryEscrowGateway;
 import cn.blockeco.exchange.paper.CompanyCommand;
 import cn.blockeco.exchange.paper.CompanyCreationRules;
+import cn.blockeco.exchange.paper.MutableCompanyCreationRules;
+import cn.blockeco.exchange.paper.StockAdminConfigCommand;
 import cn.blockeco.exchange.paper.CompanyTabCompleter;
 import cn.blockeco.exchange.paper.Messages;
 import cn.blockeco.exchange.paper.PaperMainThread;
@@ -41,7 +43,7 @@ public final class BlockecoPlugin extends JavaPlugin {
     private Database database;
     private CompanyCommand command;
     private BootstrapCoordinator<Database> bootstrap;
-    private CompanyCreationRules creationRules;
+    private MutableCompanyCreationRules creationRules;
     private final PluginRuntime runtime = new PluginRuntime();
     private final CompanyAssetAdapterRegistry assetAdapterRegistry = new CompanyAssetAdapterRegistryImpl();
     private IpoLifecycleScheduler ipoLifecycle;
@@ -81,17 +83,25 @@ public final class BlockecoPlugin extends JavaPlugin {
         var economy = new VaultEconomyGateway(getServer(), scale);
         var finance = new SqlCompanyFinanceRepository(db.dataSource());
         var escrow = new VaultTreasuryEscrowGateway(economy, mainThread, escrowId);
-        var registration = new CompanyRegistrationService(companies, sagas, new SqlAuditLog(), db, economy, mainThread, sqlExecutor, clock, configuredMoney("company.registration-fee", scale), configuredMoney("company.minimum-capital", scale), finance, escrow, creationRules.initialShares());
+        var registration = new CompanyRegistrationService(companies, sagas, new SqlAuditLog(), db, economy, mainThread, sqlExecutor, clock, creationRules.current().registrationFee(), creationRules::current, finance, escrow, creationRules.current().initialShares());
         getServer().getServicesManager().register(CompanyAssetAdapterRegistry.class, assetAdapterRegistry, this, ServicePriority.Normal);
         var assetBindings = new AssetBindingService(new SqlAssetBindingRepository(db.dataSource()), db, () -> {
             CompanyAssetAdapterRegistry registry = getServer().getServicesManager().load(CompanyAssetAdapterRegistry.class);
             return registry == null ? java.util.List.of() : registry.snapshot();
         }, clock);
         var primaryOfferings = new PrimaryOfferingService(new SqlPrimaryOfferingRepository(db.dataSource()), db, escrow, sqlExecutor, clock);
-        command = new CompanyCommand(registration, new CompanyQueryService(companies, sagas, new SqlCompanyFinanceRepository(db.dataSource()), sqlExecutor), new Messages(getConfig().getConfigurationSection("messages")), mainThread, creationRules, assetBindings, primaryOfferings);
+        command = new CompanyCommand(registration, new CompanyQueryService(companies, sagas, new SqlCompanyFinanceRepository(db.dataSource()), sqlExecutor), new Messages(getConfig().getConfigurationSection("messages")), mainThread, creationRules::current, assetBindings, primaryOfferings);
         var companyCommand = getCommand("company");
         if (companyCommand == null) throw new IllegalStateException(missingCompanyCommandMessage());
         companyCommand.setExecutor(command);
+        var adminCommand = getCommand("stockadmin");
+        if (adminCommand == null) throw new IllegalStateException("BlockStock 命令注册失败：未在 plugin.yml 中声明 stockadmin 命令");
+        var messages = new Messages(getConfig().getConfigurationSection("messages"));
+        var adminConfig = new StockAdminConfigCommand(creationRules, new StockAdminConfigCommand.ConfigStore() {
+            @Override public void setMinimumCapital(String value) { getConfig().set("company.minimum-capital", value); }
+            @Override public void save() { saveConfig(); }
+        }, new SqlAuditLog(), db, sqlExecutor, clock, messages, mainThread);
+        adminCommand.setExecutor(adminConfig); adminCommand.setTabCompleter(adminConfig);
         var capitalizations = new CompanyCapitalizationService(finance, new SqlAuditLog(), db, escrow, mainThread, sqlExecutor, clock);
         new StartupRecoveryGate(failure -> getServer().getScheduler().runTask(this, () -> failEnable(startupFailureMessage(new IllegalStateException(failure))))).start(escrowFailure, capitalizations::recoverPendingCapitalizations, recovered -> getServer().getScheduler().runTask(this, () -> {
             if (!runtime.attachReady(command, database)) return;
@@ -122,7 +132,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         positive("company.registration-fee", scale); positive("company.minimum-capital", scale);
         try { if (new java.util.UUID(0, 0).equals(java.util.UUID.fromString(getConfig().getString("company.treasury-escrow-uuid")))) throw new IllegalArgumentException("company.treasury-escrow-uuid must not be zero"); }
         catch (IllegalArgumentException failure) { throw new IllegalArgumentException("company.treasury-escrow-uuid must be a non-zero UUID", failure); }
-        creationRules = new CompanyCreationRules(configuredMoney("company.registration-fee", scale), configuredMoney("company.minimum-capital", scale), scale, getConfig().getInt("company.initial-shares"), getConfig().getIntegerList("company.allowed-dividend-percent"));
+        creationRules = new MutableCompanyCreationRules(new CompanyCreationRules(configuredMoney("company.registration-fee", scale), configuredMoney("company.minimum-capital", scale), scale, getConfig().getInt("company.initial-shares"), getConfig().getIntegerList("company.allowed-dividend-percent")));
     }
     private void positive(String path, int scale) { if (configuredMoney(path, scale).minorUnits() <= 0) throw new IllegalArgumentException(path + " must be positive"); }
     private Money configuredMoney(String path, int scale) { return Money.fromMajor(new BigDecimal(getConfig().getString(path)), scale); }

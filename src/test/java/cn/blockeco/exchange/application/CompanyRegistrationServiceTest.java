@@ -15,6 +15,8 @@ import cn.blockeco.exchange.ports.MainThreadExecutor;
 import cn.blockeco.exchange.ports.RegistrationSagaRepository;
 import cn.blockeco.exchange.ports.TransactionRunner;
 import cn.blockeco.exchange.infrastructure.sql.Database;
+import cn.blockeco.exchange.paper.CompanyCreationRules;
+import cn.blockeco.exchange.paper.MutableCompanyCreationRules;
 import cn.blockeco.exchange.infrastructure.sql.SqlAuditLog;
 import cn.blockeco.exchange.infrastructure.sql.SqlCompanyRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlCompanyFinanceRepository;
@@ -26,6 +28,7 @@ import java.nio.file.Path;
 import java.sql.Connection;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -100,6 +103,37 @@ class CompanyRegistrationServiceTest {
 
             assertThat(result.status()).isEqualTo(RegistrationResult.Status.PROVIDER_FAILURE);
             assertThat(economy.calls).isZero();
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
+    void live_minimum_changes_apply_before_vault_to_the_next_registration_only() throws Exception {
+        Path file = Files.createTempFile("blockeco-live-minimum-", ".db");
+        try (Database database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate(); Instant now = Instant.parse("2026-08-22T01:02:03Z"); ProgrammableEconomy economy = new ProgrammableEconomy();
+            MutableCompanyCreationRules live = new MutableCompanyCreationRules(new CompanyCreationRules(Money.ofMinor(100), Money.ofMinor(1_000), 2, 1_000, List.of(50)));
+            CompanyRegistrationService service = new CompanyRegistrationService(new SqlCompanyRepository(database.dataSource()), new SqlRegistrationSagaRepository(database.dataSource(), () -> now), new SqlAuditLog(), database, economy, directMain(), Runnable::run, () -> now, Money.ofMinor(100), live::current, new SqlCompanyFinanceRepository(database.dataSource()), new RecordingRegistrationEscrow(), 1_000);
+            live.replaceMinimumCapital(Money.ofMinor(500));
+            assertThat(service.register(new RegistrationRequest(UUID.randomUUID(), "Raised", Money.ofMinor(499), 50)).toCompletableFuture().join().status()).isEqualTo(RegistrationResult.Status.PROVIDER_FAILURE);
+            assertThat(economy.calls).isZero();
+            live.replaceMinimumCapital(Money.ofMinor(400));
+            assertThat(service.register(new RegistrationRequest(UUID.randomUUID(), "Lowered", Money.ofMinor(499), 50)).toCompletableFuture().join().status()).isEqualTo(RegistrationResult.Status.SUCCESS);
+            assertThat(economy.calls).isEqualTo(1);
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
+    void in_flight_registration_keeps_the_minimum_snapshot_taken_before_vault() throws Exception {
+        Path file = Files.createTempFile("blockeco-live-minimum-snapshot-", ".db");
+        try (Database database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate(); Instant now = Instant.parse("2026-08-22T01:02:03Z"); CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+            BlockingEconomy economy = new BlockingEconomy(entered, release); MutableCompanyCreationRules live = new MutableCompanyCreationRules(new CompanyCreationRules(Money.ofMinor(100), Money.ofMinor(1_000), 2, 1_000, List.of(50)));
+            MainThreadExecutor asyncMain = new MainThreadExecutor() { @Override public <T> CompletionStage<T> submit(Supplier<T> work) { return CompletableFuture.supplyAsync(work); } };
+            CompanyRegistrationService service = new CompanyRegistrationService(new SqlCompanyRepository(database.dataSource()), new SqlRegistrationSagaRepository(database.dataSource(), () -> now), new SqlAuditLog(), database, economy, asyncMain, Runnable::run, () -> now, Money.ofMinor(100), live::current, null, null, 1_000);
+            var result = service.register(new RegistrationRequest(UUID.randomUUID(), "Snapshot", 50));
+            assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue(); live.replaceMinimumCapital(Money.ofMinor(5_000)); release.countDown();
+            assertThat(result.toCompletableFuture().join().status()).isEqualTo(RegistrationResult.Status.SUCCESS);
+            assertThat(economy.withdrawn).isEqualTo(Money.ofMinor(1_100));
         } finally { Files.deleteIfExists(file); }
     }
 
@@ -477,10 +511,10 @@ class CompanyRegistrationServiceTest {
     }
 
     private static final class BlockingEconomy implements EconomyGateway {
-        private final CountDownLatch entered; private final CountDownLatch release; private int withdrawCalls;
+        private final CountDownLatch entered; private final CountDownLatch release; private int withdrawCalls; private Money withdrawn = Money.zero();
         private BlockingEconomy(CountDownLatch entered, CountDownLatch release) { this.entered = entered; this.release = release; }
         @Override public Result withdraw(UUID player, Money amount) {
-            withdrawCalls++; entered.countDown();
+            withdrawCalls++; withdrawn = amount; entered.countDown();
             try { if (!release.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("test timeout"); }
             catch (InterruptedException exception) { Thread.currentThread().interrupt(); throw new IllegalStateException(exception); }
             return Result.success("");

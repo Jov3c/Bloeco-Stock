@@ -12,14 +12,16 @@ import cn.blockeco.exchange.domain.finance.ShareHolding;
 import cn.blockeco.exchange.domain.finance.TreasuryOperation;
 import cn.blockeco.exchange.domain.finance.TreasuryOperationState;
 import cn.blockeco.exchange.ports.*;
+import cn.blockeco.exchange.paper.CompanyCreationRules;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.*;
+import java.util.function.Supplier;
 
 public final class CompanyRegistrationService {
-    private final Money registrationFee; private final Money minimumCapital;
+    private final Money registrationFee; private final Supplier<Money> minimumCapital;
     private final CompanyRepository companies; private final RegistrationSagaRepository sagas; private final AuditLog audits;
     private final TransactionRunner transactions; private final EconomyGateway economy; private final MainThreadExecutor mainThread;
     private final Executor sqlExecutor; private final AppClock clock;
@@ -30,6 +32,11 @@ public final class CompanyRegistrationService {
     public CompanyRegistrationService(CompanyRepository companies, RegistrationSagaRepository sagas, AuditLog audits,
             TransactionRunner transactions, EconomyGateway economy, MainThreadExecutor mainThread, Executor sqlExecutor, AppClock clock, Money registrationFee, Money minimumCapital) {
         this(companies, sagas, audits, transactions, economy, mainThread, sqlExecutor, clock, registrationFee, minimumCapital, null);
+    }
+    /** Reads the minimum once as registration begins, before any Vault interaction. */
+    public CompanyRegistrationService(CompanyRepository companies, RegistrationSagaRepository sagas, AuditLog audits,
+            TransactionRunner transactions, EconomyGateway economy, MainThreadExecutor mainThread, Executor sqlExecutor, AppClock clock, Money registrationFee, Supplier<CompanyCreationRules> liveRules, CompanyFinanceRepository finance, TreasuryEscrowGateway escrow, long initialShares) {
+        this(companies, sagas, audits, transactions, economy, mainThread, sqlExecutor, clock, registrationFee, () -> liveRules.get().minimumCapital(), null, finance, escrow, initialShares);
     }
     public CompanyRegistrationService(CompanyRepository companies, RegistrationSagaRepository sagas, AuditLog audits,
             TransactionRunner transactions, EconomyGateway economy, MainThreadExecutor mainThread, Executor sqlExecutor, AppClock clock, Money registrationFee, Money minimumCapital, CompanyCapitalizationService capitalization) {
@@ -50,18 +57,24 @@ public final class CompanyRegistrationService {
     }
     private CompanyRegistrationService(CompanyRepository companies, RegistrationSagaRepository sagas, AuditLog audits,
             TransactionRunner transactions, EconomyGateway economy, MainThreadExecutor mainThread, Executor sqlExecutor, AppClock clock, Money registrationFee, Money minimumCapital, CompanyCapitalizationService capitalization, CompanyFinanceRepository finance, TreasuryEscrowGateway escrow, long initialShares) {
+        this(companies, sagas, audits, transactions, economy, mainThread, sqlExecutor, clock, registrationFee, () -> minimumCapital, capitalization, finance, escrow, initialShares);
+    }
+    private CompanyRegistrationService(CompanyRepository companies, RegistrationSagaRepository sagas, AuditLog audits,
+            TransactionRunner transactions, EconomyGateway economy, MainThreadExecutor mainThread, Executor sqlExecutor, AppClock clock, Money registrationFee, Supplier<Money> minimumCapital, CompanyCapitalizationService capitalization, CompanyFinanceRepository finance, TreasuryEscrowGateway escrow, long initialShares) {
         if (initialShares < 1_000) throw new IllegalArgumentException("initialShares must be at least 1000");
         this.companies=companies; this.sagas=sagas; this.audits=audits; this.transactions=transactions; this.economy=economy;
         this.mainThread=mainThread; this.sqlExecutor=sqlExecutor; this.clock=clock; this.registrationFee=registrationFee; this.minimumCapital=minimumCapital; this.capitalization=capitalization; this.finance=finance; this.escrow=escrow; this.initialShares=initialShares;
     }
     public CompletionStage<RegistrationResult> register(RegistrationRequest request) {
-        Money paidInCapital = paidInCapital(request);
-        if (paidInCapital.minorUnits() <= 0 || paidInCapital.minorUnits() < minimumCapital.minorUnits())
+        Money minimum = minimumCapital.get();
+        Money paidInCapital = paidInCapital(request, minimum);
+        if (paidInCapital.minorUnits() <= 0 || paidInCapital.minorUnits() < minimum.minorUnits())
             return CompletableFuture.completedFuture(RegistrationResult.of(RegistrationResult.Status.PROVIDER_FAILURE, "paid-in capital is below the configured minimum"));
-        return CompletableFuture.supplyAsync(() -> prepare(request), sqlExecutor).thenCompose(prepared -> {
+        RegistrationRequest snapshot = request.paidInCapital().minorUnits() == 0 ? new RegistrationRequest(request.founderId(), request.companyName(), paidInCapital, request.dividendPercent()) : request;
+        return CompletableFuture.supplyAsync(() -> prepare(snapshot), sqlExecutor).thenCompose(prepared -> {
             if (prepared.result != null) return CompletableFuture.completedFuture(prepared.result);
-            return mainThread.submit(() -> economy.withdraw(request.founderId(), prepared.saga.totalWithdrawal()))
-                    .thenCompose(outcome -> afterWithdrawal(request, prepared.saga, outcome));
+            return mainThread.submit(() -> economy.withdraw(snapshot.founderId(), prepared.saga.totalWithdrawal()))
+                    .thenCompose(outcome -> afterWithdrawal(snapshot, prepared.saga, outcome));
         });
     }
     /** Marks only definitely stale PREPARED records; it never attempts a monetary action. */
@@ -190,9 +203,10 @@ public final class CompanyRegistrationService {
                 "sagaId", saga.id().toString(), "fromState", from, "toState", to.name(),
                 "totalWithdrawalMinor", saga.totalWithdrawal().minorUnits(), "reason", diagnostic == null ? "" : diagnostic), clock.now());
     }
-    private Money paidInCapital(RegistrationRequest request) {
+    private Money paidInCapital(RegistrationRequest request) { return paidInCapital(request, minimumCapital.get()); }
+    private Money paidInCapital(RegistrationRequest request, Money minimum) {
         if (request.paidInCapital().minorUnits() == 0 && finance != null) return request.paidInCapital();
-        return request.paidInCapital().minorUnits() == 0 ? minimumCapital : request.paidInCapital();
+        return request.paidInCapital().minorUnits() == 0 ? minimum : request.paidInCapital();
     }
     private record Prepared(RegistrationSaga saga, RegistrationResult result) { }
 }

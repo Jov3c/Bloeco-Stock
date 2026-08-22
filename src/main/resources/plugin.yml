@@ -7,6 +7,9 @@ commands:
   company:
     description: 管理 BlockStock 公司
     usage: /company <create|info|asset bind|ipo announce|recovery>
+  stockadmin:
+    description: 管理 BlockStock 运行时配置
+    usage: /stockadmin config [min-capital <金额>]
 permissions:
   blockeco.player:
     description: 'BlockStock 玩家权限'
@@ -28,4 +31,6 @@ permissions:
   blockeco.company.ipo.announce:
     default: true
   blockeco.admin.recovery:
+    default: op
+  blockstock.admin.config:
     default: op
