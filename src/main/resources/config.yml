@@ -1,5 +1,10 @@
 currency:
   scale: 2
+market:
+  # 买方手续费，创建委托时快照到订单；范围 0..10000（万分比）。
+  fee-bps: 10
+  # 日内行情和成交日的时区；必须为 Java ZoneId，例如 Asia/Shanghai。
+  time-zone: 'Asia/Shanghai'
 company:
   registration-fee: '1000.00'
   minimum-capital: '10000.00'

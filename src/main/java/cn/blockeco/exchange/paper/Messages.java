@@ -6,6 +6,13 @@ import cn.blockeco.exchange.domain.finance.PublicOfferingView;
 import cn.blockeco.exchange.application.PublicAnnouncement;
 import cn.blockeco.exchange.application.PublicMarketRow;
 import cn.blockeco.exchange.application.PublicStockInfo;
+import cn.blockeco.exchange.application.SecuritiesCashResult;
+import cn.blockeco.exchange.application.PortfolioView;
+import cn.blockeco.exchange.application.OrderPlacementResult;
+import cn.blockeco.exchange.application.OrderView;
+import cn.blockeco.exchange.application.TradeView;
+import cn.blockeco.exchange.application.OrderBookLevel;
+import cn.blockeco.exchange.application.SecondaryMarketQueryService;
 import org.bukkit.configuration.ConfigurationSection;
 
 /** Configuration-backed user messages; defaults keep the first deployment usable. */
@@ -18,7 +25,26 @@ public final class Messages {
     public Component processing() { return message("processing", "公司注册正在处理中。"); }
     public Component initializing() { return message("initializing", "BlockStock 正在初始化，请稍后再试。"); }
     public Component noPermission() { return message("no-permission", "你没有权限。"); }
-    public Component usageStock() { return message("usage-stock", "用法：/stock [help]|market|ipo [数量]|info <公司名|代码>|announcements <公司名|代码> [数量]|subscribe <公司名|代码> <正整数股>"); }
+    public Component usageStock() { return message("usage-stock", "用法：/stock help|market|ipo|info|announcements|subscribe|cash|deposit|withdraw|buy|sell|cancel|portfolio|orders|trades|book"); }
+    public Component usageStockCash() { return message("usage-stock-cash", "用法：/stock cash"); }
+    public Component usageStockDeposit() { return message("usage-stock-deposit", "用法：/stock deposit <金额>"); }
+    public Component usageStockWithdraw() { return message("usage-stock-withdraw", "用法：/stock withdraw <金额>"); }
+    public Component usageStockOrder(boolean buy) { return message(buy?"usage-stock-buy":"usage-stock-sell", "用法：/stock " + (buy?"buy":"sell") + " <代码> <正整数股> <限价>"); }
+    public Component usageStockCancel() { return message("usage-stock-cancel", "用法：/stock cancel <订单UUID>"); }
+    public Component usageStockPortfolio() { return message("usage-stock-portfolio", "用法：/stock portfolio"); }
+    public Component usageStockOrders() { return message("usage-stock-orders", "用法：/stock orders [1-50]"); }
+    public Component usageStockTrades() { return message("usage-stock-trades", "用法：/stock trades [1-50]"); }
+    public Component usageStockBook() { return message("usage-stock-book", "用法：/stock book <代码>"); }
+    public Component invalidStockMoney() { return message("stock-invalid-money", "金额必须为正数，且小数位必须与服务器货币精度一致。"); }
+    public Component marketUnavailable() { return message("stock-market-unavailable", "证券交易功能暂不可用，请稍后再试。"); }
+    public Component cash(PortfolioView view) { return message("stock-cash", "证券账户：可用=%available% 冻结=%reserved%").replaceText(b->b.matchLiteral("%available%").replacement(amount(view.availableCash()))).replaceText(b->b.matchLiteral("%reserved%").replacement(amount(view.reservedCash()))); }
+    public Component cashResult(SecuritiesCashResult result) { return message("stock-cash-result", "资金操作=%id% 状态=%state%：%detail%").replaceText(b->b.matchLiteral("%id%").replacement(result.operationId().toString())).replaceText(b->b.matchLiteral("%state%").replacement(displayState(result.state()))).replaceText(b->b.matchLiteral("%detail%").replacement(result.detail())); }
+    public List<Component> portfolio(PortfolioView view) { java.util.ArrayList<Component> lines=new java.util.ArrayList<>(); lines.add(cash(view)); if(view.holdings().isEmpty()) lines.add(message("stock-portfolio-empty","当前没有持仓。")); else view.holdings().forEach(h->lines.add(message("stock-portfolio-row","%company% [%code%] 可用=%available% 冻结=%reserved% 最新=%price%").replaceText(b->b.matchLiteral("%company%").replacement(h.companyName())).replaceText(b->b.matchLiteral("%code%").replacement(h.stockCode())).replaceText(b->b.matchLiteral("%available%").replacement(String.valueOf(h.availableShares()))).replaceText(b->b.matchLiteral("%reserved%").replacement(String.valueOf(h.reservedShares()))).replaceText(b->b.matchLiteral("%price%").replacement(amount(h.latestPrice()))))); return List.copyOf(lines); }
+    public Component orderResult(OrderPlacementResult result) { return message("stock-order-result","订单=%id% %side% %code% 剩余=%remaining% 状态=%state%").replaceText(b->b.matchLiteral("%id%").replacement(result.order().id().toString())).replaceText(b->b.matchLiteral("%side%").replacement(result.order().side()==cn.blockeco.exchange.domain.trading.LimitOrder.Side.BUY?"买入":"卖出")).replaceText(b->b.matchLiteral("%code%").replacement(result.order().stockCode())).replaceText(b->b.matchLiteral("%remaining%").replacement(String.valueOf(result.order().remainingShares()))).replaceText(b->b.matchLiteral("%state%").replacement(displayState(result.order().state()))); }
+    public Component order(OrderView value) { return message("stock-order-row","订单=%id% %side% %code% 限价=%price% 剩余=%remaining%/%total% 状态=%state%").replaceText(b->b.matchLiteral("%id%").replacement(value.id().toString())).replaceText(b->b.matchLiteral("%side%").replacement(value.side()==cn.blockeco.exchange.domain.trading.LimitOrder.Side.BUY?"买":"卖")).replaceText(b->b.matchLiteral("%code%").replacement(value.stockCode())).replaceText(b->b.matchLiteral("%price%").replacement(amount(value.limitPrice()))).replaceText(b->b.matchLiteral("%remaining%").replacement(String.valueOf(value.remainingShares()))).replaceText(b->b.matchLiteral("%total%").replacement(String.valueOf(value.originalShares()))).replaceText(b->b.matchLiteral("%state%").replacement(displayState(value.state()))); }
+    public Component trade(TradeView value) { return message("stock-trade-row","成交=%id% %side% %code% %shares%股 价格=%price% 金额=%notional% 手续费=%fee%").replaceText(b->b.matchLiteral("%id%").replacement(value.id().toString())).replaceText(b->b.matchLiteral("%side%").replacement(value.side()==cn.blockeco.exchange.domain.trading.LimitOrder.Side.BUY?"买":"卖")).replaceText(b->b.matchLiteral("%code%").replacement(value.stockCode())).replaceText(b->b.matchLiteral("%shares%").replacement(String.valueOf(value.shares()))).replaceText(b->b.matchLiteral("%price%").replacement(amount(value.price()))).replaceText(b->b.matchLiteral("%notional%").replacement(amount(value.notional()))).replaceText(b->b.matchLiteral("%fee%").replacement(amount(value.fee()))); }
+    public Component ordersEmpty() { return message("stock-orders-empty", "当前没有委托。 "); } public Component tradesEmpty() { return message("stock-trades-empty", "当前没有成交。 "); }
+    public List<Component> book(SecondaryMarketQueryService.OrderBook book) { java.util.ArrayList<Component> lines=new java.util.ArrayList<>(); lines.add(message("stock-book-bids","买五档：")); for(OrderBookLevel v:book.bids()) lines.add(Component.text("买 " + amount(v.price()) + " × " + v.shares())); lines.add(message("stock-book-asks","卖五档：")); for(OrderBookLevel v:book.asks()) lines.add(Component.text("卖 " + amount(v.price()) + " × " + v.shares())); return List.copyOf(lines); }
     public Component usageStockIpo() { return message("usage-stock-ipo", "用法：/stock ipo [1-50]"); }
     public Component usageStockInfo() { return message("usage-stock-info", "用法：/stock info <公司名|代码>"); }
     public Component usageStockAnnouncements() { return message("usage-stock-announcements", "用法：/stock announcements <公司名|代码> [1-50]"); }
@@ -34,7 +60,7 @@ public final class Messages {
     public Component stockIpoRow(PublicOfferingView view) { return publicIpo(view); }
     public Component stockInfo(PublicStockInfo info) { return message("stock-info-row", "%company% 代码=%code% 状态=%state% 参考价（暂无成交）=%price% 已发行=%shares%").replaceText(b->b.matchLiteral("%company%").replacement(info.companyName())).replaceText(b->b.matchLiteral("%code%").replacement(info.stockCode().orElse("暂无"))).replaceText(b->b.matchLiteral("%state%").replacement(displayState(info.status()))).replaceText(b->b.matchLiteral("%price%").replacement(info.issueReferencePrice().map(this::amount).orElse("暂无"))).replaceText(b->b.matchLiteral("%shares%").replacement(String.valueOf(info.issuedShares()))); }
     public Component announcement(PublicAnnouncement announcement) { return message("stock-announcement-row", "%company% 公告[%time%] %body%").replaceText(b->b.matchLiteral("%company%").replacement(announcement.companyName())).replaceText(b->b.matchLiteral("%time%").replacement(announcement.publishedAt().toString())).replaceText(b->b.matchLiteral("%body%").replacement(announcement.body())); }
-    public List<Component> stockHelp(org.bukkit.command.CommandSender sender) { java.util.ArrayList<Component> lines = new java.util.ArrayList<>(List.of(message("stock-help-root", "BlockStock 股票命令："), usageStock(), message("stock-help-public", "market、ipo、info 与 announcements 对所有人公开。"))); if (sender instanceof org.bukkit.entity.Player player && player.hasPermission("blockeco.stock.subscribe")) lines.add(message("stock-help-subscribe", "认购：/stock subscribe <公司名|代码> <正整数股>")); return List.copyOf(lines); }
+    public List<Component> stockHelp(org.bukkit.command.CommandSender sender) { java.util.ArrayList<Component> lines = new java.util.ArrayList<>(List.of(message("stock-help-root", "BlockStock 股票命令："), message("stock-help-public", "公开行情：/stock market；盘口：/stock book <代码>（固定买卖各五档）；IPO：ipo、info、announcements。"))); if (sender instanceof org.bukkit.entity.Player player) { if(player.hasPermission("blockeco.stock.subscribe"))lines.add(message("stock-help-subscribe", "认购：/stock subscribe <公司名|代码> <正整数股>")); if(player.hasPermission("blockeco.stock.cash"))lines.add(message("stock-help-cash", "证券账户：cash；入金：deposit <金额>；出金：withdraw <金额>。资金与个人钱包分开，处理中不可重复操作。")); if(player.hasPermission("blockeco.stock.trade"))lines.add(message("stock-help-trade", "交易：buy/sell <代码> <正整数股> <限价>；撤单：cancel <订单UUID>。仅限价单，买方支付手续费，禁止自成交。")); if(player.hasPermission("blockeco.stock.portfolio"))lines.add(message("stock-help-portfolio", "持仓：portfolio。")); if(player.hasPermission("blockeco.stock.orders"))lines.add(message("stock-help-orders", "委托：orders [1-50]。")); if(player.hasPermission("blockeco.stock.trades"))lines.add(message("stock-help-trades", "成交：trades [1-50]。")); } return List.copyOf(lines); }
     public Component minimumCapital(CompanyCreationRules rules) { return message("stockadmin-minimum-capital", "当前最低注册资本：%capital%").replaceText(b -> b.matchLiteral("%capital%").replacement(rules.minimumCapitalMajor())); }
     public Component usageStockAdminConfig() { return message("usage-stockadmin-config", "用法：/stockadmin config [min-capital <金额>]"); }
     public Component invalidMinimumCapital() { return message("invalid-minimum-capital", "最低注册资本必须是正数，且小数位必须与货币精度一致。"); }
@@ -102,6 +128,13 @@ public final class Messages {
             case "PREPARED" -> "已准备";
             case "PLAYER_WITHDRAWN" -> "已扣款待托管";
             case "ESCROW_DEPOSITED" -> "已托管待完成";
+            case "ESCROW_WITHDRAWN" -> "托管已出金待到账";
+            case "PLAYER_DEPOSITED" -> "玩家已到账待完成";
+            case "FAILED" -> "已失败";
+            case "CANCELLED" -> "已撤单";
+            case "PARTIALLY_FILLED" -> "部分成交";
+            case "FILLED" -> "已成交";
+            case "SELF_TRADE_PREVENTED" -> "已阻止自成交";
             case "WITHDRAWN" -> "已扣款";
             case "COMPLETED" -> "已完成";
             case "REFUND_REQUIRED" -> "待人工退款";

@@ -5,6 +5,7 @@ import static org.mockito.Mockito.*;
 
 import cn.blockeco.exchange.application.PrimaryOfferingService;
 import cn.blockeco.exchange.application.PublicStockQueryService;
+import cn.blockeco.exchange.application.SecuritiesCashService;
 import cn.blockeco.exchange.ports.MainThreadExecutor;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -92,6 +93,19 @@ class StockCommandTest {
 
         verifyNoInteractions(queries);
         verify(sender).sendMessage(org.mockito.ArgumentMatchers.<Component>argThat(component -> plain(component).equals("用法：/stock announcements <公司名|代码> [1-50]")));
+    }
+
+    @Test void malformed_deposit_is_rejected_before_cash_service() {
+        SecuritiesCashService cash = mock(SecuritiesCashService.class);
+        StockCommand command = new StockCommand(mock(PublicStockQueryService.class), mock(PrimaryOfferingService.class), cash, null, null, DIRECT_MAIN, () -> true, new Messages(null), 2);
+        command.setAccepting(true);
+        Player player = mock(Player.class);
+        when(player.hasPermission("blockeco.stock.cash")).thenReturn(true);
+
+        command.onCommand(player, mock(Command.class), "stock", new String[] {"deposit", "1.234"});
+
+        verifyNoInteractions(cash);
+        verify(player).sendMessage(org.mockito.ArgumentMatchers.<Component>argThat(component -> plain(component).contains("货币精度")));
     }
 
     private static String plain(Component component) {

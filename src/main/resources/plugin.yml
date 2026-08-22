@@ -12,7 +12,7 @@ commands:
     usage: /stockadmin config [min-capital <金额>]
   stock:
     description: 查询 BlockStock 公开股票与 IPO
-    usage: /stock [help]|market|ipo [数量]|info <公司名|代码>|announcements <公司名|代码> [数量]|subscribe <公司名|代码> <正整数股>
+    usage: /stock help|market|ipo|info|announcements|subscribe|cash|deposit|withdraw|buy|sell|cancel|portfolio|orders|trades|book
 permissions:
   blockeco.player:
     description: 'BlockStock 玩家权限'
@@ -23,6 +23,11 @@ permissions:
       blockeco.company.ipo.announce: true
       blockeco.company.ipo.subscribe: true
       blockeco.stock.subscribe: true
+      blockeco.stock.cash: true
+      blockeco.stock.trade: true
+      blockeco.stock.portfolio: true
+      blockeco.stock.orders: true
+      blockeco.stock.trades: true
   blockeco.admin:
     description: 'BlockStock 管理员权限'
     children:
@@ -39,6 +44,21 @@ permissions:
     default: true
   blockeco.stock.subscribe:
     description: '认购公开 IPO'
+    default: true
+  blockeco.stock.cash:
+    description: '查看和转入/转出证券账户资金'
+    default: true
+  blockeco.stock.trade:
+    description: '提交和撤销股票委托'
+    default: true
+  blockeco.stock.portfolio:
+    description: '查看自己的证券持仓'
+    default: true
+  blockeco.stock.orders:
+    description: '查看自己的委托'
+    default: true
+  blockeco.stock.trades:
+    description: '查看自己的成交'
     default: true
   blockeco.admin.recovery:
     default: op
