@@ -11,7 +11,6 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.List;
 import cn.blockeco.exchange.application.*;
-import cn.blockeco.exchange.domain.finance.SecuritiesCashAccount;
 
 /** SQL facts for reservations and fills. Every write is part of the caller's transaction. */
 public interface SecondaryTradingRepository {

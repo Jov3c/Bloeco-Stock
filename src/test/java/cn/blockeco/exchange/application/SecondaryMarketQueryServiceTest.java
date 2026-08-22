@@ -8,6 +8,7 @@ import cn.blockeco.exchange.domain.trading.LimitOrder;
 import cn.blockeco.exchange.infrastructure.sql.Database;
 import cn.blockeco.exchange.infrastructure.sql.SqlSecondaryTradingRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlSecuritiesCashRepository;
+import cn.blockeco.exchange.infrastructure.sql.SqlPublicStockRepository;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
@@ -22,7 +23,7 @@ class SecondaryMarketQueryServiceTest {
         Path file=Files.createTempFile("secondary-book-", ".db");
         try(Database db=new Database("jdbc:sqlite:"+file)) { db.migrate(); CompanyId company=Fixtures.company(db,100);seedListed(db,company);SqlSecuritiesCashRepository cash=new SqlSecuritiesCashRepository(db.dataSource());SqlSecondaryTradingRepository repo=new SqlSecondaryTradingRepository(db.dataSource(),cash);
             for(long price=1;price<=6;price++){UUID seller=UUID.randomUUID();seedHolding(db,company,seller,2);long p=price;db.inTransaction(c->{repo.reserveSell(c,order(company,seller,LimitOrder.Side.SELL,p,1));return null;});}
-            SecondaryMarketQueryService service=new SecondaryMarketQueryService(repo,Runnable::run,Clock.systemUTC(),ZoneId.of("UTC"));
+            SecondaryMarketQueryService service=new SecondaryMarketQueryService(repo,new SqlPublicStockRepository(db.dataSource()),Runnable::run,Clock.systemUTC(),ZoneId.of("UTC"));
             assertThat(service.book("BS000001",50).toCompletableFuture().join().asks()).extracting(OrderBookLevel::price).containsExactly(Money.ofMinor(1),Money.ofMinor(2),Money.ofMinor(3),Money.ofMinor(4),Money.ofMinor(5));
         }finally{Files.deleteIfExists(file);}
     }
@@ -34,7 +35,7 @@ class SecondaryMarketQueryServiceTest {
             SqlSecuritiesCashRepository cash=new SqlSecuritiesCashRepository(db.dataSource()); SqlSecondaryTradingRepository repo=new SqlSecondaryTradingRepository(db.dataSource(), cash);
             LimitOrder otherOrder=order(company, other, LimitOrder.Side.SELL, 12, 20);
             db.inTransaction(c->{ repo.reserveSell(c, order(company, owner, LimitOrder.Side.SELL, 12, 10)); repo.reserveSell(c, otherOrder); return null; });
-            SecondaryMarketQueryService service=new SecondaryMarketQueryService(repo, Runnable::run, Clock.fixed(Instant.parse("2026-08-22T12:00:00Z"), ZoneId.of("Asia/Shanghai")), ZoneId.of("Asia/Shanghai"));
+            SecondaryMarketQueryService service=new SecondaryMarketQueryService(repo, new SqlPublicStockRepository(db.dataSource()), Runnable::run, Clock.fixed(Instant.parse("2026-08-22T12:00:00Z"), ZoneId.of("Asia/Shanghai")), ZoneId.of("Asia/Shanghai"));
             PortfolioView portfolio=service.portfolio(owner).toCompletableFuture().join();
             assertThat(portfolio.availableCash()).isEqualTo(Money.ofMinor(1_000));
             assertThat(portfolio.holdings()).extracting(SecondaryMarketRow::availableShares, SecondaryMarketRow::reservedShares).containsExactly(org.assertj.core.groups.Tuple.tuple(20L,10L));
