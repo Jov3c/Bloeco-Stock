@@ -8,10 +8,12 @@ import cn.blockeco.exchange.application.PublicStockQueryService;
 import cn.blockeco.exchange.application.SecuritiesCashService;
 import cn.blockeco.exchange.application.SecondaryMarketService;
 import cn.blockeco.exchange.application.SecondaryMarketQueryService;
+import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.ports.MainThreadExecutor;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.Optional;
+import java.util.List;
 import java.util.UUID;
 import java.util.function.BooleanSupplier;
 import net.kyori.adventure.text.Component;
@@ -124,7 +126,7 @@ class StockCommandTest {
             command.onCommand(console, mock(Command.class), "stock", args);
         }
 
-        verify(console, times(9)).sendMessage(argThat(c -> plain(c).equals("此命令只能由玩家执行。")));
+        verify(console, times(9)).sendMessage(org.mockito.ArgumentMatchers.<Component>argThat(c -> plain(c).equals("此命令只能由玩家执行。")));
         verifyNoInteractions(cash, trading, reads);
     }
 
@@ -139,7 +141,7 @@ class StockCommandTest {
                 new String[] {"buy", "BS000001", "1", "1.00"}, new String[] {"portfolio"},
                 new String[] {"orders"}, new String[] {"trades"})) command.onCommand(player, mock(Command.class), "stock", args);
 
-        verify(player, times(6)).sendMessage(argThat(c -> plain(c).equals("你没有权限。")));
+        verify(player, times(6)).sendMessage(org.mockito.ArgumentMatchers.<Component>argThat(c -> plain(c).equals("你没有权限。")));
         verifyNoInteractions(cash, trading, reads);
     }
 
