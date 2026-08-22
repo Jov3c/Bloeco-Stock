@@ -2,6 +2,7 @@ package cn.blockeco.exchange.infrastructure.sql;
 
 import cn.blockeco.exchange.application.*;
 import cn.blockeco.exchange.domain.company.CompanyId;
+import cn.blockeco.exchange.domain.company.Company;
 import cn.blockeco.exchange.domain.company.CompanyStatus;
 import cn.blockeco.exchange.domain.finance.PrimaryOfferingState;
 import cn.blockeco.exchange.domain.finance.PublicOfferingView;
@@ -42,7 +43,8 @@ public final class SqlPublicStockRepository implements PublicStockRepository {
         try(Connection c=dataSource.getConnection();PreparedStatement s=c.prepareStatement(sql);ResultSet r=s.executeQuery()){List<PublicStockSymbol> result=new ArrayList<>();while(r.next())result.add(new PublicStockSymbol(r.getString(1),Optional.ofNullable(r.getString(2))));return List.copyOf(result);}catch(SQLException e){throw failed("list public symbols",e);}
     }
     private static int limit(int requested){return Math.max(1,Math.min(50,requested));}
-    private static String normalized(String input){return Objects.requireNonNull(input,"companyNameOrCode").trim().toLowerCase(Locale.ROOT);}
+    /** Invalid company-name input is simply not resolvable, so public commands can respond gracefully. */
+    private static String normalized(String input){try{return Company.normalizeName(Objects.requireNonNull(input,"companyNameOrCode"));}catch(IllegalArgumentException invalid){return null;}}
     private static String code(String input){return Objects.requireNonNull(input,"companyNameOrCode").trim().toUpperCase(Locale.ROOT);}
     private static IllegalStateException failed(String action,SQLException error){return new IllegalStateException("could not "+action,error);}
     private static String publicOfferingSql(){return "SELECT po.id offering_id,po.company_id offering_company_id,c.display_name,po.state,po.target_minor,po.issue_price_minor,po.maximum_shares,po.announced_at,po.opens_at,po.closes_at,COALESCE(SUM(CASE WHEN t.state='COMPLETED' THEN ps.shares ELSE 0 END),0) issued_shares,COALESCE(SUM(CASE WHEN t.state<>'REFUNDED' THEN ps.shares ELSE 0 END),0) reserved_shares FROM primary_offerings po JOIN companies c ON c.id=po.company_id LEFT JOIN primary_subscriptions ps ON ps.offering_id=po.id LEFT JOIN treasury_operations t ON t.id=ps.id WHERE po.state IN ('ANNOUNCED','OPEN','CLOSED')";}
