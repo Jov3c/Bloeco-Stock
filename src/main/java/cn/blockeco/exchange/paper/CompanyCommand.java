@@ -12,7 +12,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.bukkit.command.*;
 import org.bukkit.entity.Player;
 
-public final class CompanyCommand implements CommandExecutor {
+public final class CompanyCommand implements CommandExecutor, CommandAcceptanceGate {
     private final CompanyRegistrationService registration; private final CompanyQueryService queries; private final Messages messages; private final MainThreadExecutor mainThread; private final Supplier<CompanyCreationRules> rules; private final AssetBindingService assets; private final PrimaryOfferingService offerings;
     private final Set<UUID> inFlight = ConcurrentHashMap.newKeySet();
     private volatile boolean accepting = false;
@@ -20,7 +20,7 @@ public final class CompanyCommand implements CommandExecutor {
     public CompanyCommand(CompanyRegistrationService registration, CompanyQueryService queries, Messages messages, MainThreadExecutor mainThread, MutableCompanyCreationRules rules) { this(registration,queries,messages,mainThread,rules::current,null,null); }
     public CompanyCommand(CompanyRegistrationService registration, CompanyQueryService queries, Messages messages, MainThreadExecutor mainThread, CompanyCreationRules rules, AssetBindingService assets, PrimaryOfferingService offerings) { this(registration,queries,messages,mainThread,() -> rules,assets,offerings); }
     public CompanyCommand(CompanyRegistrationService registration, CompanyQueryService queries, Messages messages, MainThreadExecutor mainThread, Supplier<CompanyCreationRules> rules, AssetBindingService assets, PrimaryOfferingService offerings) { this.registration=registration; this.queries=queries; this.messages=messages; this.mainThread=mainThread; this.rules=rules; this.assets=assets; this.offerings=offerings; }
-    public void setAccepting(boolean accepting) { this.accepting = accepting; }
+    @Override public void setAccepting(boolean accepting) { this.accepting = accepting; }
     public static Optional<RegistrationRequest> parseCreate(UUID player, String[] args, CompanyCreationRules rules) {
         if (args.length < 4 || !"create".equalsIgnoreCase(args[0])) return Optional.empty();
         int percent; try { percent = Integer.parseInt(args[args.length - 1]); } catch (NumberFormatException e) { return Optional.empty(); }

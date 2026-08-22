@@ -158,6 +158,14 @@ Phase 1 的权威数据是 `plugins/BlockStock/blockeco.db` 中的 SQLite 数据
 
 本地烟测使用的快速管道 `stop`，在 BlockStock 已干净关闭后触发了 EssentialsX 更新检查器的关闭警告。这是 EssentialsX 的异步任务警告，不是 BlockStock 堆栈跟踪；评估提供方日志时，应让测试服务器正常空闲一段时间后再停止。
 
+## 公开股票命令
+
+`/stock market`、`/stock ipo [数量]`、`/stock info <公司名|代码>` 和 `/stock announcements <公司名|代码> [数量]` 对所有人公开；数量限制为 1–50。市场中的发行价清晰标为“参考价（暂无成交）”，不是二级市场成交价。`/stock subscribe <公司名|代码> <正整数股>` 仅玩家且需要 `blockeco.stock.subscribe`（默认 true），它只解析当前 OPEN 的 IPO 并交给既有的安全认购 saga。
+
+`/stock` 和 `/stock help` 在启动期间提供静态中文帮助。其他子命令会在首个公开代码缓存刷新成功前仅提示初始化，且不会访问 SQLite 或 Vault。Tab 补全只读不可变缓存快照，不在 Paper 主线程执行 SQL。
+
+本次没有重启共享服务器。自动构建和 console 空市场检查可执行；真实 authenticated-player IPO（含关闭上市和代码）没有现场证据，因此状态为**未执行**。详见 [IPO 上市与 stock 烟测](docs/operations/ipo-listing-and-stock-smoke.md)。
+
 ## 兼容性来源
 
 - Gradle Plugin Portal 上的 [run-paper 3.0.2](https://plugins.gradle.org/plugin/xyz.jpenilla.run-paper/3.0.2) 以及 [官方 run-task 用法](https://github.com/jpenilla/run-task) 说明了 `runServer { minecraftVersion(...) }` 配置。

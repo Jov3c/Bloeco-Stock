@@ -10,5 +10,6 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class PublicStockSymbolCache {
     private final AtomicReference<List<PublicStockSymbol>> snapshot = new AtomicReference<>(List.of());
     public List<PublicStockSymbol> snapshot() { return snapshot.get(); }
+    void replaceForTest(List<PublicStockSymbol> symbols) { snapshot.set(List.copyOf(symbols)); }
     public CompletionStage<Void> refresh(PublicStockQueryService service) { return service.symbols().thenAccept(symbols -> snapshot.set(List.copyOf(symbols))); }
 }

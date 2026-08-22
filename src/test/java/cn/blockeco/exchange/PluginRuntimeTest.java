@@ -17,6 +17,17 @@ import org.junit.jupiter.api.Test;
 
 class PluginRuntimeTest {
  private static final CompanyCreationRules RULES = new CompanyCreationRules(Money.fromMajor(new BigDecimal("1000.00"), 2), Money.fromMajor(new BigDecimal("10000.00"), 2), 2, 1000, List.of(30, 50, 70));
+ @Test void runtime_readies_and_stops_both_command_gates() {
+  CommandAcceptanceGate companyGate=mock(CommandAcceptanceGate.class); CommandAcceptanceGate stockGate=mock(CommandAcceptanceGate.class); PluginRuntime runtime=new PluginRuntime();
+  assertThat(runtime.attachReady(List.of(companyGate,stockGate),()->{})).isTrue();
+  verify(companyGate).setAccepting(true); verify(stockGate).setAccepting(true);
+  runtime.stop(); verify(companyGate).setAccepting(false); verify(stockGate).setAccepting(false);
+ }
+ @Test void ready_attach_after_stop_keeps_each_gate_closed() {
+  CommandAcceptanceGate companyGate=mock(CommandAcceptanceGate.class); CommandAcceptanceGate stockGate=mock(CommandAcceptanceGate.class); PluginRuntime runtime=new PluginRuntime(); runtime.stop();
+  assertThat(runtime.attachReady(List.of(companyGate,stockGate),()->{})).isFalse();
+  verify(companyGate).setAccepting(false); verify(stockGate).setAccepting(false);
+ }
  @Test void stop_closes_published_database_before_a_blocked_migration_finishes() throws Exception {
   CompanyRegistrationService service=mock(CompanyRegistrationService.class); MainThreadExecutor main=new MainThreadExecutor(){public <T> CompletionStage<T> submit(java.util.function.Supplier<T>w){return CompletableFuture.completedFuture(w.get());}};
   CompanyCommand command=new CompanyCommand(service,mock(CompanyQueryService.class),new Messages(null),main,RULES); ExecutorService migrationExecutor=Executors.newSingleThreadExecutor(); ExecutorService stopper=Executors.newSingleThreadExecutor();

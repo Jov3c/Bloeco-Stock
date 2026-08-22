@@ -14,6 +14,7 @@ import cn.blockeco.exchange.infrastructure.sql.SqlCompanyFinanceRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlRegistrationSagaRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlAssetBindingRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlPrimaryOfferingRepository;
+import cn.blockeco.exchange.infrastructure.sql.SqlPublicStockRepository;
 import cn.blockeco.exchange.infrastructure.vault.VaultEconomyGateway;
 import cn.blockeco.exchange.infrastructure.vault.VaultTreasuryEscrowGateway;
 import cn.blockeco.exchange.paper.CompanyCommand;
@@ -26,6 +27,9 @@ import cn.blockeco.exchange.paper.Messages;
 import cn.blockeco.exchange.paper.PaperMainThread;
 import cn.blockeco.exchange.paper.MigrationResult;
 import cn.blockeco.exchange.paper.PluginDataDirectoryMigrator;
+import cn.blockeco.exchange.paper.PublicStockSymbolCache;
+import cn.blockeco.exchange.paper.StockCommand;
+import cn.blockeco.exchange.paper.StockTabCompleter;
 import cn.blockeco.exchange.ports.AppClock;
 import cn.blockeco.exchange.ports.CompanyAssetAdapterRegistry;
 import cn.blockeco.exchange.infrastructure.CompanyAssetAdapterRegistryImpl;
@@ -43,6 +47,7 @@ public final class BlockecoPlugin extends JavaPlugin {
     private ExecutorService sqlExecutor;
     private Database database;
     private CompanyCommand command;
+    private StockCommand stockCommand;
     private BootstrapCoordinator<Database> bootstrap;
     private MutableCompanyCreationRules creationRules;
     private final PluginRuntime runtime = new PluginRuntime();
@@ -91,20 +96,30 @@ public final class BlockecoPlugin extends JavaPlugin {
             return registry == null ? java.util.List.of() : registry.snapshot();
         }, clock);
         var primaryOfferings = new PrimaryOfferingService(new SqlPrimaryOfferingRepository(db.dataSource()), db, escrow, sqlExecutor, clock);
-        command = new CompanyCommand(registration, new CompanyQueryService(companies, sagas, new SqlCompanyFinanceRepository(db.dataSource()), sqlExecutor), new Messages(getConfig().getConfigurationSection("messages")), mainThread, creationRules::current, assetBindings, primaryOfferings);
+        var messages = new Messages(getConfig().getConfigurationSection("messages"));
+        command = new CompanyCommand(registration, new CompanyQueryService(companies, sagas, new SqlCompanyFinanceRepository(db.dataSource()), sqlExecutor), messages, mainThread, creationRules::current, assetBindings, primaryOfferings);
         var companyCommand = getCommand("company");
         if (companyCommand == null) throw new IllegalStateException(missingCompanyCommandMessage());
         companyCommand.setExecutor(command);
         var adminCommand = getCommand("stockadmin");
         if (adminCommand == null) throw new IllegalStateException("BlockStock 命令注册失败：未在 plugin.yml 中声明 stockadmin 命令");
-        var messages = new Messages(getConfig().getConfigurationSection("messages"));
         var adminConfig = new StockAdminConfigCommand(creationRules, new FileConfigStore(getConfig(), getDataFolder().toPath().resolve("config.yml")), new SqlAuditLog(), db, sqlExecutor, clock, messages, mainThread);
         adminCommand.setExecutor(adminConfig); adminCommand.setTabCompleter(adminConfig);
         var capitalizations = new CompanyCapitalizationService(finance, new SqlAuditLog(), db, escrow, mainThread, sqlExecutor, clock);
+        var publicQueries = new cn.blockeco.exchange.application.PublicStockQueryService(new SqlPublicStockRepository(db.dataSource()), sqlExecutor);
+        var symbols = new PublicStockSymbolCache();
+        stockCommand = new StockCommand(publicQueries, primaryOfferings, mainThread, runtime::accepting, messages);
+        var stock = getCommand("stock");
+        if (stock == null) throw new IllegalStateException("BlockStock 命令注册失败：未在 plugin.yml 中声明 stock 命令");
+        stock.setExecutor(stockCommand); stock.setTabCompleter(new StockTabCompleter(symbols));
         new StartupRecoveryGate(failure -> getServer().getScheduler().runTask(this, () -> failEnable(startupFailureMessage(new IllegalStateException(failure))))).start(escrowFailure, capitalizations::recoverPendingCapitalizations, ignored -> primaryOfferings.recoverSubscriptionsAtStartup(), (recovered, ipoRecovery) -> getServer().getScheduler().runTask(this, () -> {
-            if (!runtime.attachReady(command, database)) return;
-            registration.recoverStaleRegistrations(Instant.now().minus(Duration.ofMinutes(5))).whenComplete((count, staleFailure) -> getServer().getScheduler().runTask(this, () -> getLogger().info("BlockStock ready; legacy capitalizations recovered=" + recovered + "; ipo escrow completions=" + ipoRecovery.completedFromEscrow() + "; ipo ambiguities marked=" + ipoRecovery.markedAmbiguous() + "; ipo ambiguities existing=" + ipoRecovery.alreadyAmbiguous() + "; stale registration records scanned=" + (staleFailure == null ? count : "failed"))));
-            ipoLifecycle = new IpoLifecycleScheduler(task -> { var bukkitTask=getServer().getScheduler().runTaskTimerAsynchronously(this,task,20L,1200L); return bukkitTask::cancel; }, clock::now, primaryOfferings, failure -> getLogger().warning("IPO 状态调度失败，将在下个周期重试: " + failure.getMessage())); ipoLifecycle.start();
+            symbols.refresh(publicQueries).whenComplete((ignored, refreshFailure) -> mainThread.submit(() -> {
+                if (refreshFailure != null) { failEnable(startupFailureMessage(new IllegalStateException("股票代码缓存初始化失败", refreshFailure))); return null; }
+                if (!runtime.attachReady(java.util.List.of(command, stockCommand), database)) return null;
+                registration.recoverStaleRegistrations(Instant.now().minus(Duration.ofMinutes(5))).whenComplete((count, staleFailure) -> getServer().getScheduler().runTask(this, () -> getLogger().info("BlockStock ready; legacy capitalizations recovered=" + recovered + "; ipo escrow completions=" + ipoRecovery.completedFromEscrow() + "; ipo ambiguities marked=" + ipoRecovery.markedAmbiguous() + "; ipo ambiguities existing=" + ipoRecovery.alreadyAmbiguous() + "; stale registration records scanned=" + (staleFailure == null ? count : "failed"))));
+                ipoLifecycle = new IpoLifecycleScheduler(task -> { var bukkitTask=getServer().getScheduler().runTaskTimerAsynchronously(this,task,20L,1200L); return bukkitTask::cancel; }, clock::now, primaryOfferings, failure -> getLogger().warning("IPO 状态调度失败，将在下个周期重试: " + failure.getMessage()), ignoredClose -> symbols.refresh(publicQueries).whenComplete((refreshed, error) -> { if (error != null) getLogger().warning("股票代码缓存刷新失败，将在下个周期重试: " + error.getMessage()); })); ipoLifecycle.start();
+                return null;
+            }));
         }));
         return true;
     }
@@ -116,6 +131,11 @@ public final class BlockecoPlugin extends JavaPlugin {
         Messages messages = new Messages(getConfig().getConfigurationSection("messages"));
         companyCommand.setExecutor((sender, command, label, args) -> { sender.sendMessage(messages.initializing()); return runtime.accepting(); });
         companyCommand.setTabCompleter(new CompanyTabCompleter(creationRules));
+        var stock = getCommand("stock");
+        if (stock == null) { failEnable("BlockStock 命令注册失败：未在 plugin.yml 中声明 stock 命令"); return false; }
+        stockCommand = new StockCommand(null, null, new PaperMainThread(this), runtime::accepting, messages);
+        stock.setExecutor(stockCommand);
+        stock.setTabCompleter(new StockTabCompleter(new PublicStockSymbolCache()));
         return true;
     }
 

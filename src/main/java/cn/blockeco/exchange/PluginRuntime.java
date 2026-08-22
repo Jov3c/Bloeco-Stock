@@ -1,6 +1,6 @@
 package cn.blockeco.exchange;
 
-import cn.blockeco.exchange.paper.CompanyCommand;
+import cn.blockeco.exchange.paper.CommandAcceptanceGate;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -10,14 +10,14 @@ final class PluginRuntime {
     private final Object lock = new Object();
     private final AtomicBoolean stopped = new AtomicBoolean();
     private final AtomicBoolean databaseClosed = new AtomicBoolean();
-    private CompanyCommand command;
+    private java.util.List<CommandAcceptanceGate> gates = java.util.List.of();
     private BootstrapCoordinator<?> bootstrap;
     private ExecutorService executor;
     private AutoCloseable database;
 
     PluginRuntime() { }
-    PluginRuntime(CompanyCommand command, BootstrapCoordinator<?> bootstrap, ExecutorService executor, AutoCloseable database) { this.command = command; this.bootstrap = bootstrap; this.executor = executor; this.database = database; }
-    PluginRuntime(CompanyCommand command) { this.command = command; }
+    PluginRuntime(CommandAcceptanceGate command, BootstrapCoordinator<?> bootstrap, ExecutorService executor, AutoCloseable database) { this.gates = java.util.List.of(command); this.bootstrap = bootstrap; this.executor = executor; this.database = database; }
+    PluginRuntime(CommandAcceptanceGate command) { this.gates = java.util.List.of(command); }
 
     boolean accepting() { return !stopped.get(); }
     void attachBootstrap(BootstrapCoordinator<?> value) { boolean stop; synchronized (lock) { bootstrap = value; stop = stopped.get(); } if (stop) value.stop(); }
@@ -29,19 +29,21 @@ final class PluginRuntime {
         }
         closeDatabase(value);
     }
-    boolean attachReady(CompanyCommand value, AutoCloseable db) {
+    boolean attachReady(CommandAcceptanceGate value, AutoCloseable db) { return attachReady(java.util.List.of(value), db); }
+    boolean attachReady(java.util.List<? extends CommandAcceptanceGate> values, AutoCloseable db) {
         synchronized (lock) {
-            command = value;
-            if (!stopped.get()) { database = db; value.setAccepting(true); return true; }
+            gates = java.util.List.copyOf(values);
+            if (!stopped.get()) { database = db; gates.forEach(gate -> gate.setAccepting(true)); return true; }
         }
+        values.forEach(gate -> gate.setAccepting(false));
         closeDatabase(db);
         return false;
     }
     void stop() {
         if (!stopped.compareAndSet(false, true)) return;
-        CompanyCommand currentCommand; BootstrapCoordinator<?> currentBootstrap; ExecutorService currentExecutor; AutoCloseable currentDatabase;
-        synchronized (lock) { currentCommand = command; currentBootstrap = bootstrap; currentExecutor = executor; currentDatabase = database; }
-        if (currentCommand != null) currentCommand.setAccepting(false);
+        java.util.List<CommandAcceptanceGate> currentGates; BootstrapCoordinator<?> currentBootstrap; ExecutorService currentExecutor; AutoCloseable currentDatabase;
+        synchronized (lock) { currentGates = gates; currentBootstrap = bootstrap; currentExecutor = executor; currentDatabase = database; }
+        currentGates.forEach(gate -> gate.setAccepting(false));
         if (currentBootstrap != null) currentBootstrap.stop();
         closeDatabase(currentDatabase);
         if (currentExecutor != null) shutdown(currentExecutor);

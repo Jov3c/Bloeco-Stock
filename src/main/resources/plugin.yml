@@ -10,6 +10,9 @@ commands:
   stockadmin:
     description: 管理 BlockStock 运行时配置
     usage: /stockadmin config [min-capital <金额>]
+  stock:
+    description: 查询 BlockStock 公开股票与 IPO
+    usage: /stock [help]|market|ipo [数量]|info <公司名|代码>|announcements <公司名|代码> [数量]|subscribe <公司名|代码> <正整数股>
 permissions:
   blockeco.player:
     description: 'BlockStock 玩家权限'
@@ -19,6 +22,7 @@ permissions:
       blockeco.company.asset.bind: true
       blockeco.company.ipo.announce: true
       blockeco.company.ipo.subscribe: true
+      blockeco.stock.subscribe: true
   blockeco.admin:
     description: 'BlockStock 管理员权限'
     children:
@@ -32,6 +36,9 @@ permissions:
   blockeco.company.ipo.announce:
     default: true
   blockeco.company.ipo.subscribe:
+    default: true
+  blockeco.stock.subscribe:
+    description: '认购公开 IPO'
     default: true
   blockeco.admin.recovery:
     default: op

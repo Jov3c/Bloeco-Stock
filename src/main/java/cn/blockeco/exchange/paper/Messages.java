@@ -3,6 +3,9 @@ package cn.blockeco.exchange.paper;
 import net.kyori.adventure.text.Component;
 import java.util.List;
 import cn.blockeco.exchange.domain.finance.PublicOfferingView;
+import cn.blockeco.exchange.application.PublicAnnouncement;
+import cn.blockeco.exchange.application.PublicMarketRow;
+import cn.blockeco.exchange.application.PublicStockInfo;
 import org.bukkit.configuration.ConfigurationSection;
 
 /** Configuration-backed user messages; defaults keep the first deployment usable. */
@@ -13,6 +16,23 @@ public final class Messages {
     public Component processing() { return message("processing", "公司注册正在处理中。"); }
     public Component initializing() { return message("initializing", "BlockStock 正在初始化，请稍后再试。"); }
     public Component noPermission() { return message("no-permission", "你没有权限。"); }
+    public Component usageStock() { return message("usage-stock", "用法：/stock [help]|market|ipo [数量]|info <公司名|代码>|announcements <公司名|代码> [数量]|subscribe <公司名|代码> <正整数股>"); }
+    public Component usageStockIpo() { return message("usage-stock-ipo", "用法：/stock ipo [1-50]"); }
+    public Component usageStockInfo() { return message("usage-stock-info", "用法：/stock info <公司名|代码>"); }
+    public Component usageStockAnnouncements() { return message("usage-stock-announcements", "用法：/stock announcements <公司名|代码> [1-50]"); }
+    public Component usageStockSubscribe() { return message("usage-stock-subscribe", "用法：/stock subscribe <公司名|代码> <正整数股>"); }
+    public Component invalidShares() { return message("stock-invalid-shares", "认购股数必须是正整数股。"); }
+    public Component stockQueryFailed() { return message("stock-query-failed", "股票查询失败，请稍后再试。"); }
+    public Component marketEmpty() { return message("stock-market-empty", "当前暂无已上市股票。 "); }
+    public Component ipoEmpty() { return message("stock-ipo-empty", "当前没有可公开查询的 IPO。 "); }
+    public Component stockNotFound() { return message("stock-not-found", "未找到公司或股票代码。 "); }
+    public Component openIpoNotFound() { return message("stock-open-ipo-not-found", "该公司当前没有开放认购的 IPO。 "); }
+    public Component announcementsEmpty() { return message("stock-announcements-empty", "当前没有公开公告。 "); }
+    public Component marketRow(PublicMarketRow row) { return message("stock-market-row", "%company% [%code%] 参考价（暂无成交）=%price% 市值=%capitalization% 已发行=%shares% 状态=%state%").replaceText(b->b.matchLiteral("%company%").replacement(row.companyName())).replaceText(b->b.matchLiteral("%code%").replacement(row.stockCode())).replaceText(b->b.matchLiteral("%price%").replacement(String.valueOf(row.issueReferencePrice().minorUnits()))).replaceText(b->b.matchLiteral("%capitalization%").replacement(String.valueOf(row.marketCapitalization().minorUnits()))).replaceText(b->b.matchLiteral("%shares%").replacement(String.valueOf(row.issuedShares()))).replaceText(b->b.matchLiteral("%state%").replacement(displayState(row.status()))); }
+    public Component stockIpoRow(PublicOfferingView view) { return publicIpo(view); }
+    public Component stockInfo(PublicStockInfo info) { return message("stock-info-row", "%company% 代码=%code% 状态=%state% 参考价（暂无成交）=%price% 已发行=%shares%").replaceText(b->b.matchLiteral("%company%").replacement(info.companyName())).replaceText(b->b.matchLiteral("%code%").replacement(info.stockCode().orElse("暂无"))).replaceText(b->b.matchLiteral("%state%").replacement(displayState(info.status()))).replaceText(b->b.matchLiteral("%price%").replacement(info.issueReferencePrice().map(value -> String.valueOf(value.minorUnits())).orElse("暂无"))).replaceText(b->b.matchLiteral("%shares%").replacement(String.valueOf(info.issuedShares()))); }
+    public Component announcement(PublicAnnouncement announcement) { return message("stock-announcement-row", "%company% 公告[%time%] %body%").replaceText(b->b.matchLiteral("%company%").replacement(announcement.companyName())).replaceText(b->b.matchLiteral("%time%").replacement(announcement.publishedAt().toString())).replaceText(b->b.matchLiteral("%body%").replacement(announcement.body())); }
+    public List<Component> stockHelp(org.bukkit.command.CommandSender sender) { java.util.ArrayList<Component> lines = new java.util.ArrayList<>(List.of(message("stock-help-root", "BlockStock 股票命令："), usageStock(), message("stock-help-public", "market、ipo、info 与 announcements 对所有人公开。"))); if (sender instanceof org.bukkit.entity.Player player && player.hasPermission("blockeco.stock.subscribe")) lines.add(message("stock-help-subscribe", "认购：/stock subscribe <公司名|代码> <正整数股>")); return List.copyOf(lines); }
     public Component minimumCapital(CompanyCreationRules rules) { return message("stockadmin-minimum-capital", "当前最低注册资本：%capital%").replaceText(b -> b.matchLiteral("%capital%").replacement(rules.minimumCapitalMajor())); }
     public Component usageStockAdminConfig() { return message("usage-stockadmin-config", "用法：/stockadmin config [min-capital <金额>]"); }
     public Component invalidMinimumCapital() { return message("invalid-minimum-capital", "最低注册资本必须是正数，且小数位必须与货币精度一致。"); }
