@@ -146,30 +146,32 @@ class MigrationTest {
     }
 
     @Test
-    void v006_backfills_listed_companies_in_company_id_order_and_enforces_bounded_codes() throws Exception {
+    void v006_backfills_listed_companies_in_creation_order_and_enforces_bounded_codes() throws Exception {
         Path databaseFile = Files.createTempFile("blockeco-v006-backfill-", ".db");
         try (Database database = new Database("jdbc:sqlite:" + databaseFile)) {
             applyMigrationsThroughV005(database);
             try (Connection connection = database.dataSource().getConnection()) {
-                insertListedCompanyWithSuccessfulClosedOffering(connection,
-                        "00000000-0000-0000-0000-000000000002", "offering-2", 300, 7,
-                        Instant.parse("2026-08-15T00:00:00Z"));
-                insertListedCompanyWithSuccessfulClosedOffering(connection,
-                        "00000000-0000-0000-0000-000000000001", "offering-1", 250, 5,
+                insertCompany(connection, "00000000-0000-0000-0000-000000000002", "LISTED", 1007,
+                        Instant.parse("2026-08-13T00:00:00Z"));
+                insertSuccessfulClosedOffering(connection, "00000000-0000-0000-0000-000000000002", "offering-2", 300, 7,
+                        Instant.parse("2026-08-12T00:00:00Z"), Instant.parse("2026-08-15T00:00:00Z"));
+                insertCompany(connection, "00000000-0000-0000-0000-000000000001", "LISTED", 1005,
                         Instant.parse("2026-08-14T00:00:00Z"));
+                insertSuccessfulClosedOffering(connection, "00000000-0000-0000-0000-000000000001", "offering-1", 250, 5,
+                        Instant.parse("2026-08-11T00:00:00Z"), Instant.parse("2026-08-14T00:00:00Z"));
             }
 
             database.migrate();
 
             try (Connection connection = database.dataSource().getConnection()) {
                 assertThat(historyRows(connection, "V006")).isEqualTo(1);
-                assertThat(listingCode(connection, "00000000-0000-0000-0000-000000000001")).isEqualTo("BS000001");
-                assertThat(listingCode(connection, "00000000-0000-0000-0000-000000000002")).isEqualTo("BS000002");
+                assertThat(listingCode(connection, "00000000-0000-0000-0000-000000000002")).isEqualTo("BS000001");
+                assertThat(listingCode(connection, "00000000-0000-0000-0000-000000000001")).isEqualTo("BS000002");
                 assertThat(listingPrice(connection, "00000000-0000-0000-0000-000000000001")).isEqualTo(250);
-                assertThat(listingShares(connection, "00000000-0000-0000-0000-000000000002")).isEqualTo(7);
+                assertThat(listingShares(connection, "00000000-0000-0000-0000-000000000002")).isEqualTo(1007);
                 assertThat(sequenceValue(connection)).isEqualTo(2);
                 assertThat(auditPayload(connection, "00000000-0000-0000-0000-000000000001"))
-                        .contains("IPO_LISTING_BACKFILLED", "BS000001", "offering-1", "BACKFILL");
+                        .contains("IPO_LISTING_BACKFILLED", "BS000002", "offering-1", "BACKFILL");
 
                 try (PreparedStatement duplicate = connection.prepareStatement(
                         "INSERT INTO stock_listings VALUES (?, 'BS000001', 1, 1, ? )")) {
@@ -187,6 +189,34 @@ class MigrationTest {
                         "UPDATE stock_code_sequence SET last_value = 1000000 WHERE singleton = 1")) {
                     assertThatThrownBy(exhausted::executeUpdate).isInstanceOf(Exception.class);
                 }
+            }
+        } finally {
+            Files.deleteIfExists(databaseFile);
+        }
+    }
+
+    @Test
+    void v006_uses_the_latest_announced_offering_when_close_times_tie() throws Exception {
+        Path databaseFile = Files.createTempFile("blockeco-v006-source-order-", ".db");
+        try (Database database = new Database("jdbc:sqlite:" + databaseFile)) {
+            applyMigrationsThroughV005(database);
+            try (Connection connection = database.dataSource().getConnection()) {
+                String companyId = "00000000-0000-0000-0000-000000000003";
+                Instant closesAt = Instant.parse("2026-08-20T00:00:00Z");
+                insertCompany(connection, companyId, "LISTED", 1012, Instant.parse("2026-08-10T00:00:00Z"));
+                insertSuccessfulClosedOffering(connection, companyId, "older-offering", 250, 5,
+                        Instant.parse("2026-08-01T00:00:00Z"), closesAt);
+                insertSuccessfulClosedOffering(connection, companyId, "newer-offering", 300, 7,
+                        Instant.parse("2026-08-02T00:00:00Z"), closesAt);
+            }
+
+            database.migrate();
+
+            try (Connection connection = database.dataSource().getConnection()) {
+                assertThat(listingPrice(connection, "00000000-0000-0000-0000-000000000003")).isEqualTo(300);
+                assertThat(listingShares(connection, "00000000-0000-0000-0000-000000000003")).isEqualTo(1012);
+                assertThat(auditPayload(connection, "00000000-0000-0000-0000-000000000003"))
+                        .contains("newer-offering", "\"issuedShares\":1012");
             }
         } finally {
             Files.deleteIfExists(databaseFile);
@@ -223,8 +253,12 @@ class MigrationTest {
     }
 
     private void insertCompany(Connection connection, String id, String status) throws Exception {
+        insertCompany(connection, id, status, 1000, Instant.parse("2026-08-14T12:00:00Z"));
+    }
+
+    private void insertCompany(Connection connection, String id, String status, long totalShares, Instant createdAt) throws Exception {
         try (PreparedStatement company = connection.prepareStatement("INSERT INTO companies VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
-            company.setString(1, id); company.setString(2, id); company.setString(3, "Test Company"); company.setString(4, "founder-1"); company.setString(5, status); company.setLong(6, 0); company.setLong(7, 1000); company.setInt(8, 5000); company.setString(9, "2026-08-14T12:00:00Z"); company.setInt(10, 0); company.executeUpdate();
+            company.setString(1, id); company.setString(2, id); company.setString(3, "Test Company"); company.setString(4, "founder-1"); company.setString(5, status); company.setLong(6, 0); company.setLong(7, totalShares); company.setInt(8, 5000); company.setString(9, createdAt.toString()); company.setInt(10, 0); company.executeUpdate();
         }
     }
 
@@ -246,12 +280,11 @@ class MigrationTest {
         }
     }
 
-    private void insertListedCompanyWithSuccessfulClosedOffering(Connection connection, String companyId, String offeringId,
-            long price, long shares, Instant closedAt) throws Exception {
-        insertCompany(connection, companyId, "LISTED");
+    private void insertSuccessfulClosedOffering(Connection connection, String companyId, String offeringId,
+            long price, long shares, Instant announcedAt, Instant closedAt) throws Exception {
         try (PreparedStatement offering = connection.prepareStatement("INSERT INTO primary_offerings VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CLOSED')")) {
             offering.setString(1, offeringId); offering.setString(2, companyId); offering.setLong(3, price * shares); offering.setLong(4, price); offering.setLong(5, shares);
-            offering.setString(6, "2026-08-12T00:00:00Z"); offering.setString(7, "2026-08-13T00:00:00Z"); offering.setString(8, closedAt.toString()); offering.executeUpdate();
+            offering.setString(6, announcedAt.toString()); offering.setString(7, announcedAt.plusSeconds(3600).toString()); offering.setString(8, closedAt.toString()); offering.executeUpdate();
         }
         String subscriptionId = UUID.nameUUIDFromBytes((offeringId + "-subscription").getBytes(StandardCharsets.UTF_8)).toString();
         try (PreparedStatement subscription = connection.prepareStatement("INSERT INTO primary_subscriptions VALUES (?, ?, ?, ?, ?, ?, ?, ?)")) {

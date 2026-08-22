@@ -19,9 +19,9 @@ CREATE TABLE stock_listings (
 CREATE INDEX stock_listings_listed_at ON stock_listings(listed_at, company_id);
 
 WITH successful_offerings AS (
-  SELECT po.company_id, po.id AS offering_id, po.issue_price_minor, po.closes_at,
-         SUM(CASE WHEN t.state = 'COMPLETED' THEN ps.shares ELSE 0 END) AS issued_shares,
-         ROW_NUMBER() OVER (PARTITION BY po.company_id ORDER BY po.closes_at DESC, po.id DESC) AS source_rank
+  SELECT po.company_id, po.id AS offering_id, po.issue_price_minor, po.closes_at, po.announced_at,
+         c.created_at, c.total_shares AS issued_shares,
+         ROW_NUMBER() OVER (PARTITION BY po.company_id ORDER BY po.closes_at DESC, po.announced_at DESC, po.id DESC) AS source_rank
   FROM primary_offerings po
   JOIN companies c ON c.id = po.company_id AND c.status = 'LISTED'
   JOIN primary_subscriptions ps ON ps.offering_id = po.id
@@ -31,7 +31,7 @@ WITH successful_offerings AS (
   HAVING SUM(CASE WHEN t.state = 'COMPLETED' THEN ps.shares ELSE 0 END) > 0
 ), selected_sources AS (
   SELECT company_id, offering_id, issue_price_minor, closes_at, issued_shares,
-         ROW_NUMBER() OVER (ORDER BY company_id) AS code_number
+         ROW_NUMBER() OVER (ORDER BY created_at ASC, company_id ASC) AS code_number
   FROM successful_offerings
   WHERE source_rank = 1
 )
@@ -44,9 +44,9 @@ SET last_value = (SELECT COUNT(*) FROM stock_listings)
 WHERE singleton = 1;
 
 WITH successful_offerings AS (
-  SELECT po.company_id, po.id AS offering_id, po.issue_price_minor, po.closes_at,
-         SUM(CASE WHEN t.state = 'COMPLETED' THEN ps.shares ELSE 0 END) AS issued_shares,
-         ROW_NUMBER() OVER (PARTITION BY po.company_id ORDER BY po.closes_at DESC, po.id DESC) AS source_rank
+  SELECT po.company_id, po.id AS offering_id, po.issue_price_minor, po.closes_at, po.announced_at,
+         c.created_at, c.total_shares AS issued_shares,
+         ROW_NUMBER() OVER (PARTITION BY po.company_id ORDER BY po.closes_at DESC, po.announced_at DESC, po.id DESC) AS source_rank
   FROM primary_offerings po
   JOIN companies c ON c.id = po.company_id AND c.status = 'LISTED'
   JOIN primary_subscriptions ps ON ps.offering_id = po.id
@@ -56,7 +56,7 @@ WITH successful_offerings AS (
   HAVING SUM(CASE WHEN t.state = 'COMPLETED' THEN ps.shares ELSE 0 END) > 0
 ), selected_sources AS (
   SELECT company_id, offering_id, issue_price_minor, closes_at, issued_shares,
-         ROW_NUMBER() OVER (ORDER BY company_id) AS code_number
+         ROW_NUMBER() OVER (ORDER BY created_at ASC, company_id ASC) AS code_number
   FROM successful_offerings
   WHERE source_rank = 1
 )
