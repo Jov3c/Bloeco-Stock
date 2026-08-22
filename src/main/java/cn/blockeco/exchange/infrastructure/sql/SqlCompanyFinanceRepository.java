@@ -28,12 +28,14 @@ public class SqlCompanyFinanceRepository implements CompanyFinanceRepository {
     public SqlCompanyFinanceRepository(DataSource dataSource) { this.dataSource = dataSource; }
 
     @Override public void prepare(Connection c, TreasuryOperation operation, AuditEvent audit) throws SQLException {
+        requireTransaction(c);
         try (PreparedStatement s = c.prepareStatement("INSERT INTO treasury_operations (id, company_id, player_uuid, amount_minor, provider_correlation_key, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")) {
             s.setString(1, operation.id().toString()); s.setString(2, operation.companyId().value().toString()); s.setString(3, operation.playerId().toString()); s.setLong(4, operation.amount().minorUnits()); s.setString(5, operation.providerCorrelationKey()); s.setString(6, operation.state().name()); s.setString(7, operation.createdAt().toString()); s.setString(8, operation.updatedAt().toString()); s.executeUpdate();
         }
         audits.append(c, audit);
     }
     @Override public void transition(Connection c, UUID id, TreasuryOperationState expected, TreasuryOperationState state, AuditEvent audit) throws SQLException {
+        requireTransaction(c);
         try (PreparedStatement s = c.prepareStatement("UPDATE treasury_operations SET state = ?, updated_at = ? WHERE id = ? AND state = ?")) {
             s.setString(1, state.name()); s.setString(2, audit.occurredAt().toString()); s.setString(3, id.toString()); s.setString(4, expected.name());
             if (s.executeUpdate() != 1) throw new IllegalStateException("treasury operation state conflict for " + id);
@@ -41,6 +43,7 @@ public class SqlCompanyFinanceRepository implements CompanyFinanceRepository {
         audits.append(c, audit);
     }
     @Override public void createCapitalization(Connection c, CompanyCashAccount cash, ShareHolding holding, TreasuryOperation operation, AuditEvent audit) throws SQLException {
+        requireTransaction(c);
         try (PreparedStatement s = c.prepareStatement("INSERT INTO company_cash_accounts (company_id, cash_minor, paid_in_capital_minor, retained_earnings_minor, reserved_minor) VALUES (?, ?, ?, ?, ?)")) {
             s.setString(1, cash.companyId().value().toString()); s.setLong(2, cash.cash().minorUnits()); s.setLong(3, cash.paidInCapital().minorUnits()); s.setLong(4, cash.retainedEarnings().minorUnits()); s.setLong(5, cash.reserved().minorUnits()); s.executeUpdate();
         }
@@ -88,4 +91,5 @@ public class SqlCompanyFinanceRepository implements CompanyFinanceRepository {
             s.setString(1, UUID.randomUUID().toString()); s.setString(2, "COMPANY_TREASURY"); s.setString(3, company.value().toString()); s.setNull(4, java.sql.Types.VARCHAR); s.setLong(5, amount); s.setNull(6, java.sql.Types.VARCHAR); s.setNull(7, java.sql.Types.VARCHAR); s.setString(8, at.toString()); s.executeUpdate();
         }
     }
+    private static void requireTransaction(Connection c) throws SQLException { if (c == null || c.getAutoCommit()) throw new IllegalStateException("caller-owned transaction connection required"); }
 }
