@@ -52,9 +52,14 @@ public record LimitOrder(
         if (!sharesMatchState) throw new IllegalArgumentException("remainingShares do not match order state");
         if (side == Side.BUY) {
             boolean active = state == State.OPEN || state == State.PARTIALLY_FILLED;
-            if ((active && reservedCash.minorUnits() <= 0) || (!active && reservedCash.minorUnits() != 0)) {
+            Money expectedChargedFee = FeePolicy.cumulativeFee(filledNotional, feeBps);
+            if (!feeCharged.equals(expectedChargedFee)) {
+                throw new IllegalArgumentException("feeCharged must equal the cumulative fee for filledNotional");
+            }
+            if (active && !reservedCash.equals(requiredActiveReserve(remainingShares, limitPrice, filledNotional, feeCharged, feeBps))) {
                 throw new IllegalArgumentException("reservedCash does not match buy order state");
             }
+            if (!active && reservedCash.minorUnits() != 0) throw new IllegalArgumentException("reservedCash must be zero for terminal buy order");
             boolean hasFilledShares = remainingShares < originalShares;
             if ((hasFilledShares && filledNotional.minorUnits() <= 0)
                     || (!hasFilledShares && filledNotional.minorUnits() != 0)) {
@@ -64,6 +69,14 @@ public record LimitOrder(
                 || feeCharged.minorUnits() != 0 || feeBps != 0) {
             throw new IllegalArgumentException("sell orders must not contain buy money fields");
         }
+    }
+
+    private static Money requiredActiveReserve(long remainingShares, Money limitPrice, Money filledNotional,
+            Money feeCharged, int feeBps) {
+        Money remainingNotional = Money.ofMinor(Math.multiplyExact(remainingShares, limitPrice.minorUnits()));
+        Money worstCaseNotional = filledNotional.plus(remainingNotional);
+        Money remainingFee = FeePolicy.cumulativeFee(worstCaseNotional, feeBps).minus(feeCharged);
+        return remainingNotional.plus(remainingFee);
     }
 
     private static boolean isValidStockCode(String stockCode) {

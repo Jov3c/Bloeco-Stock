@@ -305,18 +305,33 @@ class MigrationTest {
                         + "(?, ?, 'BS000009', ?, ?, 10, 10, ?, ?, ?, ?, ?, ?, ?, ?)")) {
                     insertOrder(order, buy, company, "buyer", "BUY", 10, 1, 0, 0, 0, 100, "OPEN");
                     assertThatThrownBy(order::executeUpdate).isInstanceOf(Exception.class);
+                    insertOrder(order, buy, company, "buyer", "BUY", 10, 1, 100, 0, 0, 100, "OPEN");
+                    assertThatThrownBy(order::executeUpdate).isInstanceOf(Exception.class);
                     insertOrder(order, buy, company, "buyer", "BUY", 10, 1, 101, 0, 0, 100, "OPEN");
                     order.executeUpdate();
+                    insertOrder(order, UUID.randomUUID().toString(), company, "buyer", "BUY", 10, 3, 100, 0, 1, 0, "OPEN");
+                    assertThatThrownBy(order::executeUpdate).isInstanceOf(Exception.class);
+                    insertOrder(order, UUID.randomUUID().toString(), company, "buyer", "BUY", 5, 4, 49, 50, 2, 100, "PARTIALLY_FILLED");
+                    assertThatThrownBy(order::executeUpdate).isInstanceOf(Exception.class);
                     insertOrder(order, sell, company, "seller", "SELL", 10, 2, 1, 0, 0, 0, "OPEN");
                     assertThatThrownBy(order::executeUpdate).isInstanceOf(Exception.class);
                     insertOrder(order, sell, company, "seller", "SELL", 10, 2, 0, 0, 0, 0, "OPEN");
                     order.executeUpdate();
                 }
                 try (PreparedStatement trade = connection.prepareStatement("INSERT INTO stock_trades VALUES "
-                        + "(?, ?, 'BS000009', ?, ?, 1, 10, 10, 0, ?)")) {
+                        + "(?, ?, 'BS000009', ?, ?, ?, ?, ?, ?, ?)")) {
                     trade.setString(1, UUID.randomUUID().toString()); trade.setString(2, company);
-                    trade.setString(3, sell); trade.setString(4, buy); trade.setString(5, ANNOUNCED_AT.toString());
+                    trade.setString(3, sell); trade.setString(4, buy); trade.setLong(5, 1); trade.setLong(6, 10);
+                    trade.setLong(7, 10); trade.setLong(8, 0); trade.setString(9, ANNOUNCED_AT.toString());
                     assertThatThrownBy(trade::executeUpdate).isInstanceOf(Exception.class);
+                    trade.setString(3, buy); trade.setString(4, sell); trade.setLong(5, 1); trade.setLong(6, 10);
+                    trade.setLong(7, 9); trade.setLong(8, 0);
+                    assertThatThrownBy(trade::executeUpdate).isInstanceOf(Exception.class);
+                    trade.setLong(5, 2); trade.setLong(6, Long.MAX_VALUE); trade.setLong(7, Long.MAX_VALUE); trade.setLong(8, 0);
+                    assertThatThrownBy(trade::executeUpdate).isInstanceOf(Exception.class);
+                    trade.setLong(5, 1); trade.setLong(6, 10); trade.setLong(7, 10); trade.setLong(8, 11);
+                    assertThatThrownBy(trade::executeUpdate).isInstanceOf(Exception.class);
+                    trade.setLong(8, 0);
                     trade.setString(3, buy); trade.setString(4, sell); trade.executeUpdate();
                     try (PreparedStatement delete = connection.prepareStatement("DELETE FROM stock_trades WHERE buy_order_id = ?")) {
                         delete.setString(1, buy); assertThatThrownBy(delete::executeUpdate).isInstanceOf(Exception.class);

@@ -83,6 +83,66 @@ CREATE INDEX stock_orders_book
   ON stock_orders(company_id, state, side, limit_price_minor, priority_sequence);
 CREATE INDEX stock_orders_player ON stock_orders(player_uuid, accepted_at DESC, id);
 
+CREATE TRIGGER stock_orders_validate_insert
+BEFORE INSERT ON stock_orders
+WHEN NEW.side = 'BUY'
+BEGIN
+  SELECT RAISE(ABORT, 'buy order notional overflow')
+  WHERE NEW.limit_price_minor > 0
+    AND NEW.remaining_shares > 9223372036854775807 / NEW.limit_price_minor;
+  SELECT RAISE(ABORT, 'buy order worst case notional overflow')
+  WHERE NEW.limit_price_minor > 0
+    AND NEW.remaining_shares <= 9223372036854775807 / NEW.limit_price_minor
+    AND NEW.filled_notional_minor > 9223372036854775807 - NEW.remaining_shares * NEW.limit_price_minor;
+  SELECT RAISE(ABORT, 'buy order fee does not match filled notional')
+  WHERE NEW.fee_charged_minor != ((NEW.filled_notional_minor / 10000) * NEW.fee_bps
+    + (((NEW.filled_notional_minor % 10000) * NEW.fee_bps + 9999) / 10000));
+  SELECT RAISE(ABORT, 'buy order reserve overflow')
+  WHERE NEW.limit_price_minor > 0
+    AND NEW.remaining_shares <= 9223372036854775807 / NEW.limit_price_minor
+    AND NEW.filled_notional_minor <= 9223372036854775807 - NEW.remaining_shares * NEW.limit_price_minor
+    AND NEW.remaining_shares * NEW.limit_price_minor > 9223372036854775807 - (
+      (((NEW.filled_notional_minor + NEW.remaining_shares * NEW.limit_price_minor) / 10000) * NEW.fee_bps
+        + ((((NEW.filled_notional_minor + NEW.remaining_shares * NEW.limit_price_minor) % 10000) * NEW.fee_bps + 9999) / 10000))
+      - NEW.fee_charged_minor);
+  SELECT RAISE(ABORT, 'buy order reserve does not match worst case')
+  WHERE NEW.state IN ('OPEN', 'PARTIALLY_FILLED')
+    AND NEW.reserved_cash_minor != NEW.remaining_shares * NEW.limit_price_minor + (
+      (((NEW.filled_notional_minor + NEW.remaining_shares * NEW.limit_price_minor) / 10000) * NEW.fee_bps
+        + ((((NEW.filled_notional_minor + NEW.remaining_shares * NEW.limit_price_minor) % 10000) * NEW.fee_bps + 9999) / 10000))
+      - NEW.fee_charged_minor);
+END;
+
+CREATE TRIGGER stock_orders_validate_update
+BEFORE UPDATE ON stock_orders
+WHEN NEW.side = 'BUY'
+BEGIN
+  SELECT RAISE(ABORT, 'buy order notional overflow')
+  WHERE NEW.limit_price_minor > 0
+    AND NEW.remaining_shares > 9223372036854775807 / NEW.limit_price_minor;
+  SELECT RAISE(ABORT, 'buy order worst case notional overflow')
+  WHERE NEW.limit_price_minor > 0
+    AND NEW.remaining_shares <= 9223372036854775807 / NEW.limit_price_minor
+    AND NEW.filled_notional_minor > 9223372036854775807 - NEW.remaining_shares * NEW.limit_price_minor;
+  SELECT RAISE(ABORT, 'buy order fee does not match filled notional')
+  WHERE NEW.fee_charged_minor != ((NEW.filled_notional_minor / 10000) * NEW.fee_bps
+    + (((NEW.filled_notional_minor % 10000) * NEW.fee_bps + 9999) / 10000));
+  SELECT RAISE(ABORT, 'buy order reserve overflow')
+  WHERE NEW.limit_price_minor > 0
+    AND NEW.remaining_shares <= 9223372036854775807 / NEW.limit_price_minor
+    AND NEW.filled_notional_minor <= 9223372036854775807 - NEW.remaining_shares * NEW.limit_price_minor
+    AND NEW.remaining_shares * NEW.limit_price_minor > 9223372036854775807 - (
+      (((NEW.filled_notional_minor + NEW.remaining_shares * NEW.limit_price_minor) / 10000) * NEW.fee_bps
+        + ((((NEW.filled_notional_minor + NEW.remaining_shares * NEW.limit_price_minor) % 10000) * NEW.fee_bps + 9999) / 10000))
+      - NEW.fee_charged_minor);
+  SELECT RAISE(ABORT, 'buy order reserve does not match worst case')
+  WHERE NEW.state IN ('OPEN', 'PARTIALLY_FILLED')
+    AND NEW.reserved_cash_minor != NEW.remaining_shares * NEW.limit_price_minor + (
+      (((NEW.filled_notional_minor + NEW.remaining_shares * NEW.limit_price_minor) / 10000) * NEW.fee_bps
+        + ((((NEW.filled_notional_minor + NEW.remaining_shares * NEW.limit_price_minor) % 10000) * NEW.fee_bps + 9999) / 10000))
+      - NEW.fee_charged_minor);
+END;
+
 CREATE TABLE stock_trades (
   id TEXT PRIMARY KEY,
   company_id TEXT NOT NULL,
@@ -127,6 +187,19 @@ BEGIN
     WHERE id = NEW.sell_order_id AND side = 'SELL'
       AND company_id = NEW.company_id AND stock_code = NEW.stock_code
   );
+END;
+
+CREATE TRIGGER stock_trades_validate_amounts
+BEFORE INSERT ON stock_trades
+BEGIN
+  SELECT RAISE(ABORT, 'trade shares and price must be positive')
+  WHERE NEW.shares <= 0 OR NEW.price_minor <= 0;
+  SELECT RAISE(ABORT, 'trade notional overflow')
+  WHERE NEW.shares > 9223372036854775807 / NEW.price_minor;
+  SELECT RAISE(ABORT, 'trade notional does not match price and shares')
+  WHERE NEW.notional_minor != NEW.price_minor * NEW.shares;
+  SELECT RAISE(ABORT, 'trade buyer fee exceeds notional')
+  WHERE NEW.buyer_fee_minor > NEW.notional_minor;
 END;
 
 CREATE TABLE escrow_ledger_entries (

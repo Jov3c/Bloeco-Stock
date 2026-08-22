@@ -170,4 +170,41 @@ class FinanceValuesTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("notional");
     }
+
+    @Test
+    void buy_order_rejects_fee_inconsistent_with_its_filled_notional() {
+        assertThatThrownBy(() -> new LimitOrder(
+                        UUID.randomUUID(), COMPANY_ID, "BS000001", UUID.randomUUID(), LimitOrder.Side.BUY,
+                        Money.ofMinor(10), 10, 5, 1, Money.ofMinor(50), Money.ofMinor(50), Money.ofMinor(1), 0,
+                        ANNOUNCED_AT, LimitOrder.State.PARTIALLY_FILLED))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("feeCharged");
+        assertThatThrownBy(() -> new LimitOrder(
+                        UUID.randomUUID(), COMPANY_ID, "BS000001", UUID.randomUUID(), LimitOrder.Side.BUY,
+                        Money.ofMinor(10), 10, 5, 1, Money.ofMinor(49), Money.ofMinor(50), Money.ofMinor(2), 100,
+                        ANNOUNCED_AT, LimitOrder.State.PARTIALLY_FILLED))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("feeCharged");
+    }
+
+    @Test
+    void active_buy_order_rejects_a_reserve_below_the_persisted_worst_case() {
+        assertThatThrownBy(() -> new LimitOrder(
+                        UUID.randomUUID(), COMPANY_ID, "BS000001", UUID.randomUUID(), LimitOrder.Side.BUY,
+                        Money.ofMinor(10), 10, 10, 1, Money.ofMinor(100), Money.zero(), Money.zero(), 100,
+                        ANNOUNCED_AT, LimitOrder.State.OPEN))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("reservedCash");
+    }
+
+    @Test
+    void trade_rejects_a_fee_above_notional_and_notional_overflow() {
+        assertThatThrownBy(() -> new Trade(UUID.randomUUID(), COMPANY_ID, "BS000001", UUID.randomUUID(), UUID.randomUUID(),
+                        1, Money.ofMinor(10), Money.ofMinor(10), Money.ofMinor(11), ANNOUNCED_AT))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("buyerFee");
+        assertThatThrownBy(() -> new Trade(UUID.randomUUID(), COMPANY_ID, "BS000001", UUID.randomUUID(), UUID.randomUUID(),
+                        2, Money.ofMinor(Long.MAX_VALUE), Money.ofMinor(Long.MAX_VALUE), Money.zero(), ANNOUNCED_AT))
+                .isInstanceOf(ArithmeticException.class);
+    }
 }
