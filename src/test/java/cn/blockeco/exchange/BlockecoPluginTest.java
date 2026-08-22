@@ -78,6 +78,12 @@ class BlockecoPluginTest {
     }
 
     @Test
+    void final_vault_provider_startup_diagnostic_is_chinese() {
+        assertThat(BlockecoPlugin.startupFailureMessage(new IllegalStateException("Vault 经济提供方不可用")))
+                .isEqualTo("BlockStock 启动失败：Vault 经济提供方不可用");
+    }
+
+    @Test
     void plugin_metadata_entrypoint_exists_and_is_a_java_plugin() {
         Class<?> entrypoint = assertDoesNotThrow(() -> Class.forName(declaredEntrypointClass()));
 

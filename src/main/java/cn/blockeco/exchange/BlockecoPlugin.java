@@ -63,14 +63,14 @@ public final class BlockecoPlugin extends JavaPlugin {
         sqlExecutor = Executors.newSingleThreadExecutor(r -> { Thread thread = new Thread(r, "BlockStock-SQL"); thread.setDaemon(true); return thread; });
         runtime.attachExecutor(sqlExecutor);
         Path file = getDataFolder().toPath().resolve(getConfig().getString("database.file", "blockeco.db"));
-        bootstrap = new BootstrapCoordinator<>(new PaperMainThread(this), this::finishEnable, failure -> failEnable("BlockStock initialization failed: " + failure.getMessage()), runtime::closeDatabase);
+        bootstrap = new BootstrapCoordinator<>(new PaperMainThread(this), this::finishEnable, failure -> failEnable(startupFailureMessage(failure)), runtime::closeDatabase);
         runtime.attachBootstrap(bootstrap);
         bootstrap.coordinate(java.util.concurrent.CompletableFuture.supplyAsync(() -> { Database db = new Database("jdbc:sqlite:" + file); runtime.attachDatabase(db); try { db.migrate(); return db; } catch (Exception e) { runtime.closeDatabase(db); throw new IllegalStateException("SQLite migration failed", e); } }, sqlExecutor));
     }
 
     private boolean finishEnable(Database db) {
         var economyRegistration = getServer().getServicesManager().getRegistration(Economy.class);
-        if (!VaultProviderResolver.isAvailable(economyRegistration)) throw new IllegalStateException("Vault economy provider is unavailable");
+        if (!VaultProviderResolver.isAvailable(economyRegistration)) throw new IllegalStateException("Vault 经济提供方不可用");
         var escrowId = java.util.UUID.fromString(getConfig().getString("company.treasury-escrow-uuid"));
         String escrowFailure = VaultProviderResolver.escrowPreflightFailure(economyRegistration.getProvider(), getServer().getOfflinePlayer(escrowId), escrowId);
         database = db;
@@ -93,7 +93,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         if (companyCommand == null) throw new IllegalStateException("company command is missing from plugin.yml");
         companyCommand.setExecutor(command);
         var capitalizations = new CompanyCapitalizationService(finance, new SqlAuditLog(), db, escrow, mainThread, sqlExecutor, clock);
-        new StartupRecoveryGate(failure -> getServer().getScheduler().runTask(this, () -> failEnable("BlockStock initialization failed: " + failure))).start(escrowFailure, capitalizations::recoverPendingCapitalizations, recovered -> getServer().getScheduler().runTask(this, () -> {
+        new StartupRecoveryGate(failure -> getServer().getScheduler().runTask(this, () -> failEnable(startupFailureMessage(new IllegalStateException(failure))))).start(escrowFailure, capitalizations::recoverPendingCapitalizations, recovered -> getServer().getScheduler().runTask(this, () -> {
             if (!runtime.attachReady(command, database)) return;
             registration.recoverStaleRegistrations(Instant.now().minus(Duration.ofMinutes(5))).whenComplete((count, staleFailure) -> getServer().getScheduler().runTask(this, () -> getLogger().info("BlockStock ready; legacy capitalizations recovered=" + recovered + "; stale registration records scanned=" + (staleFailure == null ? count : "failed"))));
             ipoLifecycle = new IpoLifecycleScheduler(task -> { var bukkitTask=getServer().getScheduler().runTaskTimerAsynchronously(this,task,20L,1200L); return bukkitTask::cancel; }, clock::now, primaryOfferings, failure -> getLogger().warning("IPO 状态调度失败，将在下个周期重试: " + failure.getMessage())); ipoLifecycle.start();
@@ -126,5 +126,6 @@ public final class BlockecoPlugin extends JavaPlugin {
     }
     private void positive(String path, int scale) { if (configuredMoney(path, scale).minorUnits() <= 0) throw new IllegalArgumentException(path + " must be positive"); }
     private Money configuredMoney(String path, int scale) { return Money.fromMajor(new BigDecimal(getConfig().getString(path)), scale); }
+    static String startupFailureMessage(Throwable failure) { String detail = failure.getMessage(); return "BlockStock 启动失败：" + (detail == null || detail.isBlank() ? "启动过程中发生未知异常（" + failure.getClass().getSimpleName() + "）" : detail); }
     private void failEnable(String message) { getLogger().severe(message); getServer().getPluginManager().disablePlugin(this); }
 }

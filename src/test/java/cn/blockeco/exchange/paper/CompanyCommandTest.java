@@ -49,7 +49,7 @@ class CompanyCommandTest {
     @Test
     void root_help_includes_live_create_rules_for_authorized_player() {
         Player player = permittedPlayer("blockeco.company.create", "blockeco.company.info");
-        CompanyCommand command = new CompanyCommand(mock(CompanyRegistrationService.class), mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN, rules);
+        CompanyCommand command = new CompanyCommand(mock(CompanyRegistrationService.class), mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN, rules); command.setAccepting(true);
 
         assertThat(command.onCommand(player, mock(Command.class), "company", new String[0])).isTrue();
 
@@ -60,7 +60,7 @@ class CompanyCommandTest {
     void missing_info_name_sends_explicit_usage() {
         CommandSender sender = mock(CommandSender.class);
         when(sender.hasPermission("blockeco.company.info")).thenReturn(true);
-        CompanyCommand command = new CompanyCommand(mock(CompanyRegistrationService.class), mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN, rules);
+        CompanyCommand command = new CompanyCommand(mock(CompanyRegistrationService.class), mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN, rules); command.setAccepting(true);
 
         assertThat(command.onCommand(sender, mock(Command.class), "company", new String[] {"info"})).isTrue();
 
@@ -117,7 +117,7 @@ class CompanyCommandTest {
     void create_rejects_console_before_dispatching_registration() {
         CompanyRegistrationService registration = mock(CompanyRegistrationService.class);
         CommandSender console = mock(CommandSender.class);
-        CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN, rules);
+        CompanyCommand command = new CompanyCommand(registration, mock(CompanyQueryService.class), new Messages(null), DIRECT_MAIN, rules); command.setAccepting(true);
 
         command.onCommand(console, mock(Command.class), "company", new String[] {"create", "North", "10000.00", "30"});
 
@@ -149,6 +149,30 @@ class CompanyCommandTest {
 
         verify(player).sendMessage(any(net.kyori.adventure.text.Component.class));
         verifyNoInteractions(registration);
+    }
+
+    @Test
+    void info_during_initialization_does_not_query_and_only_reports_initializing() {
+        CompanyQueryService queries = mock(CompanyQueryService.class);
+        CommandSender sender = mock(CommandSender.class); when(sender.hasPermission("blockeco.company.info")).thenReturn(true);
+        CompanyCommand command = new CompanyCommand(mock(CompanyRegistrationService.class), queries, new Messages(null), DIRECT_MAIN, rules);
+
+        command.onCommand(sender, mock(Command.class), "company", new String[] {"info", "North"});
+
+        assertThat(allPlainMessages(sender)).containsExactly("BlockStock 正在初始化，请稍后再试。");
+        verifyNoInteractions(queries);
+    }
+
+    @Test
+    void recovery_list_during_initialization_does_not_query_and_only_reports_initializing() {
+        CompanyQueryService queries = mock(CompanyQueryService.class);
+        CommandSender sender = mock(CommandSender.class); when(sender.hasPermission("blockeco.admin.recovery")).thenReturn(true);
+        CompanyCommand command = new CompanyCommand(mock(CompanyRegistrationService.class), queries, new Messages(null), DIRECT_MAIN, rules);
+
+        command.onCommand(sender, mock(Command.class), "company", new String[] {"recovery", "list"});
+
+        assertThat(allPlainMessages(sender)).containsExactly("BlockStock 正在初始化，请稍后再试。");
+        verifyNoInteractions(queries);
     }
 
     @Test
@@ -185,7 +209,7 @@ class CompanyCommandTest {
         when(queries.recoveryList()).thenReturn(CompletableFuture.completedFuture(List.of()));
         when(queries.capitalizationRecoveryList()).thenReturn(CompletableFuture.completedFuture(List.of(new CapitalizationRecoveryRecord(operation, "Vault 超时"))));
         CommandSender sender = mock(CommandSender.class); when(sender.hasPermission("blockeco.admin.recovery")).thenReturn(true);
-        CompanyCommand command = new CompanyCommand(registration, queries, new Messages(null), DIRECT_MAIN, rules);
+        CompanyCommand command = new CompanyCommand(registration, queries, new Messages(null), DIRECT_MAIN, rules); command.setAccepting(true);
 
         assertThat(command.onCommand(sender, mock(Command.class), "company", new String[] {"recovery", "list"})).isTrue();
 

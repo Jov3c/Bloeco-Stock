@@ -30,6 +30,7 @@ public final class CompanyCommand implements CommandExecutor {
     }
     @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (args.length == 0) { messages.companyHelp(sender instanceof Player && sender.hasPermission("blockeco.company.create"), sender.hasPermission("blockeco.company.info"), sender.hasPermission("blockeco.admin.recovery"), rules).forEach(sender::sendMessage); return true; }
+        if (!accepting) { sender.sendMessage(messages.initializing()); return true; }
         if ("create".equalsIgnoreCase(args[0])) return create(sender, args);
         if ("info".equalsIgnoreCase(args[0])) return info(sender, args);
         if ("asset".equalsIgnoreCase(args[0])) return bindAsset(sender,args);
