@@ -8,6 +8,7 @@ import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.ports.*;
 import java.sql.Connection;
 import java.time.Instant;
+import java.time.Duration;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -16,6 +17,20 @@ import org.junit.jupiter.api.Test;
 import org.mockito.stubbing.Answer;
 
 class SecuritiesCashServiceTest {
+    @Test void deposit_second_leg_not_called_after_player_debit_is_ambiguous() throws Exception {
+        Fixture f=fixture(); when(f.gateway.withdrawPlayer(f.player,Money.ofMinor(100))).thenReturn(CompletableFuture.completedFuture(EconomyGateway.Result.success("ok"))); when(f.gateway.depositEscrow(Money.ofMinor(100))).thenReturn(CompletableFuture.completedFuture(EconomyGateway.Result.notCalledFailure("offline")));
+        SecuritiesCashResult result=f.service.deposit(f.player,Money.ofMinor(100)).toCompletableFuture().join();
+        assertThat(result.state()).isEqualTo(SecuritiesCashOperationState.AMBIGUOUS); verify(f.repository,never()).creditAvailable(any(),any(),any(),any()); verify(f.repository,never()).completeDeposit(any(),any(),any());
+    }
+    @Test void external_timeout_is_ambiguous_and_does_not_call_next_leg() throws Exception {
+        Fixture f=fixture(Duration.ofMillis(1)); when(f.gateway.withdrawPlayer(f.player,Money.ofMinor(100))).thenReturn(new CompletableFuture<>());
+        SecuritiesCashResult result=f.service.deposit(f.player,Money.ofMinor(100)).toCompletableFuture().join();
+        assertThat(result.state()).isEqualTo(SecuritiesCashOperationState.AMBIGUOUS); verify(f.gateway,never()).depositEscrow(any());
+    }
+    @Test void duplicate_active_cash_operation_is_rejected_before_gateway() {
+        Fixture f=fixture(); Instant now=Instant.parse("2026-08-22T00:00:00Z"); when(f.repository.findActiveOperation(f.player)).thenReturn(Optional.of(new SecuritiesCashOperation(UUID.randomUUID(),f.player,Money.ofMinor(1),SecuritiesCashDirection.DEPOSIT,SecuritiesCashOperationState.PREPARED,null,"",now,now)));
+        org.assertj.core.api.Assertions.assertThatThrownBy(()->f.service.deposit(f.player,Money.ofMinor(100)).toCompletableFuture().join()).hasCauseInstanceOf(IllegalStateException.class); verifyNoInteractions(f.gateway);
+    }
     @Test void withdraw_pre_call_rejection_releases_reserve_and_never_calls_player_deposit() throws Exception {
         SecuritiesCashRepository repo=mock(SecuritiesCashRepository.class); SecuritiesCashGateway gateway=mock(SecuritiesCashGateway.class); TransactionRunner tx=mock(TransactionRunner.class); Connection connection=mock(Connection.class); when(connection.getAutoCommit()).thenReturn(false);
         doAnswer((Answer<Object>) invocation -> ((TransactionRunner.SqlWork<?>)invocation.getArgument(0)).execute(connection)).when(tx).inTransaction(any());
@@ -45,4 +60,7 @@ class SecuritiesCashServiceTest {
         order.verify(repo).transitionOperation(eq(connection),any(),eq(SecuritiesCashOperationState.PREPARED),eq(SecuritiesCashOperationState.PLAYER_WITHDRAWN),eq(SecuritiesCashOperationState.PLAYER_WITHDRAWN),anyString(),any());
         order.verify(gateway).depositEscrow(Money.ofMinor(100)); verifyNoMoreInteractions(gateway);
     }
+    private static Fixture fixture() throws Exception { return fixture(Duration.ofSeconds(1)); }
+    private static Fixture fixture(Duration timeout) throws Exception { SecuritiesCashRepository repository=mock(SecuritiesCashRepository.class); SecuritiesCashGateway gateway=mock(SecuritiesCashGateway.class); TransactionRunner tx=mock(TransactionRunner.class); Connection connection=mock(Connection.class); when(connection.getAutoCommit()).thenReturn(false); doAnswer((Answer<Object>) invocation -> ((TransactionRunner.SqlWork<?>)invocation.getArgument(0)).execute(connection)).when(tx).inTransaction(any()); UUID player=UUID.randomUUID(); when(repository.findActiveOperation(player)).thenReturn(Optional.empty()); return new Fixture(repository,gateway,player,new SecuritiesCashService(repository,tx,gateway,(Executor)Runnable::run,()->Instant.parse("2026-08-22T00:00:00Z"),timeout)); }
+    private record Fixture(SecuritiesCashRepository repository,SecuritiesCashGateway gateway,UUID player,SecuritiesCashService service) { }
 }
