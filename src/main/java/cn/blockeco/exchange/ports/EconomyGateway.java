@@ -7,7 +7,7 @@ import java.util.UUID;
 public interface EconomyGateway {
     Result withdraw(UUID playerId, Money amount);
     Result deposit(UUID playerId, Money amount);
-    Money balance(UUID playerId);
+    default Money balance(UUID playerId) { throw new UnsupportedOperationException("balance not implemented by this economy gateway"); }
 
     record Result(Outcome outcome, String message, boolean providerWasCalled) {
         public Result { Objects.requireNonNull(outcome); message = message == null ? "" : message; }

@@ -49,19 +49,19 @@ public final class SecuritiesCashService {
     }
     private CompletionStage<SecuritiesCashResult> withdrawLegOne(SecuritiesCashOperation o) {
         return gateway.withdrawEscrow(o.amount()).handle((r,t)->new External(r,t)).thenCompose(x -> {
-            if(!success(x)) return afterFailure(o,SecuritiesCashOperationState.PREPARED,null,x,true);
+            if(!success(x)) return afterFailure(o,SecuritiesCashOperationState.PREPARED,null,x,false);
             return sql(() -> { transition(o,SecuritiesCashOperationState.PREPARED,SecuritiesCashOperationState.ESCROW_WITHDRAWN,SecuritiesCashOperationState.ESCROW_WITHDRAWN,"escrow withdrawal confirmed"); return null; })
                 .thenCompose(v -> gateway.depositPlayer(o.playerId(),o.amount()).handle((r,t)->new External(r,t)))
                 .thenCompose(y -> { if(!success(y)) return afterFailure(o,SecuritiesCashOperationState.ESCROW_WITHDRAWN,SecuritiesCashOperationState.ESCROW_WITHDRAWN,y,true);
                     return sql(() -> { SecuritiesCashOperation latest=require(o.id()); transactions.inTransaction(c->{repository.transitionOperation(c,o.id(),SecuritiesCashOperationState.ESCROW_WITHDRAWN,SecuritiesCashOperationState.PLAYER_DEPOSITED,SecuritiesCashOperationState.PLAYER_DEPOSITED,"player deposit confirmed",clock.now()); repository.completeWithdrawal(c,latest,clock.now());return null;});return new SecuritiesCashResult(o.id(),SecuritiesCashOperationState.COMPLETED,"completed");}); });
         });
     }
-    private CompletionStage<SecuritiesCashResult> afterFailure(SecuritiesCashOperation o,SecuritiesCashOperationState expected,SecuritiesCashOperationState last,External external,boolean reserveMustRemain) {
+    private CompletionStage<SecuritiesCashResult> afterFailure(SecuritiesCashOperation o,SecuritiesCashOperationState expected,SecuritiesCashOperationState last,External external,boolean priorExternalEffect) {
         boolean called=external.result!=null && external.result.providerWasCalled();
         if(external.failure!=null) called=true; // a thrown completion has crossed invocation boundary
-        boolean ambiguous=called;
+        boolean ambiguous=called || priorExternalEffect;
         String detail=external.detail();
-        return sql(() -> { transactions.inTransaction(c->{ if(ambiguous) repository.transitionOperation(c,o.id(),expected,SecuritiesCashOperationState.AMBIGUOUS,last,detail,clock.now()); else { if(reserveMustRemain) repository.release(c,o.playerId(),o.amount()); repository.transitionOperation(c,o.id(),expected,SecuritiesCashOperationState.FAILED,null,detail,clock.now()); } return null;}); return new SecuritiesCashResult(o.id(),ambiguous?SecuritiesCashOperationState.AMBIGUOUS:SecuritiesCashOperationState.FAILED,detail); });
+        return sql(() -> { transactions.inTransaction(c->{ if(ambiguous) repository.transitionOperation(c,o.id(),expected,SecuritiesCashOperationState.AMBIGUOUS,last,detail,clock.now()); else { if(o.direction()==SecuritiesCashDirection.WITHDRAW) repository.release(c,o.playerId(),o.amount()); repository.transitionOperation(c,o.id(),expected,SecuritiesCashOperationState.FAILED,null,detail,clock.now()); } return null;}); return new SecuritiesCashResult(o.id(),ambiguous?SecuritiesCashOperationState.AMBIGUOUS:SecuritiesCashOperationState.FAILED,detail); });
     }
     /** Startup is local-only: final externally durable states can safely finish their internal leg. */
     public CompletionStage<List<SecuritiesCashRecoveryRecord>> recoverDurableFinalStages() { return sql(() -> {
