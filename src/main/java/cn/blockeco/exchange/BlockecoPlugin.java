@@ -42,6 +42,7 @@ import cn.blockeco.exchange.paper.StockTabCompleter;
 import cn.blockeco.exchange.paper.SecondaryTradingGate;
 import cn.blockeco.exchange.paper.StockGuiController;
 import cn.blockeco.exchange.paper.CompanyGuiController;
+import cn.blockeco.exchange.paper.IpoGuiController;
 import cn.blockeco.exchange.paper.OptionalAssetAdapterLoader;
 import cn.blockeco.exchange.ports.AppClock;
 import cn.blockeco.exchange.ports.CompanyAssetAdapterRegistry;
@@ -158,12 +159,18 @@ public final class BlockecoPlugin extends JavaPlugin {
         var symbols = new PublicStockSymbolCache();
         var companyGui = new CompanyGuiController(this,
                 new CompanyQueryService(companies, sagas, new SqlCompanyFinanceRepository(db.dataSource()), sqlExecutor),
-                registration, nativeAssets, assetBindings, creationRules::current, sqlExecutor, mainThread,
+                registration, nativeAssets, assetBindings, creationRules::current, assetAdapterRegistry::catalogSnapshot, sqlExecutor, mainThread,
                 runtime::accepting, messages);
         getServer().getPluginManager().registerEvents(companyGui, this);
         var stockGui = new StockGuiController(this, secondaryQueries, cashService, secondaryMarket, mainThread,
                 runtime::accepting, secondaryTradingGate::mutationsOpen, messages, scale, companyGui);
         getServer().getPluginManager().registerEvents(stockGui, this);
+        var ipoGui = new IpoGuiController(this, primaryOfferings,
+                new CompanyQueryService(companies, sagas, new SqlCompanyFinanceRepository(db.dataSource()), sqlExecutor),
+                mainThread, runtime::accepting, messages, scale, companyGui, stockGui);
+        stockGui.attachIpoGui(ipoGui);
+        companyGui.attachIpoGui(ipoGui);
+        getServer().getPluginManager().registerEvents(ipoGui, this);
         stockCommand = new StockCommand(publicQueries, primaryOfferings, cashService, secondaryMarket, secondaryQueries,
                 mainThread, runtime::accepting, secondaryTradingGate::mutationsOpen, messages, scale, stockGui);
         var stock = getCommand("stock");

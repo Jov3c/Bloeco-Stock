@@ -9,10 +9,15 @@ import cn.blockeco.exchange.application.RegistrationResult;
 import cn.blockeco.exchange.domain.company.Company;
 import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.ports.MainThreadExecutor;
+import cn.blockeco.exchange.ports.AssetCatalogAdapter;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Objects;
 import java.util.UUID;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
@@ -42,18 +47,21 @@ public final class CompanyGuiController implements CompanyGuiOpener, Listener {
     private final CompanyRegistrationService registration;
     private final NativeAssetService nativeAssets;
     private final AssetBindingService bindings;
+    private final Supplier<? extends Collection<AssetCatalogAdapter>> catalogs;
     private final Supplier<CompanyCreationRules> rules;
     private final Executor worker;
     private final MainThreadExecutor main;
     private final BooleanSupplier accepting;
     private final Messages messages;
+    private volatile IpoGuiOpener ipoGui;
     private final ConcurrentHashMap<UUID, CompanyGuiSession> sessions = new ConcurrentHashMap<>();
     private final java.util.Set<UUID> inventoryReplacements = ConcurrentHashMap.newKeySet();
     private final java.util.Set<UUID> mutationsInFlight = ConcurrentHashMap.newKeySet();
 
     public CompanyGuiController(JavaPlugin plugin, CompanyQueryService companies, CompanyRegistrationService registration,
                                 NativeAssetService nativeAssets, AssetBindingService bindings,
-                                Supplier<CompanyCreationRules> rules, Executor worker, MainThreadExecutor main,
+                                Supplier<CompanyCreationRules> rules, Supplier<? extends Collection<AssetCatalogAdapter>> catalogs,
+                                Executor worker, MainThreadExecutor main,
                                 BooleanSupplier accepting, Messages messages) {
         this.items = new StockGuiItemFactory(Objects.requireNonNull(plugin, "plugin"));
         this.companies = Objects.requireNonNull(companies, "companies");
@@ -61,6 +69,7 @@ public final class CompanyGuiController implements CompanyGuiOpener, Listener {
         this.nativeAssets = Objects.requireNonNull(nativeAssets, "nativeAssets");
         this.bindings = Objects.requireNonNull(bindings, "bindings");
         this.rules = Objects.requireNonNull(rules, "rules");
+        this.catalogs = Objects.requireNonNull(catalogs, "catalogs");
         this.worker = Objects.requireNonNull(worker, "worker");
         this.main = Objects.requireNonNull(main, "main");
         this.accepting = Objects.requireNonNull(accepting, "accepting");
@@ -68,6 +77,9 @@ public final class CompanyGuiController implements CompanyGuiOpener, Listener {
     }
 
     @Override public void open(Player player) { if (ready(player)) openHome(player); }
+
+    /** Completes the cyclic company/IPO GUI wiring after both controllers are constructed. */
+    public void attachIpoGui(IpoGuiOpener opener) { this.ipoGui = Objects.requireNonNull(opener, "opener"); }
 
     private void openHome(Player player) {
         if (!ready(player)) return;
@@ -83,7 +95,7 @@ public final class CompanyGuiController implements CompanyGuiOpener, Listener {
                 Company value = company.get();
                 put(inventory, 13, Material.NAME_TAG, "noop", value.displayName(), "状态：" + displayCompanyState(value));
                 put(inventory, 29, Material.CHEST, "assets", "资产管理", "创建原生资产并确认绑定");
-                put(inventory, 31, Material.PAPER, "noop", "IPO 管理", "IPO 向导正在接入公司中心");
+                put(inventory, 31, Material.PAPER, "ipo:founder", "IPO 管理", "发布、查看和认购 IPO");
                 put(inventory, 33, Material.BOOK, "noop", "公告与财报", "公司披露将在此显示");
             }
             put(inventory, 49, Material.BARRIER, "close", "关闭", "关闭公司中心"); openInventory(player, inventory);
@@ -99,6 +111,7 @@ public final class CompanyGuiController implements CompanyGuiOpener, Listener {
         switch (action) {
             case "close" -> player.closeInventory(); case "back:home" -> openHome(player); case "create:start" -> beginCompanyName(player);
             case "assets" -> openAssets(player); case "asset:create-native" -> beginNativeAssetName(player);
+            case "ipo:founder" -> openFounderIpo(player);
             case "input" -> handleInput(player, holder, event.getCurrentItem()); case "confirm:create" -> confirmCompany(player, holder.session());
             case "confirm:create-native" -> confirmNativeAsset(player, holder.session()); case "confirm:bind" -> confirmBinding(player, holder.session());
             case "cancel" -> openHome(player); default -> routeDynamic(player, action, holder.session());
@@ -125,15 +138,20 @@ public final class CompanyGuiController implements CompanyGuiOpener, Listener {
             } catch (NumberFormatException ignored) { }
             return;
         }
-        String prefix = "bind:" + NativeAssetService.ADAPTER_ID + ":";
-        if (action.startsWith(prefix)) {
-            String key = action.substring(prefix.length());
-            if (!key.isBlank()) showConfirmation(player, CompanyGuiSession.Page.CONFIRM_BIND, new CompanyGuiSession.AssetBindingDraft(NativeAssetService.ADAPTER_ID, key, "原生经营资产"));
+        if (action.startsWith("bind:")) {
+            String[] parts = action.split(":", 3);
+            if (parts.length != 3) return;
+            try {
+                String adapterId = decode(parts[1]); String key = decode(parts[2]);
+                if (!adapterId.isBlank() && !key.isBlank()) showConfirmation(player, CompanyGuiSession.Page.CONFIRM_BIND,
+                        new CompanyGuiSession.AssetBindingDraft(adapterId, key, "已选资产"));
+            } catch (IllegalArgumentException ignored) { }
         }
     }
 
     private void beginCompanyName(Player player) { if (permission(player, "blockeco.company.create")) openInput(player, CompanyGuiSession.Page.CREATE_NAME, null, "输入公司名称", "请改名为 2–24 个字符的公司名"); }
     private void beginNativeAssetName(Player player) { if (permission(player, "blockeco.company.asset.bind")) openInput(player, CompanyGuiSession.Page.CREATE_NATIVE_ASSET, null, "输入资产名称", "请改名为 1–32 个字符的资产名"); }
+    private void openFounderIpo(Player player) { IpoGuiOpener opener = ipoGui; if (opener == null) player.sendMessage(messages.marketUnavailable()); else opener.openFounder(player); }
 
     private void handleInput(Player player, Holder holder, ItemStack result) {
         String entered = plainName(result); if (entered == null) return;
@@ -167,12 +185,14 @@ public final class CompanyGuiController implements CompanyGuiOpener, Listener {
     private void openAssets(Player player) {
         if (!permission(player, "blockeco.company.asset.bind") || !ready(player)) return;
         CompanyGuiSession session = openSession(player.getUniqueId(), CompanyGuiSession.Page.ASSETS, null); loading(player, session, "正在加载原生资产…");
-        companies.findByFounder(player.getUniqueId()).thenCombine(CompletableFuture.supplyAsync(() -> nativeAssets.listOwned(player.getUniqueId(), "", 45), worker), AssetPage::new)
+        companies.findByFounder(player.getUniqueId()).thenCombine(CompletableFuture.supplyAsync(() -> listCatalogAssets(player.getUniqueId()), worker), AssetPage::new)
                 .whenComplete((page, failure) -> onMain(player, session, () -> {
                     if (failure != null || page.company().isEmpty()) { player.sendMessage(failure == null ? messages.companyNotFound() : messages.lookupFailed()); openHome(player); return; }
                     Inventory inventory = chest(session, "BlockStock 资产管理"); fill(inventory); put(inventory, 45, Material.NETHER_STAR, "asset:create-native", "创建原生资产", "不依赖外部插件；收益初始为零");
-                    int slot = 0; for (var choice : page.choices()) { if (slot >= 45) break; put(inventory, slot++, Material.CHEST, "bind:" + NativeAssetService.ADAPTER_ID + ":" + choice.externalKey(), choice.displayName(), choice.type() + "；点击后再次确认归属并绑定"); }
-                    if (slot == 0) put(inventory, 22, Material.BARRIER, "noop", "暂无原生资产", "先创建一个原生经营资产");
+                    int slot = 0; for (var choice : page.choices()) { if (slot >= 45) break; put(inventory, slot++, Material.CHEST,
+                            "bind:" + encode(choice.adapterId()) + ":" + encode(choice.choice().externalKey()), choice.choice().displayName(),
+                            choice.choice().type() + "；点击后再次确认归属并绑定"); }
+                    if (slot == 0) put(inventory, 22, Material.BARRIER, "noop", "暂无可绑定资产", "先创建原生经营资产，或安装已适配的外部插件");
                     put(inventory, 49, Material.ARROW, "back:home", "返回公司中心", "返回上一级"); openInventory(player, inventory);
                 }));
     }
@@ -216,10 +236,25 @@ public final class CompanyGuiController implements CompanyGuiOpener, Listener {
     private void fill(Inventory inventory) { for (int slot = 0; slot < inventory.getSize(); slot++) inventory.setItem(slot, items.filler()); }
     private void put(Inventory inventory, int slot, Material material, String action, String name, String lore) { inventory.setItem(slot, items.action(material, action, Component.text(name), List.of(Component.text(lore)))); }
     private static String plainName(ItemStack item) { if (item == null || !item.hasItemMeta() || item.getItemMeta().displayName() == null) return null; return PlainTextComponentSerializer.plainText().serialize(item.getItemMeta().displayName()).trim(); }
+    private List<CatalogChoice> listCatalogAssets(UUID player) {
+        List<CatalogChoice> choices = new ArrayList<>();
+        for (AssetCatalogAdapter adapter : catalogs.get()) {
+            try {
+                for (AssetCatalogAdapter.AssetChoice choice : adapter.listOwned(player, "", 45)) {
+                    if (choices.size() >= 45) return List.copyOf(choices);
+                    choices.add(new CatalogChoice(adapter.id(), choice));
+                }
+            } catch (RuntimeException ignored) { /* optional provider unavailable; do not break native assets */ }
+        }
+        return List.copyOf(choices);
+    }
+    private static String encode(String value) { return Base64.getUrlEncoder().withoutPadding().encodeToString(value.getBytes(StandardCharsets.UTF_8)); }
+    private static String decode(String value) { return new String(Base64.getUrlDecoder().decode(value), StandardCharsets.UTF_8); }
     private static String createRulesLore(CompanyCreationRules rules) { return "创建费 " + rules.registrationFeeMajor() + "；最低资本 " + rules.minimumCapitalMajor() + "；分红 " + rules.dividendChoices() + "%"; }
     private static String displayCompanyState(Company company) { return "PENDING_ASSET_BINDING".equals(company.status().name()) ? "待绑定资产" : company.status().name(); }
     private String describe(CompanyGuiSession.Draft draft) { return switch (draft) { case CompanyGuiSession.CompanyDraft company -> "创建「" + company.name() + "」；资本 " + company.capital().toMajor(rules.get().scale()).toPlainString() + "；分红 " + company.dividendPercent() + "%"; case CompanyGuiSession.NativeAssetDraft asset -> "创建原生经营资产「" + asset.name() + "」；不会自动产生收益"; case CompanyGuiSession.AssetBindingDraft asset -> "绑定「" + asset.displayName() + "」；确认时会再次校验归属"; }; }
     private Component registrationMessage(RegistrationResult result) { return switch (result.status()) { case SUCCESS -> messages.registrationSuccess(); case INSUFFICIENT_FUNDS -> messages.insufficientFunds(); case DUPLICATE_NAME -> messages.duplicateName(); case REFUNDED_AFTER_FAILURE -> messages.refunded(); case PROVIDER_FAILURE, RECOVERY_REQUIRED -> messages.recoveryRequired(); }; }
-    private record AssetPage(java.util.Optional<Company> company, List<cn.blockeco.exchange.ports.AssetCatalogAdapter.AssetChoice> choices) { }
+    private record AssetPage(java.util.Optional<Company> company, List<CatalogChoice> choices) { }
+    private record CatalogChoice(String adapterId, AssetCatalogAdapter.AssetChoice choice) { }
     private record Holder(CompanyGuiSession session) implements InventoryHolder { @Override public Inventory getInventory() { return null; } }
 }
