@@ -2,7 +2,7 @@ name: BlockStock
 version: '${version}'
 main: cn.blockeco.exchange.BlockecoPlugin
 api-version: '1.21'
-softdepend: [Vault, VaultUnlocked]
+softdepend: [Vault, VaultUnlocked, Lands, LandsFree, Residence, QuickShop-Hikari, QuickShop, Shopkeepers]
 commands:
   company:
     description: 管理 BlockStock 公司
