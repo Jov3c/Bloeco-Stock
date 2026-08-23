@@ -113,7 +113,10 @@ public final class BlockecoPlugin extends JavaPlugin {
         var escrow = new VaultTreasuryEscrowGateway(economy, mainThread, escrowId);
         var registration = new CompanyRegistrationService(companies, sagas, new SqlAuditLog(), db, economy, mainThread, sqlExecutor, clock, creationRules.current().registrationFee(), creationRules::current, finance, escrow, creationRules.current().initialShares());
         getServer().getServicesManager().register(CompanyAssetAdapterRegistry.class, assetAdapterRegistry, this, ServicePriority.Normal);
-        assetAdapterRegistry.register(new NativeAssetService(new SqlNativeAssetRepository(db.dataSource()), db, sqlExecutor, clock));
+        var nativeAssets = new NativeAssetService(new SqlNativeAssetRepository(db.dataSource()), db, sqlExecutor, clock);
+        assetAdapterRegistry.register(nativeAssets);
+        new OptionalAssetAdapterLoader(getServer().getPluginManager(), assetAdapterRegistry,
+                message -> getLogger().warning(message)).load();
         var assetBindings = new AssetBindingService(new SqlAssetBindingRepository(db.dataSource()), db, () -> {
             CompanyAssetAdapterRegistry registry = getServer().getServicesManager().load(CompanyAssetAdapterRegistry.class);
             return registry == null ? java.util.List.of() : registry.snapshot();
@@ -152,7 +155,11 @@ public final class BlockecoPlugin extends JavaPlugin {
                 () -> cashGateway.escrowBalance().thenCompose(secondaryRecovery::inspect));
         adminCommand.setExecutor(adminConfig); adminCommand.setTabCompleter(adminConfig);
         var symbols = new PublicStockSymbolCache();
-        var companyGui = new CompanyGuiController(new CompanyQueryService(companies, sagas, new SqlCompanyFinanceRepository(db.dataSource()), sqlExecutor), mainThread, runtime::accepting, messages);
+        var companyGui = new CompanyGuiController(this,
+                new CompanyQueryService(companies, sagas, new SqlCompanyFinanceRepository(db.dataSource()), sqlExecutor),
+                registration, nativeAssets, assetBindings, creationRules::current, sqlExecutor, mainThread,
+                runtime::accepting, messages);
+        getServer().getPluginManager().registerEvents(companyGui, this);
         var stockGui = new StockGuiController(this, secondaryQueries, cashService, secondaryMarket, mainThread,
                 runtime::accepting, secondaryTradingGate::mutationsOpen, messages, scale, companyGui);
         getServer().getPluginManager().registerEvents(stockGui, this);
