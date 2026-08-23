@@ -1,0 +1,48 @@
+package cn.blockeco.exchange.paper;
+
+import cn.blockeco.exchange.domain.money.Money;
+import cn.blockeco.exchange.domain.trading.LimitOrder;
+import java.util.Objects;
+import java.util.UUID;
+
+/** Immutable, owner-bound GUI state. A fresh ID invalidates delayed callbacks from prior pages. */
+public record StockGuiSession(UUID id, UUID owner, Page page, int pageIndex, String stockCode, Draft draft) {
+    public StockGuiSession {
+        Objects.requireNonNull(id, "id");
+        Objects.requireNonNull(owner, "owner");
+        Objects.requireNonNull(page, "page");
+        if (pageIndex < 0) throw new IllegalArgumentException("pageIndex must not be negative");
+    }
+
+    public static StockGuiSession open(UUID owner) {
+        return new StockGuiSession(UUID.randomUUID(), Objects.requireNonNull(owner, "owner"), Page.HOME, 0, null, null);
+    }
+
+    public StockGuiSession next(Page nextPage, int nextPageIndex, String nextStockCode, Draft nextDraft) {
+        return new StockGuiSession(UUID.randomUUID(), owner, nextPage, nextPageIndex, nextStockCode, nextDraft);
+    }
+
+    public boolean belongsTo(UUID playerId) {
+        return owner.equals(playerId);
+    }
+
+    public enum Page { HOME, MARKET, DETAIL, CASH, PORTFOLIO, ORDERS, TRADES, INPUT, CONFIRM }
+
+    public sealed interface Draft permits CashTransfer, LimitOrderDraft, CancelOrder {
+    }
+
+    public record CashTransfer(boolean deposit, Money amount) implements Draft {
+        public CashTransfer { Objects.requireNonNull(amount, "amount"); }
+    }
+
+    public record LimitOrderDraft(String stockCode, LimitOrder.Side side, long shares, Money limitPrice) implements Draft {
+        public LimitOrderDraft {
+            Objects.requireNonNull(stockCode, "stockCode"); Objects.requireNonNull(side, "side"); Objects.requireNonNull(limitPrice, "limitPrice");
+            if (stockCode.isBlank() || shares <= 0 || limitPrice.minorUnits() <= 0) throw new IllegalArgumentException("invalid limit order draft");
+        }
+    }
+
+    public record CancelOrder(UUID orderId) implements Draft {
+        public CancelOrder { Objects.requireNonNull(orderId, "orderId"); }
+    }
+}
