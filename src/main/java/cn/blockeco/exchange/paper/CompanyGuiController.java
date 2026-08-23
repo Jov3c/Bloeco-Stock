@@ -185,7 +185,12 @@ public final class CompanyGuiController implements CompanyGuiOpener, Listener {
     private void openAssets(Player player) {
         if (!permission(player, "blockeco.company.asset.bind") || !ready(player)) return;
         CompanyGuiSession session = openSession(player.getUniqueId(), CompanyGuiSession.Page.ASSETS, null); loading(player, session, "正在加载原生资产…");
-        companies.findByFounder(player.getUniqueId()).thenCombine(CompletableFuture.supplyAsync(() -> listCatalogAssets(player.getUniqueId()), worker), AssetPage::new)
+        CompletableFuture<List<CatalogChoice>> nativeChoices = CompletableFuture.supplyAsync(
+                () -> nativeAssets.listOwned(player.getUniqueId(), "", 45).stream()
+                        .map(choice -> new CatalogChoice(NativeAssetService.ADAPTER_ID, choice)).toList(), worker);
+        companies.findByFounder(player.getUniqueId()).thenCombine(
+                nativeChoices.thenCombine(main.submit(() -> listExternalCatalogAssets(player.getUniqueId())), this::combineChoices),
+                AssetPage::new)
                 .whenComplete((page, failure) -> onMain(player, session, () -> {
                     if (failure != null || page.company().isEmpty()) { player.sendMessage(failure == null ? messages.companyNotFound() : messages.lookupFailed()); openHome(player); return; }
                     Inventory inventory = chest(session, "BlockStock 资产管理"); fill(inventory); put(inventory, 45, Material.NETHER_STAR, "asset:create-native", "创建原生资产", "不依赖外部插件；收益初始为零");
@@ -236,9 +241,10 @@ public final class CompanyGuiController implements CompanyGuiOpener, Listener {
     private void fill(Inventory inventory) { for (int slot = 0; slot < inventory.getSize(); slot++) inventory.setItem(slot, items.filler()); }
     private void put(Inventory inventory, int slot, Material material, String action, String name, String lore) { inventory.setItem(slot, items.action(material, action, Component.text(name), List.of(Component.text(lore)))); }
     private static String plainName(ItemStack item) { if (item == null || !item.hasItemMeta() || item.getItemMeta().displayName() == null) return null; return PlainTextComponentSerializer.plainText().serialize(item.getItemMeta().displayName()).trim(); }
-    private List<CatalogChoice> listCatalogAssets(UUID player) {
+    private List<CatalogChoice> listExternalCatalogAssets(UUID player) {
         List<CatalogChoice> choices = new ArrayList<>();
         for (AssetCatalogAdapter adapter : catalogs.get()) {
+            if (NativeAssetService.ADAPTER_ID.equals(adapter.id())) continue;
             try {
                 for (AssetCatalogAdapter.AssetChoice choice : adapter.listOwned(player, "", 45)) {
                     if (choices.size() >= 45) return List.copyOf(choices);
@@ -247,6 +253,14 @@ public final class CompanyGuiController implements CompanyGuiOpener, Listener {
             } catch (RuntimeException ignored) { /* optional provider unavailable; do not break native assets */ }
         }
         return List.copyOf(choices);
+    }
+    private List<CatalogChoice> combineChoices(List<CatalogChoice> nativeChoices, List<CatalogChoice> externalChoices) {
+        List<CatalogChoice> result = new ArrayList<>(nativeChoices);
+        for (CatalogChoice choice : externalChoices) {
+            if (result.size() >= 45) break;
+            result.add(choice);
+        }
+        return List.copyOf(result);
     }
     private static String encode(String value) { return Base64.getUrlEncoder().withoutPadding().encodeToString(value.getBytes(StandardCharsets.UTF_8)); }
     private static String decode(String value) { return new String(Base64.getUrlDecoder().decode(value), StandardCharsets.UTF_8); }
