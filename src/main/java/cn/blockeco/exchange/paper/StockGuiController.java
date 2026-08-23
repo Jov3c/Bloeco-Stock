@@ -37,6 +37,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 public final class StockGuiController implements Listener, StockGuiOpener {
     private final Map<UUID, StockGuiSession> sessions = new ConcurrentHashMap<>();
     private final Set<UUID> mutationsInFlight = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> inventoryReplacements = ConcurrentHashMap.newKeySet();
     private final StockGuiItemFactory items;
     private final SecondaryMarketQueryService queries;
     private final SecuritiesCashService cash;
@@ -72,6 +73,10 @@ public final class StockGuiController implements Listener, StockGuiOpener {
         return current != null && current.belongsTo(player) && current.id().equals(session);
     }
 
+    void beginInventoryReplacement(UUID player) { inventoryReplacements.add(player); }
+    void endInventoryReplacement(UUID player) { inventoryReplacements.remove(player); }
+    boolean shouldClearOnClose(UUID player, UUID session) { return !inventoryReplacements.contains(player) && matches(player, session); }
+
     public void openHome(Player player) {
         if (!accepting.getAsBoolean()) { player.sendMessage(messages.initializing()); return; }
         StockGuiSession session = openSession(player.getUniqueId(), StockGuiSession.Page.HOME, 0, null, null);
@@ -84,7 +89,7 @@ public final class StockGuiController implements Listener, StockGuiOpener {
         put(inventory, 31, Material.EMERALD, "trades", "成交记录", "查看自己的最近成交");
         put(inventory, 33, Material.PAPER, "help", "IPO 与帮助", "IPO 请使用 /stock ipo；点击查看文字帮助");
         put(inventory, 49, Material.BARRIER, "close", "关闭", "关闭交易所");
-        player.openInventory(inventory);
+        openInventory(player, inventory);
     }
 
     @EventHandler public void onInventoryClick(InventoryClickEvent event) {
@@ -122,7 +127,7 @@ public final class StockGuiController implements Listener, StockGuiOpener {
 
     @EventHandler public void onInventoryClose(InventoryCloseEvent event) {
         if (!(event.getInventory().getHolder() instanceof Holder holder) || !(event.getPlayer() instanceof Player player)) return;
-        sessions.remove(player.getUniqueId(), holder.session());
+        if (shouldClearOnClose(player.getUniqueId(), holder.session().id())) sessions.remove(player.getUniqueId(), holder.session());
     }
 
     @EventHandler public void onPrepareAnvil(PrepareAnvilEvent event) {
@@ -147,7 +152,7 @@ public final class StockGuiController implements Listener, StockGuiOpener {
             if (rows.isEmpty()) put(inv, 22, Material.BARRIER, "back:home", "暂无上市股票", "返回主菜单");
             for (int i = start; i < end; i++) { PublicMarketRow r = rows.get(i); put(inv, i - start, Material.PAPER, "detail:" + r.stockCode(), r.stockCode() + " " + r.companyName(), "现价 " + amount(r.latestPrice()) + "  涨跌 " + amount(r.change()) + "  量 " + r.volume()); }
             put(inv, 45, Material.ARROW, "market:prev", "上一页", "返回上一页"); put(inv, 49, Material.BARRIER, "back:home", "主菜单", "返回交易所主页");
-            if (end < rows.size()) put(inv, 53, Material.ARROW, "market:next", "下一页", "查看下一页"); player.openInventory(inv);
+            if (end < rows.size()) put(inv, 53, Material.ARROW, "market:next", "下一页", "查看下一页"); openInventory(player, inv);
         }));
     }
 
@@ -160,20 +165,21 @@ public final class StockGuiController implements Listener, StockGuiOpener {
             put(inv, 4, Material.NAME_TAG, "noop", code, "五档盘口（买卖均为匿名聚合）");
             for (int i = 0; i < book.asks().size(); i++) put(inv, 10 + i, Material.RED_STAINED_GLASS_PANE, "noop", "卖" + (i + 1) + " " + amount(book.asks().get(i).price()), book.asks().get(i).shares() + " 股");
             for (int i = 0; i < book.bids().size(); i++) put(inv, 28 + i, Material.LIME_STAINED_GLASS_PANE, "noop", "买" + (i + 1) + " " + amount(book.bids().get(i).price()), book.bids().get(i).shares() + " 股");
-            put(inv, 45, Material.ARROW, "back:market", "返回市场", "返回列表"); put(inv, 48, Material.LIME_WOOL, "detail:buy", "买入", "输入股数和限价后确认"); put(inv, 50, Material.RED_WOOL, "detail:sell", "卖出", "输入股数和限价后确认"); put(inv, 53, Material.BARRIER, "close", "关闭", "关闭交易所"); player.openInventory(inv);
+            put(inv, 45, Material.ARROW, "back:market", "返回市场", "返回列表"); put(inv, 48, Material.LIME_WOOL, "detail:buy", "买入", "输入股数和限价后确认"); put(inv, 50, Material.RED_WOOL, "detail:sell", "卖出", "输入股数和限价后确认"); put(inv, 53, Material.BARRIER, "close", "关闭", "关闭交易所"); openInventory(player, inv);
         }));
     }
 
-    private void openCash(Player player) { openPrivate(player, StockGuiSession.Page.CASH, "证券账户", view -> { Inventory inv = inventory(sessions.get(player.getUniqueId()), "BlockStock 证券账户"); fill(inv); put(inv, 13, Material.GOLD_INGOT, "noop", "可用资金 " + amount(view.availableCash()), "冻结资金 " + amount(view.reservedCash())); put(inv, 29, Material.LIME_WOOL, "cash:deposit", "转入证券账户", "从个人钱包转入"); put(inv, 33, Material.RED_WOOL, "cash:withdraw", "转出个人钱包", "从证券账户转出"); put(inv, 49, Material.ARROW, "back:home", "返回", "主菜单"); player.openInventory(inv); }); }
-    private void openPortfolio(Player player) { openPrivate(player, StockGuiSession.Page.PORTFOLIO, "我的持仓", view -> { Inventory inv=inventory(sessions.get(player.getUniqueId()),"BlockStock 我的持仓"); fill(inv); int i=0; for(var h:view.holdings()) if(i<45) put(inv,i++,Material.CHEST,"detail:"+h.stockCode(),h.stockCode()+" "+h.companyName(),"可用 "+h.availableShares()+" 冻结 "+h.reservedShares()+" 最新 "+amount(h.latestPrice())); if(i==0)put(inv,22,Material.BARRIER,"noop","当前没有持仓",""); put(inv,49,Material.ARROW,"back:home","返回","主菜单");player.openInventory(inv); }); }
-    private void openOrders(Player player) { if(!permission(player,"blockeco.stock.orders"))return; StockGuiSession s=openSession(player.getUniqueId(),StockGuiSession.Page.ORDERS,0,null,null); loading(player,s,"正在加载委托…");queries.orders(player.getUniqueId(),50).whenComplete((rows,error)->onMain(player,s,()->{if(error!=null){player.sendMessage(messages.stockQueryFailed());return;}Inventory inv=inventory(s,"BlockStock 我的委托");fill(inv);int i=0;for(var o:rows)if(i<45)put(inv,i++,Material.WRITABLE_BOOK,"cancel-order:"+o.id(),o.stockCode()+" "+(o.side()==LimitOrder.Side.BUY?"买":"卖"),"限价 "+amount(o.limitPrice())+" 剩余 "+o.remainingShares()+" 状态 "+o.state());if(i==0)put(inv,22,Material.BARRIER,"noop","当前没有委托","");put(inv,49,Material.ARROW,"back:home","返回","主菜单");player.openInventory(inv);})); }
-    private void openTrades(Player player) { if(!permission(player,"blockeco.stock.trades"))return; StockGuiSession s=openSession(player.getUniqueId(),StockGuiSession.Page.TRADES,0,null,null); loading(player,s,"正在加载成交…");queries.trades(player.getUniqueId(),50).whenComplete((rows,error)->onMain(player,s,()->{if(error!=null){player.sendMessage(messages.stockQueryFailed());return;}Inventory inv=inventory(s,"BlockStock 成交记录");fill(inv);int i=0;for(var t:rows)if(i<45)put(inv,i++,Material.EMERALD,"noop",t.stockCode()+" "+(t.side()==LimitOrder.Side.BUY?"买入":"卖出"),t.shares()+" 股 @ "+amount(t.price())+" 手续费 "+amount(t.fee()));if(i==0)put(inv,22,Material.BARRIER,"noop","当前没有成交","");put(inv,49,Material.ARROW,"back:home","返回","主菜单");player.openInventory(inv);})); }
+    private void openCash(Player player) { openPrivate(player, StockGuiSession.Page.CASH, "证券账户", view -> { Inventory inv = inventory(sessions.get(player.getUniqueId()), "BlockStock 证券账户"); fill(inv); put(inv, 13, Material.GOLD_INGOT, "noop", "可用资金 " + amount(view.availableCash()), "冻结资金 " + amount(view.reservedCash())); put(inv, 29, Material.LIME_WOOL, "cash:deposit", "转入证券账户", "从个人钱包转入"); put(inv, 33, Material.RED_WOOL, "cash:withdraw", "转出个人钱包", "从证券账户转出"); put(inv, 49, Material.ARROW, "back:home", "返回", "主菜单"); openInventory(player, inv); }); }
+    private void openPortfolio(Player player) { openPrivate(player, StockGuiSession.Page.PORTFOLIO, "我的持仓", view -> { Inventory inv=inventory(sessions.get(player.getUniqueId()),"BlockStock 我的持仓"); fill(inv); int i=0; for(var h:view.holdings()) if(i<45) put(inv,i++,Material.CHEST,"detail:"+h.stockCode(),h.stockCode()+" "+h.companyName(),"可用 "+h.availableShares()+" 冻结 "+h.reservedShares()+" 最新 "+amount(h.latestPrice())); if(i==0)put(inv,22,Material.BARRIER,"noop","当前没有持仓",""); put(inv,49,Material.ARROW,"back:home","返回","主菜单");openInventory(player, inv); }); }
+    private void openOrders(Player player) { if(!permission(player,"blockeco.stock.orders"))return; StockGuiSession s=openSession(player.getUniqueId(),StockGuiSession.Page.ORDERS,0,null,null); loading(player,s,"正在加载委托…");queries.orders(player.getUniqueId(),50).whenComplete((rows,error)->onMain(player,s,()->{if(error!=null){player.sendMessage(messages.stockQueryFailed());return;}Inventory inv=inventory(s,"BlockStock 我的委托");fill(inv);int i=0;for(var o:rows)if(i<45)put(inv,i++,Material.WRITABLE_BOOK,"cancel-order:"+o.id(),o.stockCode()+" "+(o.side()==LimitOrder.Side.BUY?"买":"卖"),"限价 "+amount(o.limitPrice())+" 剩余 "+o.remainingShares()+" 状态 "+o.state());if(i==0)put(inv,22,Material.BARRIER,"noop","当前没有委托","");put(inv,49,Material.ARROW,"back:home","返回","主菜单");openInventory(player, inv);})); }
+    private void openTrades(Player player) { if(!permission(player,"blockeco.stock.trades"))return; StockGuiSession s=openSession(player.getUniqueId(),StockGuiSession.Page.TRADES,0,null,null); loading(player,s,"正在加载成交…");queries.trades(player.getUniqueId(),50).whenComplete((rows,error)->onMain(player,s,()->{if(error!=null){player.sendMessage(messages.stockQueryFailed());return;}Inventory inv=inventory(s,"BlockStock 成交记录");fill(inv);int i=0;for(var t:rows)if(i<45)put(inv,i++,Material.EMERALD,"noop",t.stockCode()+" "+(t.side()==LimitOrder.Side.BUY?"买入":"卖出"),t.shares()+" 股 @ "+amount(t.price())+" 手续费 "+amount(t.fee()));if(i==0)put(inv,22,Material.BARRIER,"noop","当前没有成交","");put(inv,49,Material.ARROW,"back:home","返回","主菜单");openInventory(player, inv);})); }
 
     private void openPrivate(Player player, StockGuiSession.Page page, String loading, java.util.function.Consumer<PortfolioView> renderer) { if(!permission(player,"blockeco.stock."+(page==StockGuiSession.Page.CASH?"cash":"portfolio")))return;StockGuiSession s=openSession(player.getUniqueId(),page,0,null,null);loading(player,s,"正在加载"+loading+"…");queries.portfolio(player.getUniqueId()).whenComplete((view,error)->onMain(player,s,()->{if(error!=null){player.sendMessage(messages.stockQueryFailed());return;}renderer.accept(view);})); }
 
     private void fill(Inventory inventory) { for (int slot = 0; slot < inventory.getSize(); slot++) inventory.setItem(slot, items.filler()); }
+    private void openInventory(Player player, Inventory inventory) { beginInventoryReplacement(player.getUniqueId()); try { player.openInventory(inventory); } finally { endInventoryReplacement(player.getUniqueId()); } }
     private Inventory inventory(StockGuiSession session, String title) { return Bukkit.createInventory(new Holder(session), 54, Component.text(title)); }
-    private void loading(Player player, StockGuiSession session, String text) { Inventory inv=inventory(session,"BlockStock"); fill(inv); put(inv,22,Material.CLOCK,"noop",text,"请稍候，不要关闭此页面"); player.openInventory(inv); }
+    private void loading(Player player, StockGuiSession session, String text) { Inventory inv=inventory(session,"BlockStock"); fill(inv); put(inv,22,Material.CLOCK,"noop",text,"请稍候，不要关闭此页面"); openInventory(player, inv); }
     private boolean ready(Player player) { if(accepting.getAsBoolean())return true;player.sendMessage(messages.initializing());return false; }
     private boolean permission(Player player,String permission) { if(player.hasPermission(permission))return true;player.sendMessage(messages.noPermission());return false; }
     private void onMain(Player player, StockGuiSession session, Runnable work) { mainThread.submit(()->{if(player.isOnline()&&accepting.getAsBoolean()&&matches(player.getUniqueId(),session.id()))work.run();return null;}); }
@@ -183,7 +189,7 @@ public final class StockGuiController implements Listener, StockGuiOpener {
         if ((draft.kind()==StockGuiSession.InputKind.CASH_AMOUNT && !permission(player,"blockeco.stock.cash")) || (draft.kind()!=StockGuiSession.InputKind.CASH_AMOUNT && !permission(player,"blockeco.stock.trade"))) return;
         StockGuiSession session=openSession(player.getUniqueId(),StockGuiSession.Page.INPUT,0,draft.stockCode(),draft);
         Inventory inv=Bukkit.createInventory(new Holder(session),InventoryType.ANVIL,Component.text(draft.kind()==StockGuiSession.InputKind.ORDER_PRICE?"输入限价":"输入数量/金额"));
-        ItemStack paper=items.action(Material.PAPER,"input",Component.text("输入"),List.of(Component.text(draft.kind()==StockGuiSession.InputKind.ORDER_SHARES?"请改名为正整数股数":draft.kind()==StockGuiSession.InputKind.ORDER_PRICE?"请改名为限价":"请改名为金额"))); inv.setItem(0,paper);player.openInventory(inv);
+        ItemStack paper=items.action(Material.PAPER,"input",Component.text("输入"),List.of(Component.text(draft.kind()==StockGuiSession.InputKind.ORDER_SHARES?"请改名为正整数股数":draft.kind()==StockGuiSession.InputKind.ORDER_PRICE?"请改名为限价":"请改名为金额"))); inv.setItem(0,paper);openInventory(player, inv);
     }
 
     private void handleInput(Player player, Holder holder, ItemStack result) {
@@ -196,7 +202,7 @@ public final class StockGuiController implements Listener, StockGuiOpener {
         }catch(ArithmeticException|NumberFormatException ex){player.sendMessage(draft.kind()==StockGuiSession.InputKind.ORDER_SHARES?messages.invalidShares():messages.invalidStockMoney());}
     }
 
-    private void showConfirmation(Player player, StockGuiSession.Draft draft) { StockGuiSession session=openSession(player.getUniqueId(),StockGuiSession.Page.CONFIRM,0,null,draft);Inventory inv=inventory(session,"确认执行");fill(inv);put(inv,22,Material.BOOK,"noop","请确认",describe(draft));put(inv,29,Material.LIME_WOOL,"confirm","确认执行","执行后将提交给交易账本");put(inv,33,Material.RED_WOOL,"cancel","取消","不执行任何操作");player.openInventory(inv); }
+    private void showConfirmation(Player player, StockGuiSession.Draft draft) { StockGuiSession session=openSession(player.getUniqueId(),StockGuiSession.Page.CONFIRM,0,null,draft);Inventory inv=inventory(session,"确认执行");fill(inv);put(inv,22,Material.BOOK,"noop","请确认",describe(draft));put(inv,29,Material.LIME_WOOL,"confirm","确认执行","执行后将提交给交易账本");put(inv,33,Material.RED_WOOL,"cancel","取消","不执行任何操作");openInventory(player, inv); }
     private String describe(StockGuiSession.Draft draft) { return switch(draft){case StockGuiSession.CashTransfer c->(c.deposit()?"转入 ":"转出 ")+amount(c.amount());case StockGuiSession.LimitOrderDraft o->(o.side()==LimitOrder.Side.BUY?"买入 ":"卖出 ")+o.stockCode()+" "+o.shares()+" 股 @ "+amount(o.limitPrice());case StockGuiSession.CancelOrder c->"撤销你的委托";default->"";}; }
     private void confirm(Player player, StockGuiSession confirmation) {
         StockGuiSession.Draft draft=confirmation.draft(); if(draft==null)return;
