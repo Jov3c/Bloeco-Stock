@@ -42,6 +42,7 @@ import cn.blockeco.exchange.paper.StockTabCompleter;
 import cn.blockeco.exchange.paper.SecondaryTradingGate;
 import cn.blockeco.exchange.paper.StockGuiController;
 import cn.blockeco.exchange.paper.CompanyGuiController;
+import cn.blockeco.exchange.paper.OptionalAssetAdapterLoader;
 import cn.blockeco.exchange.ports.AppClock;
 import cn.blockeco.exchange.ports.CompanyAssetAdapterRegistry;
 import cn.blockeco.exchange.infrastructure.CompanyAssetAdapterRegistryImpl;
