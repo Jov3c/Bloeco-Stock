@@ -29,5 +29,6 @@ class NativeAssetServiceTest {
         private final Map<UUID, NativeAsset> values = new java.util.HashMap<>();
         @Override public void insert(java.sql.Connection connection, NativeAsset asset) { values.put(asset.id(), asset); }
         @Override public Optional<NativeAsset> find(UUID id) { return Optional.ofNullable(values.get(id)); }
+        @Override public java.util.List<NativeAsset> listOwned(UUID founderId, int limit) { return values.values().stream().filter(asset -> asset.founderId().equals(founderId)).limit(limit).toList(); }
     }
 }
