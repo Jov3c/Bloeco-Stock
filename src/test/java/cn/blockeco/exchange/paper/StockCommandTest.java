@@ -30,6 +30,22 @@ class StockCommandTest {
         }
     };
 
+    @Test void root_stock_and_gui_open_the_vanilla_menu_but_help_remains_text() {
+        StockGuiOpener gui = mock(StockGuiOpener.class);
+        StockCommand command = new StockCommand(mock(PublicStockQueryService.class), mock(PrimaryOfferingService.class),
+                mock(SecuritiesCashService.class), mock(SecondaryMarketService.class), mock(SecondaryMarketQueryService.class),
+                DIRECT_MAIN, () -> true, () -> true, new Messages(null), 2, gui);
+        command.setAccepting(true);
+        Player player = player(true);
+
+        command.onCommand(player, mock(Command.class), "stock", new String[0]);
+        command.onCommand(player, mock(Command.class), "stock", new String[] {"gui"});
+        command.onCommand(player, mock(Command.class), "stock", new String[] {"help"});
+
+        verify(gui, times(2)).openHome(player);
+        verify(player, atLeastOnce()).sendMessage(any(Component.class));
+    }
+
     @Test void not_ready_non_help_command_only_initializes_without_query_or_vault() {
         PublicStockQueryService queries = mock(PublicStockQueryService.class);
         PrimaryOfferingService offerings = mock(PrimaryOfferingService.class);

@@ -28,21 +28,26 @@ import org.bukkit.entity.Player;
 public final class StockCommand implements CommandExecutor, CommandAcceptanceGate {
     private final PublicStockQueryService queries; private final PrimaryOfferingService offerings; private final MainThreadExecutor mainThread; private final BooleanSupplier accepting; private final Messages messages;
     private final SecuritiesCashService cash; private final SecondaryMarketService trading; private final SecondaryMarketQueryService secondaryQueries; private final int currencyScale; private final BooleanSupplier mutationsOpen;
+    private final StockGuiOpener gui;
     private final Set<UUID> subscriptionsInFlight = ConcurrentHashMap.newKeySet();
     private volatile boolean acceptingFlag;
     public StockCommand(PublicStockQueryService queries, PrimaryOfferingService offerings, MainThreadExecutor mainThread, BooleanSupplier accepting, Messages messages) {
-        this(queries,offerings,null,null,null,mainThread,accepting,accepting,messages,2);
+        this(queries,offerings,null,null,null,mainThread,accepting,accepting,messages,2,null);
     }
     public StockCommand(PublicStockQueryService queries, PrimaryOfferingService offerings, SecuritiesCashService cash, SecondaryMarketService trading, SecondaryMarketQueryService secondaryQueries, MainThreadExecutor mainThread, BooleanSupplier accepting, Messages messages, int currencyScale) {
-        this(queries, offerings, cash, trading, secondaryQueries, mainThread, accepting, accepting, messages, currencyScale);
+        this(queries, offerings, cash, trading, secondaryQueries, mainThread, accepting, accepting, messages, currencyScale, null);
     }
     public StockCommand(PublicStockQueryService queries, PrimaryOfferingService offerings, SecuritiesCashService cash, SecondaryMarketService trading, SecondaryMarketQueryService secondaryQueries, MainThreadExecutor mainThread, BooleanSupplier accepting, BooleanSupplier mutationsOpen, Messages messages, int currencyScale) {
-        this.queries=queries; this.offerings=offerings; this.cash=cash; this.trading=trading; this.secondaryQueries=secondaryQueries; this.mainThread=mainThread; this.accepting=accepting; this.mutationsOpen=mutationsOpen; this.messages=messages; if(currencyScale<0||currencyScale>8)throw new IllegalArgumentException("currencyScale"); this.currencyScale=currencyScale;
+        this(queries, offerings, cash, trading, secondaryQueries, mainThread, accepting, mutationsOpen, messages, currencyScale, null);
+    }
+    public StockCommand(PublicStockQueryService queries, PrimaryOfferingService offerings, SecuritiesCashService cash, SecondaryMarketService trading, SecondaryMarketQueryService secondaryQueries, MainThreadExecutor mainThread, BooleanSupplier accepting, BooleanSupplier mutationsOpen, Messages messages, int currencyScale, StockGuiOpener gui) {
+        this.queries=queries; this.offerings=offerings; this.cash=cash; this.trading=trading; this.secondaryQueries=secondaryQueries; this.mainThread=mainThread; this.accepting=accepting; this.mutationsOpen=mutationsOpen; this.messages=messages; this.gui=gui; if(currencyScale<0||currencyScale>8)throw new IllegalArgumentException("currencyScale"); this.currencyScale=currencyScale;
     }
     @Override public void setAccepting(boolean accepting) { acceptingFlag=accepting; }
     private boolean ready() { return acceptingFlag && accepting.getAsBoolean(); }
     @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-        if (args.length == 0 || "help".equalsIgnoreCase(args[0])) { messages.stockHelp(sender).forEach(sender::sendMessage); return true; }
+        if (args.length == 0 || "gui".equalsIgnoreCase(args[0])) { if (!(sender instanceof Player player)) { sender.sendMessage(messages.playersOnly()); return true; } if (!ready()) { player.sendMessage(messages.initializing()); return true; } if (gui == null) { player.sendMessage(messages.marketUnavailable()); return true; } gui.openHome(player); return true; }
+        if ("help".equalsIgnoreCase(args[0])) { messages.stockHelp(sender).forEach(sender::sendMessage); return true; }
         if (!ready()) { sender.sendMessage(messages.initializing()); return true; }
         try { return switch (args[0].toLowerCase(java.util.Locale.ROOT)) {
             case "market" -> market(sender, args);

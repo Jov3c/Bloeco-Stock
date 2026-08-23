@@ -38,6 +38,7 @@ import cn.blockeco.exchange.paper.PublicStockSymbolCache;
 import cn.blockeco.exchange.paper.StockCommand;
 import cn.blockeco.exchange.paper.StockTabCompleter;
 import cn.blockeco.exchange.paper.SecondaryTradingGate;
+import cn.blockeco.exchange.paper.StockGuiController;
 import cn.blockeco.exchange.ports.AppClock;
 import cn.blockeco.exchange.ports.CompanyAssetAdapterRegistry;
 import cn.blockeco.exchange.infrastructure.CompanyAssetAdapterRegistryImpl;
@@ -147,8 +148,11 @@ public final class BlockecoPlugin extends JavaPlugin {
                 () -> cashGateway.escrowBalance().thenCompose(secondaryRecovery::inspect));
         adminCommand.setExecutor(adminConfig); adminCommand.setTabCompleter(adminConfig);
         var symbols = new PublicStockSymbolCache();
+        var stockGui = new StockGuiController(this, secondaryQueries, cashService, secondaryMarket, mainThread,
+                runtime::accepting, secondaryTradingGate::mutationsOpen, messages, scale);
+        getServer().getPluginManager().registerEvents(stockGui, this);
         stockCommand = new StockCommand(publicQueries, primaryOfferings, cashService, secondaryMarket, secondaryQueries,
-                mainThread, runtime::accepting, secondaryTradingGate::mutationsOpen, messages, scale);
+                mainThread, runtime::accepting, secondaryTradingGate::mutationsOpen, messages, scale, stockGui);
         var stock = getCommand("stock");
         if (stock == null) throw new IllegalStateException("BlockStock 命令注册失败：未在 plugin.yml 中声明 stock 命令");
         stock.setExecutor(stockCommand); stock.setTabCompleter(new StockTabCompleter(symbols));

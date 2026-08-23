@@ -28,7 +28,7 @@ public record StockGuiSession(UUID id, UUID owner, Page page, int pageIndex, Str
 
     public enum Page { HOME, MARKET, DETAIL, CASH, PORTFOLIO, ORDERS, TRADES, INPUT, CONFIRM }
 
-    public sealed interface Draft permits CashTransfer, LimitOrderDraft, CancelOrder {
+    public sealed interface Draft permits CashTransfer, LimitOrderDraft, CancelOrder, InputDraft {
     }
 
     public record CashTransfer(boolean deposit, Money amount) implements Draft {
@@ -45,4 +45,10 @@ public record StockGuiSession(UUID id, UUID owner, Page page, int pageIndex, Str
     public record CancelOrder(UUID orderId) implements Draft {
         public CancelOrder { Objects.requireNonNull(orderId, "orderId"); }
     }
+
+    public record InputDraft(InputKind kind, boolean deposit, String stockCode, LimitOrder.Side side, long shares) implements Draft {
+        public InputDraft { Objects.requireNonNull(kind, "kind"); if (kind != InputKind.CASH_AMOUNT) { Objects.requireNonNull(stockCode, "stockCode"); Objects.requireNonNull(side, "side"); } }
+    }
+
+    public enum InputKind { CASH_AMOUNT, ORDER_SHARES, ORDER_PRICE }
 }
