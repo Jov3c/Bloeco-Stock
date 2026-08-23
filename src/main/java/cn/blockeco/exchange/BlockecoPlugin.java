@@ -10,6 +10,7 @@ import cn.blockeco.exchange.application.SecondaryMarketRecoveryService;
 import cn.blockeco.exchange.application.SecondaryMarketQueryService;
 import cn.blockeco.exchange.application.SecondaryMarketService;
 import cn.blockeco.exchange.application.IpoLifecycleScheduler;
+import cn.blockeco.exchange.application.NativeAssetService;
 import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.infrastructure.sql.Database;
 import cn.blockeco.exchange.infrastructure.sql.SqlAuditLog;
@@ -21,6 +22,7 @@ import cn.blockeco.exchange.infrastructure.sql.SqlPrimaryOfferingRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlPublicStockRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlSecondaryTradingRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlSecuritiesCashRepository;
+import cn.blockeco.exchange.infrastructure.sql.SqlNativeAssetRepository;
 import cn.blockeco.exchange.infrastructure.vault.VaultEconomyGateway;
 import cn.blockeco.exchange.infrastructure.vault.VaultSecuritiesCashGateway;
 import cn.blockeco.exchange.infrastructure.vault.VaultTreasuryEscrowGateway;
@@ -110,6 +112,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         var escrow = new VaultTreasuryEscrowGateway(economy, mainThread, escrowId);
         var registration = new CompanyRegistrationService(companies, sagas, new SqlAuditLog(), db, economy, mainThread, sqlExecutor, clock, creationRules.current().registrationFee(), creationRules::current, finance, escrow, creationRules.current().initialShares());
         getServer().getServicesManager().register(CompanyAssetAdapterRegistry.class, assetAdapterRegistry, this, ServicePriority.Normal);
+        assetAdapterRegistry.register(new NativeAssetService(new SqlNativeAssetRepository(db.dataSource()), db, sqlExecutor, clock));
         var assetBindings = new AssetBindingService(new SqlAssetBindingRepository(db.dataSource()), db, () -> {
             CompanyAssetAdapterRegistry registry = getServer().getServicesManager().load(CompanyAssetAdapterRegistry.class);
             return registry == null ? java.util.List.of() : registry.snapshot();
