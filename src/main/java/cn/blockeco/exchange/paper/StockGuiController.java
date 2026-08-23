@@ -47,18 +47,24 @@ public final class StockGuiController implements Listener, StockGuiOpener {
     private final BooleanSupplier mutationsOpen;
     private final Messages messages;
     private final int currencyScale;
+    private final CompanyGuiOpener companyGui;
 
     public StockGuiController(JavaPlugin plugin, SecondaryMarketQueryService queries, SecuritiesCashService cash,
                               SecondaryMarketService trading, MainThreadExecutor mainThread, BooleanSupplier accepting,
                               BooleanSupplier mutationsOpen, Messages messages, int currencyScale) {
+        this(plugin,queries,cash,trading,mainThread,accepting,mutationsOpen,messages,currencyScale,null);
+    }
+    public StockGuiController(JavaPlugin plugin, SecondaryMarketQueryService queries, SecuritiesCashService cash,
+                              SecondaryMarketService trading, MainThreadExecutor mainThread, BooleanSupplier accepting,
+                              BooleanSupplier mutationsOpen, Messages messages, int currencyScale, CompanyGuiOpener companyGui) {
         if (currencyScale < 0 || currencyScale > 8) throw new IllegalArgumentException("currencyScale");
         this.items = new StockGuiItemFactory(plugin); this.queries = Objects.requireNonNull(queries, "queries");
         this.cash = Objects.requireNonNull(cash, "cash"); this.trading = Objects.requireNonNull(trading, "trading");
         this.mainThread = Objects.requireNonNull(mainThread, "mainThread"); this.accepting = Objects.requireNonNull(accepting, "accepting");
-        this.mutationsOpen = Objects.requireNonNull(mutationsOpen, "mutationsOpen"); this.messages = Objects.requireNonNull(messages, "messages"); this.currencyScale = currencyScale;
+        this.mutationsOpen = Objects.requireNonNull(mutationsOpen, "mutationsOpen"); this.messages = Objects.requireNonNull(messages, "messages"); this.currencyScale = currencyScale; this.companyGui=companyGui;
     }
 
-    private StockGuiController() { items = null; queries = null; cash = null; trading = null; mainThread = null; accepting = () -> true; mutationsOpen = () -> true; messages = null; currencyScale = 2; }
+    private StockGuiController() { items = null; queries = null; cash = null; trading = null; mainThread = null; accepting = () -> true; mutationsOpen = () -> true; messages = null; currencyScale = 2; companyGui=null; }
 
     static StockGuiController forSessionTests() { return new StockGuiController(); }
 
@@ -85,6 +91,7 @@ public final class StockGuiController implements Listener, StockGuiOpener {
         put(inventory, 11, Material.COMPASS, "market", "市场行情", "查看所有已上市公司和五档盘口");
         put(inventory, 13, Material.GOLD_INGOT, "cash", "证券账户", "查看可用与冻结资金，转入或转出");
         put(inventory, 15, Material.CHEST, "portfolio", "我的持仓", "查看你持有的股票");
+        put(inventory, 20, Material.NETHER_STAR, "company", "公司中心", "创建、资产绑定、IPO 与公告");
         put(inventory, 29, Material.WRITABLE_BOOK, "orders", "我的委托", "查看和撤销自己的委托");
         put(inventory, 31, Material.EMERALD, "trades", "成交记录", "查看自己的最近成交");
         put(inventory, 33, Material.PAPER, "help", "IPO 与帮助", "IPO 请使用 /stock ipo；点击查看文字帮助");
@@ -103,6 +110,7 @@ public final class StockGuiController implements Listener, StockGuiOpener {
             case "help" -> messages.stockHelp(player).forEach(player::sendMessage);
             case "market" -> openMarket(player, 0);
             case "cash" -> openCash(player);
+            case "company" -> { if(companyGui==null)player.sendMessage(messages.marketUnavailable());else companyGui.open(player); }
             case "portfolio" -> openPortfolio(player);
             case "orders" -> openOrders(player);
             case "trades" -> openTrades(player);

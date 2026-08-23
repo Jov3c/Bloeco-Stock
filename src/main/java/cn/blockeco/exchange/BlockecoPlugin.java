@@ -41,6 +41,7 @@ import cn.blockeco.exchange.paper.StockCommand;
 import cn.blockeco.exchange.paper.StockTabCompleter;
 import cn.blockeco.exchange.paper.SecondaryTradingGate;
 import cn.blockeco.exchange.paper.StockGuiController;
+import cn.blockeco.exchange.paper.CompanyGuiController;
 import cn.blockeco.exchange.ports.AppClock;
 import cn.blockeco.exchange.ports.CompanyAssetAdapterRegistry;
 import cn.blockeco.exchange.infrastructure.CompanyAssetAdapterRegistryImpl;
@@ -151,8 +152,9 @@ public final class BlockecoPlugin extends JavaPlugin {
                 () -> cashGateway.escrowBalance().thenCompose(secondaryRecovery::inspect));
         adminCommand.setExecutor(adminConfig); adminCommand.setTabCompleter(adminConfig);
         var symbols = new PublicStockSymbolCache();
+        var companyGui = new CompanyGuiController(new CompanyQueryService(companies, sagas, new SqlCompanyFinanceRepository(db.dataSource()), sqlExecutor), mainThread, runtime::accepting, messages);
         var stockGui = new StockGuiController(this, secondaryQueries, cashService, secondaryMarket, mainThread,
-                runtime::accepting, secondaryTradingGate::mutationsOpen, messages, scale);
+                runtime::accepting, secondaryTradingGate::mutationsOpen, messages, scale, companyGui);
         getServer().getPluginManager().registerEvents(stockGui, this);
         stockCommand = new StockCommand(publicQueries, primaryOfferings, cashService, secondaryMarket, secondaryQueries,
                 mainThread, runtime::accepting, secondaryTradingGate::mutationsOpen, messages, scale, stockGui);
