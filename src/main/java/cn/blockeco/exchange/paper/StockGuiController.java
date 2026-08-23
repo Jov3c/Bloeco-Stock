@@ -128,6 +128,7 @@ public final class StockGuiController implements Listener, StockGuiOpener {
     @EventHandler public void onPrepareAnvil(PrepareAnvilEvent event) {
         if (!(event.getInventory().getHolder() instanceof Holder holder) || holder.session().page() != StockGuiSession.Page.INPUT) return;
         ItemStack input = event.getInventory().getFirstItem(); if (input != null) event.setResult(input.clone());
+        event.getView().setRepairCost(0);
     }
 
     private void routeDynamic(Player player, String action) {
