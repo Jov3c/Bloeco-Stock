@@ -150,3 +150,30 @@ no product source was changed, and no connection to port 25565 was made.
 The remaining event/news, POSTCLOSE, candle, dividend/idempotency, escrow
 reconciliation, and final Gradle acceptance must remain pending until the
 maker maintains five executable levels after an opening fill.
+
+## Task 20 fresh rerun — refill callback lost during the opening quote pass
+
+Task 20 (`f9f1359`) was first rebuilt with a fresh `shadowJar` successfully
+before the isolated run.  The same full strict runner then again passed the
+PREOPEN native GUI queue and proved the five actual OPEN trades, but failed at
+the unchanged NOVA GUI `卖1` level assertion.  The exact fresh timestamps
+exclude a rendering race: the server became ready at 20:55:29; five trades
+committed at 12:55:29.913--.994Z; and the OPEN bot did not reach the detail GUI
+until 20:55:43.  SQLite again contains all five system sells as `FILLED` and
+only the five system bids as `OPEN`.
+
+The product-level reason is specific.  The opening `refreshOpenQuotes()` holds
+`systemQuotePassActive=true` through its queued-order matcher.  A match invokes
+Task 20's detached `scheduleAfterMatchedOrders()`, whose asynchronous callback
+immediately calls `replenishAfterMatch()`.  That method sees the still-true
+flag and returns an already-completed no-op.  The first quote pass later clears
+the flag but never schedules another refill.  Therefore the opening trade
+permanently consumes the five offers.  QA stopped at this mandatory user-GUI
+contract; later stages and the final full Gradle command were not claimed.
+
+The harness also now contains a stopped-server hard assertion for the required
+Vault escrow reconciliation: the QA Essentials system balance, expressed in
+minor units, must equal `escrow_ledger_entries` liabilities, and those must
+equal securities cash accounts plus the compensation fund.  It cannot be
+executed in this fresh run because the prior mandatory GUI invariant blocks
+the lifecycle stages.

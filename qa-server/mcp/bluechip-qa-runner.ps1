@@ -29,6 +29,10 @@ try{
   Set-DividendFixture
   Start-QA 'Etc/GMT-12';Start-Sleep -Seconds 70;Stop-QA
   Start-QA 'Etc/GMT-12';Start-Sleep -Seconds 70;Stop-QA
-  Push-Location $PSScriptRoot;try{& node .\bluechip-gui-e2e.mjs --ledger;if($LASTEXITCODE -ne 0){throw 'stopped-server ledger acceptance failed'}}finally{Pop-Location}
+  $escrowMatch=[regex]::Match([IO.File]::ReadAllText($escrowData,[Text.UTF8Encoding]::new($false)),"(?m)^money: '?([^'\r\n]+)'?$")
+  if(!$escrowMatch.Success){throw 'Could not read stopped QA Vault escrow balance'}
+  $escrowMajor=[decimal]::Parse($escrowMatch.Groups[1].Value,[Globalization.CultureInfo]::InvariantCulture)
+  $env:QA_ESCROW_MINOR=([decimal]::Round($escrowMajor*100,0,[MidpointRounding]::AwayFromZero)).ToString([Globalization.CultureInfo]::InvariantCulture)
+  Push-Location $PSScriptRoot;try{& node .\bluechip-gui-e2e.mjs --ledger;if($LASTEXITCODE -ne 0){throw 'stopped-server ledger acceptance failed'}}finally{Pop-Location;Remove-Item Env:QA_ESCROW_MINOR -ErrorAction SilentlyContinue}
   Write-Output 'BLUECHIP_QA_RUNNER_PASS'
 }finally{Stop-QA}
