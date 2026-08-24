@@ -32,10 +32,10 @@ public final class BluechipBootstrapFundingService {
             funding=repository.find(id).orElseThrow();
             switch (funding.state()) {
                 case COMPLETED, ESCROW_DEPOSITED -> { return funding; }
-                case PREPARED -> issue(funding, BluechipBootstrapFundingRepository.State.SOURCE_CREDIT_REQUESTED, BluechipBootstrapFundingRepository.State.SOURCE_CREDITED, "source credit", () -> economy.deposit(system, amount));
-                case SOURCE_CREDITED -> issue(funding, BluechipBootstrapFundingRepository.State.SOURCE_DEBIT_REQUESTED, BluechipBootstrapFundingRepository.State.SOURCE_DEBITED, "source debit", () -> economy.withdraw(system, amount));
-                case SOURCE_DEBITED -> issue(funding, BluechipBootstrapFundingRepository.State.ESCROW_DEPOSIT_REQUESTED, BluechipBootstrapFundingRepository.State.ESCROW_DEPOSITED, "escrow deposit", () -> economy.depositEscrow(amount));
-                case SOURCE_CREDIT_REQUESTED, SOURCE_DEBIT_REQUESTED, ESCROW_DEPOSIT_REQUESTED -> throw new IllegalStateException("bluechip bootstrap funding requires manual recovery: request may have reached provider: "+funding.detail());
+                case PREPARED -> issue(funding, BluechipBootstrapFundingRepository.State.ESCROW_DEPOSIT_REQUESTED, BluechipBootstrapFundingRepository.State.ESCROW_DEPOSITED, "escrow deposit", () -> economy.depositEscrow(amount));
+                // Source stages were written by the withdrawn system-account funding protocol.
+                // They may describe provider calls against an unknown UUID, so never continue or replay them.
+                case SOURCE_CREDIT_REQUESTED, SOURCE_CREDITED, SOURCE_DEBIT_REQUESTED, SOURCE_DEBITED, ESCROW_DEPOSIT_REQUESTED -> throw new IllegalStateException("bluechip bootstrap funding requires manual recovery: request may have reached provider: "+funding.detail());
                 case AMBIGUOUS -> throw new IllegalStateException("bluechip bootstrap funding requires manual recovery: "+funding.detail());
             }
         }
