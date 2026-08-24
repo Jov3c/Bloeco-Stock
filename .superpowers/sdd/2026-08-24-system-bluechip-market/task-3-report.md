@@ -21,3 +21,19 @@
 ## Scope note
 
 No market maker, event, candle, or other future-bluechip behavior was added.
+
+## Fix round 1
+
+### Findings covered
+
+- Opening queue selection now processes bids by descending limit price, then `priority_sequence`; each selected bid still takes the best ask by the existing ascending price/time maker query. The regression case has an earlier BUY 10, later BUY 11, and SELL 9; BUY 11 fills first.
+- Opening catch-up claim and matching now execute in one database transaction. A matching failure rolls back the claim marker, so the next process instance can retry the same trading day.
+
+### TDD record
+
+- **RED:** focused market-session tests failed to compile because the atomic opening matcher seam did not exist; the new price-priority assertion also identifies the former global-sequence ordering defect.
+- **GREEN:** `./gradlew.bat test --tests '*SecondaryMarketServiceTest' --tests '*MarketSessionServiceTest' --no-daemon --console=plain` passed with both regressions.
+
+### Full-suite evidence
+
+- `./gradlew.bat test --no-daemon --console=plain` passed: `BUILD SUCCESSFUL` in 28s.

@@ -34,7 +34,7 @@ public final class SqlSecondaryTradingRepository implements SecondaryTradingRepo
         try(PreparedStatement s=c.prepareStatement(sql)){s.setString(1,taker.companyId().value().toString());s.setString(2,taker.stockCode());s.setLong(3,taker.limitPrice().minorUnits());try(ResultSet r=s.executeQuery()){return r.next()?Optional.of(read(r)):Optional.empty();}}
     }
     @Override public List<LimitOrder> queuedOrders(Connection c)throws SQLException{
-        requireTransaction(c);try(PreparedStatement s=c.prepareStatement("SELECT * FROM stock_orders WHERE state IN ('OPEN','PARTIALLY_FILLED') ORDER BY priority_sequence ASC")){try(ResultSet r=s.executeQuery()){List<LimitOrder> queued=new ArrayList<>();while(r.next())queued.add(read(r));return List.copyOf(queued);}}
+        requireTransaction(c);try(PreparedStatement s=c.prepareStatement("SELECT * FROM stock_orders WHERE state IN ('OPEN','PARTIALLY_FILLED') ORDER BY CASE side WHEN 'BUY' THEN 0 ELSE 1 END,CASE WHEN side='BUY' THEN limit_price_minor END DESC,CASE WHEN side='SELL' THEN limit_price_minor END ASC,priority_sequence ASC")){try(ResultSet r=s.executeQuery()){List<LimitOrder> queued=new ArrayList<>();while(r.next())queued.add(read(r));return List.copyOf(queued);}}
     }
     @Override public boolean claimOpeningCatchUp(Connection c,LocalDate day,boolean open)throws SQLException{
         requireTransaction(c);Objects.requireNonNull(day,"tradingDay");String previous=null;try(PreparedStatement s=c.prepareStatement("SELECT opening_catch_up_day FROM market_session_state WHERE singleton=1")){try(ResultSet r=s.executeQuery()){if(!r.next())throw new IllegalStateException("market session state missing");previous=r.getString(1);}}

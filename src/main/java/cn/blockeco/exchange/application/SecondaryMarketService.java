@@ -41,14 +41,16 @@ public final class SecondaryMarketService {
     /** Matches all resting orders once, strictly in their accepted priority order. */
     public CompletionStage<Integer> matchQueuedOrders() {
         if (!session.get().acceptsMatching()) return CompletableFuture.completedFuture(0);
-        return CompletableFuture.supplyAsync(() -> transactions.inTransaction(connection -> {
-            int matches=0;
-            for (LimitOrder queued : orders.queuedOrders(connection)) {
-                LimitOrder current=orders.findOrder(connection,queued.id()).orElse(null);
-                if (current!=null) matches+=match(connection,current);
-            }
-            return matches;
-        }), sql);
+        return CompletableFuture.supplyAsync(() -> transactions.inTransaction(this::matchQueuedOrders), sql);
+    }
+
+    int matchQueuedOrders(java.sql.Connection connection) throws java.sql.SQLException {
+        int matches=0;
+        for (LimitOrder queued : orders.queuedOrders(connection)) {
+            LimitOrder current=orders.findOrder(connection,queued.id()).orElse(null);
+            if (current!=null) matches+=match(connection,current);
+        }
+        return matches;
     }
 
     public CompletionStage<OrderPlacementResult> placeBuy(UUID player, String stockCode, long shares, Money limit) {

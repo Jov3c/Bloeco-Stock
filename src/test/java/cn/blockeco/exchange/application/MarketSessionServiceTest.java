@@ -1,6 +1,7 @@
 package cn.blockeco.exchange.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import cn.blockeco.exchange.domain.company.CompanyId;
 import cn.blockeco.exchange.domain.market.MarketSession;
@@ -23,6 +24,17 @@ class MarketSessionServiceTest {
             market.placeSell(seller,"BS000001",10,Money.ofMinor(9)).toCompletableFuture().join();market.placeBuy(buyer,"BS000001",10,Money.ofMinor(10)).toCompletableFuture().join();session.set(new MarketSession(true));
             assertThat(new MarketSessionService(market,repository,db,Runnable::run,clock,ZoneId.of("Asia/Shanghai"),session::get).onSessionTransition().toCompletableFuture().join()).isEqualTo(1);
             assertThat(new MarketSessionService(market,repository,db,Runnable::run,clock,ZoneId.of("Asia/Shanghai"),session::get).onSessionTransition().toCompletableFuture().join()).isZero();
+        }finally{Files.deleteIfExists(file);}
+    }
+
+    @Test
+    void failedOpeningCatchUpRollsBackItsClaimSoRestartRetriesToday() throws Exception {
+        var file=Files.createTempFile("blockstock-session-retry-", ".db");
+        try(var db=new Database("jdbc:sqlite:"+file)){db.migrate();CompanyId company=Fixtures.company(db,100);UUID seller=UUID.randomUUID(),buyer=UUID.randomUUID();seedListing(db,company);seedHolding(db,company,seller,10);var cash=new SqlSecuritiesCashRepository(db.dataSource());db.inTransaction(c->{cash.creditAvailable(c,buyer,Money.ofMinor(100),Instant.EPOCH);return null;});var repository=new SqlSecondaryTradingRepository(db.dataSource(),cash);var session=new AtomicReference<>(new MarketSession(false));var clock=(cn.blockeco.exchange.ports.AppClock)()->Instant.parse("2026-08-24T00:00:00Z");var market=new SecondaryMarketService(repository,db,Runnable::run,clock,0,session::get);
+            market.placeSell(seller,"BS000001",10,Money.ofMinor(9)).toCompletableFuture().join();market.placeBuy(buyer,"BS000001",10,Money.ofMinor(10)).toCompletableFuture().join();session.set(new MarketSession(true));
+            var failing=new MarketSessionService(market,repository,db,Runnable::run,clock,ZoneId.of("Asia/Shanghai"),session::get,connection->{throw new IllegalStateException("simulated opening failure");});
+            assertThatThrownBy(()->failing.onSessionTransition().toCompletableFuture().join()).hasRootCauseMessage("simulated opening failure");
+            assertThat(new MarketSessionService(market,repository,db,Runnable::run,clock,ZoneId.of("Asia/Shanghai"),session::get).onSessionTransition().toCompletableFuture().join()).isEqualTo(1);
         }finally{Files.deleteIfExists(file);}
     }
 
