@@ -88,6 +88,34 @@ class MigrationTest {
     }
 
     @Test
+    void v009_creates_bluechip_tables_and_dividend_run_idempotency_constraint() throws Exception {
+        Path databaseFile = Files.createTempFile("blockeco-v009-migration-", ".db");
+        try (Database database = new Database("jdbc:sqlite:" + databaseFile)) {
+            database.migrate();
+
+            try (Connection connection = database.dataSource().getConnection()) {
+                insertCompany(connection, "company-1");
+                for (String table : java.util.List.of("bluechip_companies", "bluechip_events", "market_candles",
+                        "company_industry", "bluechip_fund_audit", "dividend_runs")) {
+                    assertThat(tableExists(connection, table)).as(table).isTrue();
+                }
+                assertThat(historyRows(connection, "V009")).isEqualTo(1);
+                try (PreparedStatement insert = connection.prepareStatement(
+                        "INSERT INTO dividend_runs (company_id, dividend_at, state, created_at) VALUES (?, ?, ?, ?)")) {
+                    insert.setString(1, "company-1");
+                    insert.setString(2, "2026-08-24T00:00:00Z");
+                    insert.setString(3, "COMPLETED");
+                    insert.setString(4, "2026-08-24T00:00:00Z");
+                    insert.executeUpdate();
+                    assertThatThrownBy(insert::executeUpdate).isInstanceOf(Exception.class);
+                }
+            }
+        } finally {
+            Files.deleteIfExists(databaseFile);
+        }
+    }
+
+    @Test
     void v003_creates_finance_tables_with_one_cash_account_and_holding_per_owner() throws Exception {
         Path databaseFile = Files.createTempFile("blockeco-v003-migration-", ".db");
         try (Database database = new Database("jdbc:sqlite:" + databaseFile)) {

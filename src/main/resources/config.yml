@@ -5,6 +5,127 @@ market:
   fee-bps: 10
   # 日内行情和成交日的时区；必须为 Java ZoneId，例如 Asia/Shanghai。
   time-zone: 'Asia/Shanghai'
+bluechips:
+  - code: 'NOVA'
+    display-name: 'Nova Forge'
+    industry: 'Manufacturing'
+    reference-price: '10.00'
+    lower-bound: '8.00'
+    upper-bound: '12.00'
+    total-shares: 1000000
+    initial-fund-cash: '100000.00'
+    initial-fund-shares: 100000
+    spread-bps: 50
+    event-sensitivity-bps: 100
+    dividend-payout-bps: 2000
+  - code: 'AURORA'
+    display-name: 'Aurora Grid'
+    industry: 'Energy'
+    reference-price: '12.00'
+    lower-bound: '9.60'
+    upper-bound: '14.40'
+    total-shares: 1000000
+    initial-fund-cash: '120000.00'
+    initial-fund-shares: 100000
+    spread-bps: 50
+    event-sensitivity-bps: 100
+    dividend-payout-bps: 2000
+  - code: 'TERRAN'
+    display-name: 'Terran Harvest'
+    industry: 'Agriculture'
+    reference-price: '8.00'
+    lower-bound: '6.40'
+    upper-bound: '9.60'
+    total-shares: 1000000
+    initial-fund-cash: '80000.00'
+    initial-fund-shares: 100000
+    spread-bps: 50
+    event-sensitivity-bps: 100
+    dividend-payout-bps: 2000
+  - code: 'SKYLINE'
+    display-name: 'Skyline Transit'
+    industry: 'Logistics'
+    reference-price: '15.00'
+    lower-bound: '12.00'
+    upper-bound: '18.00'
+    total-shares: 1000000
+    initial-fund-cash: '150000.00'
+    initial-fund-shares: 100000
+    spread-bps: 50
+    event-sensitivity-bps: 100
+    dividend-payout-bps: 2000
+  - code: 'IRONWOOD'
+    display-name: 'Ironwood Works'
+    industry: 'Construction'
+    reference-price: '9.00'
+    lower-bound: '7.20'
+    upper-bound: '10.80'
+    total-shares: 1000000
+    initial-fund-cash: '90000.00'
+    initial-fund-shares: 100000
+    spread-bps: 50
+    event-sensitivity-bps: 100
+    dividend-payout-bps: 2000
+  - code: 'LUMEN'
+    display-name: 'Lumen Health'
+    industry: 'Healthcare'
+    reference-price: '11.00'
+    lower-bound: '8.80'
+    upper-bound: '13.20'
+    total-shares: 1000000
+    initial-fund-cash: '110000.00'
+    initial-fund-shares: 100000
+    spread-bps: 50
+    event-sensitivity-bps: 100
+    dividend-payout-bps: 2000
+  - code: 'RIVERMINT'
+    display-name: 'Rivermint Bank'
+    industry: 'Finance'
+    reference-price: '13.00'
+    lower-bound: '10.40'
+    upper-bound: '15.60'
+    total-shares: 1000000
+    initial-fund-cash: '130000.00'
+    initial-fund-shares: 100000
+    spread-bps: 50
+    event-sensitivity-bps: 100
+    dividend-payout-bps: 2000
+  - code: 'ORBITAL'
+    display-name: 'Orbital Systems'
+    industry: 'Technology'
+    reference-price: '16.00'
+    lower-bound: '12.80'
+    upper-bound: '19.20'
+    total-shares: 1000000
+    initial-fund-cash: '160000.00'
+    initial-fund-shares: 100000
+    spread-bps: 50
+    event-sensitivity-bps: 100
+    dividend-payout-bps: 2000
+  - code: 'CINDER'
+    display-name: 'Cinder Materials'
+    industry: 'Materials'
+    reference-price: '7.00'
+    lower-bound: '5.60'
+    upper-bound: '8.40'
+    total-shares: 1000000
+    initial-fund-cash: '70000.00'
+    initial-fund-shares: 100000
+    spread-bps: 50
+    event-sensitivity-bps: 100
+    dividend-payout-bps: 2000
+  - code: 'VERDANT'
+    display-name: 'Verdant Homes'
+    industry: 'Real Estate'
+    reference-price: '14.00'
+    lower-bound: '11.20'
+    upper-bound: '16.80'
+    total-shares: 1000000
+    initial-fund-cash: '140000.00'
+    initial-fund-shares: 100000
+    spread-bps: 50
+    event-sensitivity-bps: 100
+    dividend-payout-bps: 2000
 company:
   registration-fee: '1000.00'
   minimum-capital: '10000.00'
