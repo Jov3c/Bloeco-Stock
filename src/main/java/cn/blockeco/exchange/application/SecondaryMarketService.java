@@ -12,10 +12,12 @@ import cn.blockeco.exchange.ports.TransactionRunner;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
-import java.util.function.Supplier;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 /** Serial, transactionally committed GTC limit order placement and matching. */
 public final class SecondaryMarketService {
@@ -25,6 +27,8 @@ public final class SecondaryMarketService {
     private final AppClock clock;
     private final int feeBps;
     private final Supplier<MarketSession> session;
+    /** Invoked only after a transaction has committed a trade. */
+    private final AtomicReference<Supplier<CompletionStage<Void>>> afterMatchedOrders = new AtomicReference<>(() -> CompletableFuture.completedFuture(null));
 
     public SecondaryMarketService(SecondaryTradingRepository orders, TransactionRunner transactions, Executor sql, AppClock clock, int feeBps) {
         this(orders, transactions, sql, clock, feeBps, () -> new MarketSession(true));
@@ -40,8 +44,25 @@ public final class SecondaryMarketService {
 
     /** Matches all resting orders once, strictly in their accepted priority order. */
     public CompletionStage<Integer> matchQueuedOrders() {
+        return matchQueuedOrders(true);
+    }
+
+    /** System quote placement uses this to avoid scheduling itself in a feedback loop. */
+    CompletionStage<Integer> matchQueuedOrdersSilently() {
+        return matchQueuedOrders(false);
+    }
+
+    private CompletionStage<Integer> matchQueuedOrders(boolean notify) {
         if (!session.get().acceptsMatching()) return CompletableFuture.completedFuture(0);
-        return CompletableFuture.supplyAsync(() -> transactions.inTransaction(this::matchQueuedOrders), sql);
+        return CompletableFuture.supplyAsync(() -> transactions.inTransaction(this::matchQueuedOrders), sql)
+                .thenCompose(matches -> notify && matches > 0
+                        ? afterMatchedOrders.get().get().thenApply(ignored -> matches)
+                        : CompletableFuture.completedFuture(matches));
+    }
+
+    /** The observer runs after commit and must schedule non-blocking work on its own executor. */
+    public void setAfterMatchedOrdersListener(Supplier<CompletionStage<Void>> listener) {
+        afterMatchedOrders.set(Objects.requireNonNull(listener, "listener"));
     }
 
     int matchQueuedOrders(java.sql.Connection connection) throws java.sql.SQLException {
@@ -66,6 +87,16 @@ public final class SecondaryMarketService {
 
     /** Current spendable cash for an account, excluding funds already reserved by open buy orders. */
     public Money availableCash(UUID player) { return orders.availableCash(Objects.requireNonNull(player, "player")); }
+
+    /** Best currently resting price, used by a bounded system refill to avoid crossing an old player order. */
+    Optional<Money> bestBid(String stockCode) {
+        return orders.bids(Objects.requireNonNull(stockCode, "stockCode"), 1).stream().map(OrderBookLevel::price).findFirst();
+    }
+
+    /** Best currently resting price, used by a bounded system refill to avoid crossing an old player order. */
+    Optional<Money> bestAsk(String stockCode) {
+        return orders.asks(Objects.requireNonNull(stockCode, "stockCode"), 1).stream().map(OrderBookLevel::price).findFirst();
+    }
 
     public CompletionStage<OrderPlacementResult> cancel(UUID player, UUID orderId) {
         Objects.requireNonNull(player, "player"); Objects.requireNonNull(orderId, "orderId");
@@ -99,10 +130,12 @@ public final class SecondaryMarketService {
             LimitOrder candidate = newOrder(player, listing, shares, limit, side, acceptedAt);
             if (!orders.isListed(connection, candidate)) throw new IllegalArgumentException("stock is not listed");
             LimitOrder taker = side == LimitOrder.Side.BUY ? orders.reserveBuy(connection, candidate) : orders.reserveSell(connection, candidate);
-            if (session.get().acceptsMatching()) match(connection,taker);
+            int matches = session.get().acceptsMatching() ? match(connection,taker) : 0;
             taker=orders.findOrder(connection,taker.id()).orElseThrow();
-            return new OrderPlacementResult(taker);
-        }), sql);
+            return new Placement(taker, matches);
+        }), sql).thenCompose(placement -> placement.matches() > 0
+                ? afterMatchedOrders.get().get().thenApply(ignored -> new OrderPlacementResult(placement.order()))
+                : CompletableFuture.completedFuture(new OrderPlacementResult(placement.order())));
     }
 
     private int match(java.sql.Connection connection, LimitOrder taker) throws java.sql.SQLException {
@@ -133,4 +166,6 @@ public final class SecondaryMarketService {
         return new LimitOrder(order.id(), order.companyId(), order.stockCode(), order.playerId(), order.side(), order.limitPrice(), order.originalShares(),
                 order.remainingShares(), order.prioritySequence(), Money.zero(), order.filledNotional(), order.feeCharged(), order.feeBps(), order.acceptedAt(), state);
     }
+
+    private record Placement(LimitOrder order, int matches) { }
 }

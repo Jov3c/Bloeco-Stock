@@ -193,6 +193,9 @@ public final class BlockecoPlugin extends JavaPlugin {
         var secondaryMarket = new SecondaryMarketService(tradingRepository, db, sqlExecutor, clock, feeBps, marketSession);
         var marketSessions = new MarketSessionService(secondaryMarket, tradingRepository, db, sqlExecutor, clock, marketZone, marketSession);
         var marketMaker = new BluechipMarketMakerService(bluechipRepository, secondaryMarket, marketSession, clock);
+        // The callback runs only after an order transaction commits; the maker queues a bounded,
+        // non-blocking refill and suppresses its own system-order callbacks.
+        secondaryMarket.setAfterMatchedOrdersListener(marketMaker::replenishAfterMatch);
         var marketEvents = new MarketEventService(bluechipRepository, db, sqlExecutor, clock, new java.util.Random());
         var marketCandles = new MarketCandleService(bluechipRepository, db, sqlExecutor);
         long dividendBase = configuredMoney("market.dividend-base-profit", scale).minorUnits();

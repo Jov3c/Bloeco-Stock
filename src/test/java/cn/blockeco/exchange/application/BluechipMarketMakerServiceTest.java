@@ -55,6 +55,38 @@ class BluechipMarketMakerServiceTest {
     }
 
     @Test
+    void openingSweepImmediatelyRestoresFiveFiniteBidAndAskLevels() throws Exception {
+        var file = Files.createTempFile("blockstock-maker-opening-replenish-", ".db");
+        try (var database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate();
+            var repository = new SqlBluechipRepository(database.dataSource());
+            new BluechipBootstrapServiceTestSupport(database, repository, NOW).initializeOne();
+            BluechipRepository.BluechipCompany bluechip = repository.all().getFirst();
+            var cash = new SqlSecuritiesCashRepository(database.dataSource());
+            var orders = new SqlSecondaryTradingRepository(database.dataSource(), cash);
+            var session = new AtomicReference<>(new MarketSession(true));
+            var market = new SecondaryMarketService(orders, database, Runnable::run, () -> NOW, 0, session::get);
+            var maker = new BluechipMarketMakerService(repository, market, session::get, () -> NOW);
+            market.setAfterMatchedOrdersListener(maker::replenishAfterMatch);
+            maker.refreshQuotes().toCompletableFuture().join();
+            UUID player = UUID.randomUUID();
+            database.inTransaction(connection -> { cash.creditAvailable(connection, player, Money.ofMinor(10_000_000), NOW); return null; });
+
+            // The player takes the five resting system offers before the market opens.  At opening,
+            // a post-commit callback must re-quote once; it must not wait for the minute scheduler.
+            session.set(new MarketSession(false));
+            var preopenBuy = market.placeBuy(player, bluechip.listing().stockCode(), 5, Money.ofMinor(1_000_000)).toCompletableFuture().join().order();
+            session.set(new MarketSession(true));
+            market.matchQueuedOrders().toCompletableFuture().join();
+
+            assertThat(tradeCount(database)).isEqualTo(5);
+            assertThat(systemOrders(database, bluechip, "BUY")).hasSize(5);
+            assertThat(systemOrders(database, bluechip, "SELL")).hasSize(5);
+            assertThat(orders.findOrder(preopenBuy.id()).orElseThrow().remainingShares()).isZero();
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
     void openSessionCreatesAtMostFiveBidAndFiveAskOrdersPerBluechip() throws Exception {
         var file = Files.createTempFile("blockstock-maker-", ".db");
         try (var database = new Database("jdbc:sqlite:" + file)) {
