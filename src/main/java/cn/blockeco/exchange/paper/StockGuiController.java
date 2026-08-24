@@ -5,6 +5,9 @@ import cn.blockeco.exchange.application.SecondaryMarketService;
 import cn.blockeco.exchange.application.SecuritiesCashService;
 import cn.blockeco.exchange.application.PortfolioView;
 import cn.blockeco.exchange.application.PublicMarketRow;
+import cn.blockeco.exchange.application.MarketNewsItem;
+import cn.blockeco.exchange.application.PublicStockQueryService;
+import cn.blockeco.exchange.application.PublicStockInfo;
 import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.domain.trading.LimitOrder;
 import cn.blockeco.exchange.ports.MainThreadExecutor;
@@ -17,7 +20,6 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BooleanSupplier;
 import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
@@ -26,11 +28,9 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
-import org.bukkit.event.inventory.PrepareAnvilEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
-import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.plugin.java.JavaPlugin;
 
 /** Vanilla-client BlockStock menu. It only renders and delegates; services remain the ledger authority. */
@@ -39,6 +39,7 @@ public final class StockGuiController implements Listener, StockGuiOpener {
     private final Set<UUID> mutationsInFlight = ConcurrentHashMap.newKeySet();
     private final Set<UUID> inventoryReplacements = ConcurrentHashMap.newKeySet();
     private final StockGuiItemFactory items;
+    private final JavaPlugin plugin;
     private final SecondaryMarketQueryService queries;
     private final SecuritiesCashService cash;
     private final SecondaryMarketService trading;
@@ -49,6 +50,7 @@ public final class StockGuiController implements Listener, StockGuiOpener {
     private final int currencyScale;
     private final CompanyGuiOpener companyGui;
     private volatile IpoGuiOpener ipoGui;
+    private volatile PublicStockQueryService publicQueries;
 
     public StockGuiController(JavaPlugin plugin, SecondaryMarketQueryService queries, SecuritiesCashService cash,
                               SecondaryMarketService trading, MainThreadExecutor mainThread, BooleanSupplier accepting,
@@ -64,18 +66,19 @@ public final class StockGuiController implements Listener, StockGuiOpener {
                               SecondaryMarketService trading, MainThreadExecutor mainThread, BooleanSupplier accepting,
                               BooleanSupplier mutationsOpen, Messages messages, int currencyScale, CompanyGuiOpener companyGui, IpoGuiOpener ipoGui) {
         if (currencyScale < 0 || currencyScale > 8) throw new IllegalArgumentException("currencyScale");
-        this.items = new StockGuiItemFactory(plugin); this.queries = Objects.requireNonNull(queries, "queries");
+        this.plugin = Objects.requireNonNull(plugin, "plugin"); this.items = new StockGuiItemFactory(this.plugin); this.queries = Objects.requireNonNull(queries, "queries");
         this.cash = Objects.requireNonNull(cash, "cash"); this.trading = Objects.requireNonNull(trading, "trading");
         this.mainThread = Objects.requireNonNull(mainThread, "mainThread"); this.accepting = Objects.requireNonNull(accepting, "accepting");
         this.mutationsOpen = Objects.requireNonNull(mutationsOpen, "mutationsOpen"); this.messages = Objects.requireNonNull(messages, "messages"); this.currencyScale = currencyScale; this.companyGui=companyGui; this.ipoGui=ipoGui;
     }
 
-    private StockGuiController() { items = null; queries = null; cash = null; trading = null; mainThread = null; accepting = () -> true; mutationsOpen = () -> true; messages = null; currencyScale = 2; companyGui=null; ipoGui=null; }
+    private StockGuiController() { plugin = null; items = null; queries = null; cash = null; trading = null; mainThread = null; accepting = () -> true; mutationsOpen = () -> true; messages = null; currencyScale = 2; companyGui=null; ipoGui=null; }
 
     static StockGuiController forSessionTests() { return new StockGuiController(); }
 
     /** Completes the cyclic GUI wiring after the IPO controller is constructed. */
     public void attachIpoGui(IpoGuiOpener opener) { this.ipoGui = Objects.requireNonNull(opener, "opener"); }
+    public void attachPublicQueries(PublicStockQueryService opener) { this.publicQueries = Objects.requireNonNull(opener, "queries"); }
 
     StockGuiSession openSession(UUID player, StockGuiSession.Page page, int pageIndex, String stockCode, StockGuiSession.Draft draft) {
         StockGuiSession prior = sessions.get(player);
@@ -103,7 +106,7 @@ public final class StockGuiController implements Listener, StockGuiOpener {
         put(inventory, 20, Material.NETHER_STAR, "company", "公司中心", "创建、资产绑定、IPO 与公告");
         put(inventory, 29, Material.WRITABLE_BOOK, "orders", "我的委托", "查看和撤销自己的委托");
         put(inventory, 31, Material.EMERALD, "trades", "成交记录", "查看自己的最近成交");
-        put(inventory, 33, Material.PAPER, "ipo", "IPO 中心", "浏览公开发行、认购或管理公司 IPO");
+        put(inventory, 33, Material.PAPER, "news", "市场快讯", "查看最近五条蓝筹市场公告");
         put(inventory, 49, Material.BARRIER, "close", "关闭", "关闭交易所");
         openInventory(player, inventory);
     }
@@ -115,9 +118,10 @@ public final class StockGuiController implements Listener, StockGuiOpener {
         if (event.getRawSlot() < 0 || event.getRawSlot() >= event.getView().getTopInventory().getSize()) return;
         String action = items.action(event.getCurrentItem()); if (action == null) return;
         switch (action) {
-            case "close" -> player.closeInventory();
+            case "close" -> closeInventory(player);
             case "help" -> messages.stockHelp(player).forEach(player::sendMessage);
             case "ipo" -> { if (ipoGui == null) player.sendMessage(messages.marketUnavailable()); else ipoGui.openPublic(player); }
+            case "news" -> openNews(player);
             case "market" -> openMarket(player, 0);
             case "cash" -> openCash(player);
             case "company" -> { if(companyGui==null)player.sendMessage(messages.marketUnavailable());else companyGui.open(player); }
@@ -132,7 +136,6 @@ public final class StockGuiController implements Listener, StockGuiOpener {
             case "market:prev" -> openMarket(player, Math.max(0, holder.session().pageIndex() - 1));
             case "detail:buy" -> openInput(player, new StockGuiSession.InputDraft(StockGuiSession.InputKind.ORDER_SHARES, false, holder.session().stockCode(), LimitOrder.Side.BUY, 0));
             case "detail:sell" -> openInput(player, new StockGuiSession.InputDraft(StockGuiSession.InputKind.ORDER_SHARES, false, holder.session().stockCode(), LimitOrder.Side.SELL, 0));
-            case "input" -> { if (holder.session().page() == StockGuiSession.Page.INPUT && event.getRawSlot() == 2) handleInput(player, holder, event.getCurrentItem()); }
             case "confirm" -> confirm(player, holder.session());
             case "cancel" -> openHome(player);
             default -> routeDynamic(player, action);
@@ -146,12 +149,6 @@ public final class StockGuiController implements Listener, StockGuiOpener {
     @EventHandler public void onInventoryClose(InventoryCloseEvent event) {
         if (!(event.getInventory().getHolder() instanceof Holder holder) || !(event.getPlayer() instanceof Player player)) return;
         if (shouldClearOnClose(player.getUniqueId(), holder.session().id())) sessions.remove(player.getUniqueId(), holder.session());
-    }
-
-    @EventHandler public void onPrepareAnvil(PrepareAnvilEvent event) {
-        if (!(event.getInventory().getHolder() instanceof Holder holder) || holder.session().page() != StockGuiSession.Page.INPUT) return;
-        ItemStack input = event.getInventory().getFirstItem(); if (input != null) event.setResult(input.clone());
-        event.getView().setRepairCost(0);
     }
 
     private void routeDynamic(Player player, String action) {
@@ -179,11 +176,36 @@ public final class StockGuiController implements Listener, StockGuiOpener {
         StockGuiSession session = openSession(player.getUniqueId(), StockGuiSession.Page.DETAIL, 0, code, null); loading(player, session, "正在加载 " + code + "…");
         queries.book(code, 5).whenComplete((book, error) -> onMain(player, session, () -> {
             if (error != null) { player.sendMessage(messages.stockQueryFailed()); openMarket(player, 0); return; }
-            Inventory inv = inventory(session, "BlockStock " + code); fill(inv);
-            put(inv, 4, Material.NAME_TAG, "noop", code, "五档盘口（买卖均为匿名聚合）");
-            for (int i = 0; i < book.asks().size(); i++) put(inv, 10 + i, Material.RED_STAINED_GLASS_PANE, "noop", "卖" + (i + 1) + " " + amount(book.asks().get(i).price()), book.asks().get(i).shares() + " 股");
-            for (int i = 0; i < book.bids().size(); i++) put(inv, 28 + i, Material.LIME_STAINED_GLASS_PANE, "noop", "买" + (i + 1) + " " + amount(book.bids().get(i).price()), book.bids().get(i).shares() + " 股");
-            put(inv, 45, Material.ARROW, "back:market", "返回市场", "返回列表"); put(inv, 48, Material.LIME_WOOL, "detail:buy", "买入", "输入股数和限价后确认"); put(inv, 50, Material.RED_WOOL, "detail:sell", "卖出", "输入股数和限价后确认"); put(inv, 53, Material.BARRIER, "close", "关闭", "关闭交易所"); openInventory(player, inv);
+            PublicStockQueryService source = publicQueries;
+            if (source == null) { renderDetail(player, session, code, book, null); return; }
+            source.info(code).whenComplete((info, infoError) -> onMain(player, session, () -> renderDetail(player, session, code, book, infoError == null ? info.orElse(null) : null)));
+        }));
+    }
+
+    private void renderDetail(Player player, StockGuiSession session, String code, SecondaryMarketQueryService.OrderBook book, PublicStockInfo info) {
+        Inventory inv = inventory(session, "BlockStock " + code); fill(inv);
+        String title = info != null && info.marketState().isPresent() ? "系统蓝筹 · " + code : code;
+        String detail = info != null && info.marketState().isPresent()
+                ? "行业 " + info.industry().orElse("未分类") + " · 流动性" + (info.marketState().get().liquidityDegraded() ? "受限" : "正常")
+                : "五档盘口（买卖均为匿名聚合）";
+        put(inv, 4, Material.NAME_TAG, "noop", title, detail);
+        if (info != null && info.marketState().flatMap(state -> state.currentEvent()).isPresent()) put(inv, 5, Material.PAPER, "noop", "当前事件", info.marketState().get().currentEvent().get().headline());
+        for (int i = 0; i < book.asks().size(); i++) put(inv, 10 + i, Material.RED_STAINED_GLASS_PANE, "noop", "卖" + (i + 1) + " " + amount(book.asks().get(i).price()), book.asks().get(i).shares() + " 股");
+        for (int i = 0; i < book.bids().size(); i++) put(inv, 28 + i, Material.LIME_STAINED_GLASS_PANE, "noop", "买" + (i + 1) + " " + amount(book.bids().get(i).price()), book.bids().get(i).shares() + " 股");
+        put(inv, 45, Material.ARROW, "back:market", "返回市场", "返回列表"); put(inv, 48, Material.LIME_WOOL, "detail:buy", "买入", "输入股数和限价后确认"); put(inv, 50, Material.RED_WOOL, "detail:sell", "卖出", "输入股数和限价后确认"); put(inv, 53, Material.BARRIER, "close", "关闭", "关闭交易所"); openInventory(player, inv);
+    }
+
+    private void openNews(Player player) {
+        if (!ready(player)) return;
+        PublicStockQueryService source = publicQueries;
+        if (source == null) { player.sendMessage(messages.marketUnavailable()); return; }
+        StockGuiSession session = openSession(player.getUniqueId(), StockGuiSession.Page.NEWS, 0, null, null); loading(player, session, "正在加载市场快讯…");
+        source.recentNews(5).whenComplete((news, error) -> onMain(player, session, () -> {
+            if (error != null) { player.sendMessage(messages.stockQueryFailed()); openHome(player); return; }
+            Inventory inv = inventory(session, "BlockStock 市场快讯"); fill(inv); int slot = 10;
+            for (MarketNewsItem item : news) { put(inv, slot++, Material.PAPER, "noop", item.headline(), item.body()); }
+            if (news.isEmpty()) put(inv, 22, Material.BARRIER, "noop", "暂无市场快讯", "事件、分红和流动性公告会显示在这里");
+            put(inv, 49, Material.ARROW, "back:home", "返回", "主菜单"); openInventory(player, inv);
         }));
     }
 
@@ -195,7 +217,8 @@ public final class StockGuiController implements Listener, StockGuiOpener {
     private void openPrivate(Player player, StockGuiSession.Page page, String loading, java.util.function.Consumer<PortfolioView> renderer) { if(!permission(player,"blockeco.stock."+(page==StockGuiSession.Page.CASH?"cash":"portfolio")))return;StockGuiSession s=openSession(player.getUniqueId(),page,0,null,null);loading(player,s,"正在加载"+loading+"…");queries.portfolio(player.getUniqueId()).whenComplete((view,error)->onMain(player,s,()->{if(error!=null){player.sendMessage(messages.stockQueryFailed());return;}renderer.accept(view);})); }
 
     private void fill(Inventory inventory) { for (int slot = 0; slot < inventory.getSize(); slot++) inventory.setItem(slot, items.filler()); }
-    private void openInventory(Player player, Inventory inventory) { beginInventoryReplacement(player.getUniqueId()); try { player.openInventory(inventory); } finally { endInventoryReplacement(player.getUniqueId()); } }
+    private void openInventory(Player player, Inventory inventory) { GuiTransitions.defer(action -> Bukkit.getScheduler().runTask(plugin, action), () -> { if (!player.isOnline()) return; beginInventoryReplacement(player.getUniqueId()); try { player.openInventory(inventory); } finally { endInventoryReplacement(player.getUniqueId()); } }); }
+    private void closeInventory(Player player) { GuiTransitions.defer(action -> Bukkit.getScheduler().runTask(plugin, action), player::closeInventory); }
     private Inventory inventory(StockGuiSession session, String title) { return Bukkit.createInventory(new Holder(session), 54, Component.text(title)); }
     private void loading(Player player, StockGuiSession session, String text) { Inventory inv=inventory(session,"BlockStock"); fill(inv); put(inv,22,Material.CLOCK,"noop",text,"请稍候，不要关闭此页面"); openInventory(player, inv); }
     private boolean ready(Player player) { if(accepting.getAsBoolean())return true;player.sendMessage(messages.initializing());return false; }
@@ -206,13 +229,12 @@ public final class StockGuiController implements Listener, StockGuiOpener {
     private void openInput(Player player, StockGuiSession.InputDraft draft) {
         if ((draft.kind()==StockGuiSession.InputKind.CASH_AMOUNT && !permission(player,"blockeco.stock.cash")) || (draft.kind()!=StockGuiSession.InputKind.CASH_AMOUNT && !permission(player,"blockeco.stock.trade"))) return;
         StockGuiSession session=openSession(player.getUniqueId(),StockGuiSession.Page.INPUT,0,draft.stockCode(),draft);
-        Inventory inv=Bukkit.createInventory(new Holder(session),InventoryType.ANVIL,Component.text(draft.kind()==StockGuiSession.InputKind.ORDER_PRICE?"输入限价":"输入数量/金额"));
-        ItemStack paper=items.action(Material.PAPER,"input",Component.text("输入"),List.of(Component.text(draft.kind()==StockGuiSession.InputKind.ORDER_SHARES?"请改名为正整数股数":draft.kind()==StockGuiSession.InputKind.ORDER_PRICE?"请改名为限价":"请改名为金额"))); inv.setItem(0,paper);openInventory(player, inv);
+        String title=draft.kind()==StockGuiSession.InputKind.ORDER_SHARES?"输入正整数股数":draft.kind()==StockGuiSession.InputKind.ORDER_PRICE?"输入限价":"输入金额";
+        TextInputGui.open(plugin,player,title,text->handleInput(player,session,text));
     }
 
-    private void handleInput(Player player, Holder holder, ItemStack result) {
-        if(!(holder.session().draft() instanceof StockGuiSession.InputDraft draft))return;
-        String text=PlainTextComponentSerializer.plainText().serialize(result.getItemMeta().displayName()).trim();
+    private void handleInput(Player player, StockGuiSession session, String text) {
+        if(!(session.draft() instanceof StockGuiSession.InputDraft draft))return;
         try {
             if(draft.kind()==StockGuiSession.InputKind.ORDER_SHARES){long shares=Long.parseLong(text);if(shares<=0)throw new NumberFormatException();openInput(player,new StockGuiSession.InputDraft(StockGuiSession.InputKind.ORDER_PRICE,false,draft.stockCode(),draft.side(),shares));return;}
             Money money=Money.fromMajor(new BigDecimal(text),currencyScale);if(money.minorUnits()<=0)throw new NumberFormatException();

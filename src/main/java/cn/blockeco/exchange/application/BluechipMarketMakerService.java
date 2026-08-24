@@ -48,6 +48,11 @@ public final class BluechipMarketMakerService {
         closeRequested = true;
         return enqueue(this::cancelSystemQuotes);
     }
+    /** Operator control affects system quotes only; it never cancels player GTC orders. */
+    public synchronized CompletionStage<Integer> setQuotesPaused(boolean paused) {
+        closeRequested = paused;
+        return paused ? enqueue(this::cancelSystemQuotes) : CompletableFuture.completedFuture(0);
+    }
 
     private CompletionStage<Integer> cancelSystemQuotes() {
         CompletionStage<Integer> chain = CompletableFuture.completedFuture(0);

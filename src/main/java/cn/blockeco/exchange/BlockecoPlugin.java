@@ -13,6 +13,11 @@ import cn.blockeco.exchange.application.MarketSessionService;
 import cn.blockeco.exchange.application.IpoLifecycleScheduler;
 import cn.blockeco.exchange.application.NativeAssetService;
 import cn.blockeco.exchange.application.BluechipBootstrapService;
+import cn.blockeco.exchange.application.BluechipMarketMakerService;
+import cn.blockeco.exchange.application.BluechipSchedulers;
+import cn.blockeco.exchange.application.MarketEventService;
+import cn.blockeco.exchange.application.MarketCandleService;
+import cn.blockeco.exchange.application.DividendCycleService;
 import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.infrastructure.sql.Database;
 import cn.blockeco.exchange.infrastructure.sql.SqlAuditLog;
@@ -48,6 +53,7 @@ import cn.blockeco.exchange.paper.CompanyGuiController;
 import cn.blockeco.exchange.paper.IpoGuiController;
 import cn.blockeco.exchange.paper.OptionalAssetAdapterLoader;
 import cn.blockeco.exchange.paper.BluechipConfig;
+import cn.blockeco.exchange.paper.BluechipAdminCommand;
 import cn.blockeco.exchange.ports.AppClock;
 import cn.blockeco.exchange.ports.CompanyAssetAdapterRegistry;
 import cn.blockeco.exchange.infrastructure.CompanyAssetAdapterRegistryImpl;
@@ -78,6 +84,7 @@ public final class BlockecoPlugin extends JavaPlugin {
     private IpoLifecycleScheduler ipoLifecycle;
     private org.bukkit.scheduler.BukkitTask marketSessionTransitions;
     private SecondaryTradingGate secondaryTradingGate;
+    private BluechipSchedulers bluechipSchedulers;
 
     @Override public void onEnable() {
         try {
@@ -117,9 +124,10 @@ public final class BlockecoPlugin extends JavaPlugin {
         int scale = getConfig().getInt("currency.scale");
         var bluechipAccountId = configuredBluechipSystemAccount();
         if (getServer().getOfflinePlayer(bluechipAccountId).hasPlayedBefore()) throw new IllegalStateException("蓝筹系统账户不能是已知真实玩家");
-        new BluechipBootstrapService(BluechipConfig.load(getConfig(), scale), bluechipAccountId, companies,
+        var bluechipBootstrap = new BluechipBootstrapService(BluechipConfig.load(getConfig(), scale), bluechipAccountId, companies,
                 new cn.blockeco.exchange.infrastructure.sql.SqlStockListingRepository(db.dataSource()), new SqlBluechipRepository(db.dataSource()),
-                db, sqlExecutor, clock).initializeMissing().toCompletableFuture().join();
+                db, sqlExecutor, clock);
+        bluechipBootstrap.initializeMissing().toCompletableFuture().join();
         var economy = new VaultEconomyGateway(getServer(), scale);
         var finance = new SqlCompanyFinanceRepository(db.dataSource());
         var escrow = new VaultTreasuryEscrowGateway(economy, mainThread, escrowId);
@@ -132,7 +140,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         var assetBindings = new AssetBindingService(new SqlAssetBindingRepository(db.dataSource()), db, () -> {
             CompanyAssetAdapterRegistry registry = getServer().getServicesManager().load(CompanyAssetAdapterRegistry.class);
             return registry == null ? java.util.List.of() : registry.snapshot();
-        }, clock);
+        }, clock, mainThread);
         var ipoRepository = new SqlPrimaryOfferingRepository(db.dataSource());
         var primaryOfferings = new PrimaryOfferingService(ipoRepository, db, escrow, sqlExecutor, clock);
         var messages = new Messages(getConfig());
@@ -149,12 +157,18 @@ public final class BlockecoPlugin extends JavaPlugin {
         var publicQueries = new cn.blockeco.exchange.application.PublicStockQueryService(publicRepository, sqlExecutor, Clock.systemUTC(), marketZone);
         var cashRepository = new SqlSecuritiesCashRepository(db.dataSource());
         var tradingRepository = new SqlSecondaryTradingRepository(db.dataSource(), cashRepository);
+        var bluechipRepository = new SqlBluechipRepository(db.dataSource());
         var cashGateway = new VaultSecuritiesCashGateway(economy, mainThread, escrowId);
         secondaryTradingGate = new SecondaryTradingGate();
         var cashService = new SecuritiesCashService(cashRepository, db, cashGateway, sqlExecutor, clock, Duration.ofSeconds(15), secondaryTradingGate::mutationsOpen);
         java.util.function.Supplier<cn.blockeco.exchange.domain.market.MarketSession> marketSession = () -> cn.blockeco.exchange.domain.market.MarketSession.at(clock.now(), marketZone);
         var secondaryMarket = new SecondaryMarketService(tradingRepository, db, sqlExecutor, clock, feeBps, marketSession);
         var marketSessions = new MarketSessionService(secondaryMarket, tradingRepository, db, sqlExecutor, clock, marketZone, marketSession);
+        var marketMaker = new BluechipMarketMakerService(bluechipRepository, secondaryMarket, marketSession, clock);
+        var marketEvents = new MarketEventService(bluechipRepository, db, sqlExecutor, clock, new java.util.Random());
+        var marketCandles = new MarketCandleService(bluechipRepository, db, sqlExecutor);
+        long dividendBase = configuredMoney("market.dividend-base-profit", scale).minorUnits();
+        var dividends = new DividendCycleService(bluechipRepository, db, sqlExecutor, clock, dividendBase);
         var secondaryQueries = new SecondaryMarketQueryService(tradingRepository, publicRepository, sqlExecutor, Clock.systemUTC(), marketZone);
         var secondaryRecovery = new SecondaryMarketRecoveryService(cashRepository, () -> {
             var legacy = new java.util.ArrayList<SecondaryMarketRecoveryService.LegacyRecoveryIssue>();
@@ -167,7 +181,15 @@ public final class BlockecoPlugin extends JavaPlugin {
         runtime.attachFinancialQuiesce(cashService::quiesce);
         var adminConfig = new StockAdminConfigCommand(creationRules, new FileConfigStore(getConfig(), getDataFolder().toPath().resolve("config.yml")), new SqlAuditLog(), db, sqlExecutor, clock, messages, mainThread,
                 () -> cashGateway.escrowBalance().thenCompose(secondaryRecovery::inspect));
-        adminCommand.setExecutor(adminConfig); adminCommand.setTabCompleter(adminConfig);
+        var bluechipAdmin = new BluechipAdminCommand(
+                () -> bluechipBootstrap.initializeMissing(),
+                paused -> marketMaker.setQuotesPaused(paused),
+                (code, kind, value) -> db.inTransaction(connection -> { bluechipRepository.adjustFund(connection, code, kind, value, clock.now()); return null; }),
+                (scope, impact) -> { if ("market".equalsIgnoreCase(scope)) marketEvents.triggerTestMarketEvent(impact); else if ("industry".equalsIgnoreCase(scope)) throw new IllegalArgumentException("industry requires configured industry name"); else marketEvents.triggerTestEvent(scope.toUpperCase(java.util.Locale.ROOT), impact); }, messages);
+        adminCommand.setExecutor((sender, registered, label, args) -> args.length > 0 && "bluechip".equalsIgnoreCase(args[0])
+                ? bluechipAdmin.onCommand(sender, registered, label, args) : adminConfig.onCommand(sender, registered, label, args));
+        adminCommand.setTabCompleter((sender, registered, label, args) -> args.length > 0 && "bluechip".equalsIgnoreCase(args[0])
+                ? bluechipAdmin.onTabComplete(sender, registered, label, args) : adminConfig.onTabComplete(sender, registered, label, args));
         var symbols = new PublicStockSymbolCache();
         var companyGui = new CompanyGuiController(this,
                 new CompanyQueryService(companies, sagas, new SqlCompanyFinanceRepository(db.dataSource()), sqlExecutor),
@@ -176,6 +198,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(companyGui, this);
         var stockGui = new StockGuiController(this, secondaryQueries, cashService, secondaryMarket, mainThread,
                 runtime::accepting, secondaryTradingGate::mutationsOpen, messages, scale, companyGui);
+        stockGui.attachPublicQueries(publicQueries);
         getServer().getPluginManager().registerEvents(stockGui, this);
         var ipoGui = new IpoGuiController(this, primaryOfferings,
                 new CompanyQueryService(companies, sagas, new SqlCompanyFinanceRepository(db.dataSource()), sqlExecutor),
@@ -207,6 +230,16 @@ public final class BlockecoPlugin extends JavaPlugin {
                     ipoLifecycle.start();
                     marketSessionTransitions = getServer().getScheduler().runTaskTimerAsynchronously(this,
                             () -> marketSessions.onSessionTransition().exceptionally(failure -> { getLogger().warning("股票交易时段调度失败，将在下个周期重试: " + failure.getMessage()); return 0; }), 20L, 20L);
+                    bluechipSchedulers = new BluechipSchedulers((task, initial, period) -> {
+                        long delay = Math.max(1L, initial.toSeconds() * 20L); long ticks = Math.max(20L, period.toSeconds() * 20L);
+                        var scheduled = getServer().getScheduler().runTaskTimerAsynchronously(this, task, delay, ticks); return scheduled::cancel;
+                    },
+                            () -> marketSessions.onSessionTransition().thenCompose(ignored -> marketSession.get().acceptsMatching() ? java.util.concurrent.CompletableFuture.completedFuture(0) : marketMaker.cancelSystemQuotesAtClose()).exceptionally(failure -> { getLogger().warning("蓝筹时段调度失败: " + failure.getMessage()); return 0; }),
+                            () -> marketMaker.refreshQuotes().exceptionally(failure -> { getLogger().warning("蓝筹报价调度失败: " + failure.getMessage()); return null; }),
+                            () -> marketEvents.triggerDueEvents().thenCompose(ignored -> marketEvents.applyDecay()).exceptionally(failure -> { getLogger().warning("蓝筹事件调度失败: " + failure.getMessage()); return null; }),
+                            () -> { var now = clock.now().atZone(marketZone); if (now.getHour() >= 20) marketCandles.closeTradingDay(now.toLocalDate()).exceptionally(failure -> { getLogger().warning("蓝筹K线调度失败: " + failure.getMessage()); return null; }); },
+                            () -> dividends.settleDueRuns().exceptionally(failure -> { getLogger().warning("蓝筹分红调度失败: " + failure.getMessage()); return null; }));
+                    bluechipSchedulers.start();
                 }));
         return true;
     }
@@ -227,6 +260,7 @@ public final class BlockecoPlugin extends JavaPlugin {
     }
 
     @Override public void onDisable() {
+        if (bluechipSchedulers != null) bluechipSchedulers.stop();
         if (ipoLifecycle != null) ipoLifecycle.stop();
         if (marketSessionTransitions != null) marketSessionTransitions.cancel();
         getServer().getServicesManager().unregisterAll(this);

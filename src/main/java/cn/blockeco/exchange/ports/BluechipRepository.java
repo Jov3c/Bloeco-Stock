@@ -37,6 +37,8 @@ public interface BluechipRepository {
     void expireEvents(Connection connection, Instant now) throws SQLException;
     /** Settles every listed company's next due dividend cycle in the caller's transaction. */
     List<DividendSettlement> settleDueDividendRuns(Connection connection, Instant now, long bluechipBaseProfitMinor) throws SQLException;
+    /** Applies an audited operator delta and rejects any resulting negative fund balance. */
+    void adjustFund(Connection connection, String stockCode, String kind, long delta, Instant occurredAt) throws SQLException;
 
     record BluechipCompany(CompanyId companyId, StockListing listing, String industry, UUID systemAccountId,
                            Money referencePrice, Money modelPrice, Money lowerPrice, Money upperPrice, int spreadBps, long fundShares, Money fundCash) { }

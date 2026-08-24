@@ -26,7 +26,7 @@ public record StockGuiSession(UUID id, UUID owner, Page page, int pageIndex, Str
         return owner.equals(playerId);
     }
 
-    public enum Page { HOME, MARKET, DETAIL, CASH, PORTFOLIO, ORDERS, TRADES, INPUT, CONFIRM }
+    public enum Page { HOME, MARKET, DETAIL, NEWS, CASH, PORTFOLIO, ORDERS, TRADES, INPUT, CONFIRM }
 
     public sealed interface Draft permits CashTransfer, LimitOrderDraft, CancelOrder, InputDraft {
     }

@@ -6,6 +6,17 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 class StockGuiControllerTest {
+    @Test void marketNewsHasItsOwnVanillaInventorySessionAndCanReturnHome() {
+        StockGuiController controller = StockGuiController.forSessionTests();
+        UUID player = UUID.randomUUID();
+
+        StockGuiSession news = controller.openSession(player, StockGuiSession.Page.NEWS, 0, null, null);
+        StockGuiSession home = controller.openSession(player, StockGuiSession.Page.HOME, 0, null, null);
+
+        assertThat(news.page()).isEqualTo(StockGuiSession.Page.NEWS);
+        assertThat(controller.matches(player, news.id())).isFalse();
+        assertThat(controller.matches(player, home.id())).isTrue();
+    }
     @Test void an_old_session_cannot_match_after_the_player_opens_a_new_page() {
         StockGuiController controller = StockGuiController.forSessionTests();
         UUID player = UUID.randomUUID();
