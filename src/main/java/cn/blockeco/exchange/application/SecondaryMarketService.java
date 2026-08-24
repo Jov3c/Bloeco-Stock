@@ -16,6 +16,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import java.util.logging.Level;
@@ -30,37 +31,54 @@ public final class SecondaryMarketService {
     private final AppClock clock;
     private final int feeBps;
     private final Supplier<MarketSession> session;
+    private final Executor postCommitNotifications;
     /** Invoked only after a transaction has committed a trade. */
     private final AtomicReference<Supplier<CompletionStage<Void>>> afterMatchedOrders = new AtomicReference<>(() -> CompletableFuture.completedFuture(null));
 
     public SecondaryMarketService(SecondaryTradingRepository orders, TransactionRunner transactions, Executor sql, AppClock clock, int feeBps) {
-        this(orders, transactions, sql, clock, feeBps, () -> new MarketSession(true));
+        this(orders, transactions, sql, clock, feeBps, () -> new MarketSession(true), ForkJoinPool.commonPool());
     }
 
     public SecondaryMarketService(SecondaryTradingRepository orders, TransactionRunner transactions, Executor sql, AppClock clock, int feeBps, Supplier<MarketSession> session) {
+        this(orders, transactions, sql, clock, feeBps, session, ForkJoinPool.commonPool());
+    }
+
+    /** Package-visible seam keeps post-commit dispatch timing testable without changing player settlement semantics. */
+    SecondaryMarketService(SecondaryTradingRepository orders, TransactionRunner transactions, Executor sql, AppClock clock, int feeBps,
+                           Supplier<MarketSession> session, Executor postCommitNotifications) {
         this.orders = Objects.requireNonNull(orders, "orders"); this.transactions = Objects.requireNonNull(transactions, "transactions");
         this.sql = Objects.requireNonNull(sql, "sql"); this.clock = Objects.requireNonNull(clock, "clock");
         this.session = Objects.requireNonNull(session, "session");
+        this.postCommitNotifications = Objects.requireNonNull(postCommitNotifications, "postCommitNotifications");
         if (feeBps < 0 || feeBps > 10_000) throw new IllegalArgumentException("feeBps must be between 0 and 10000");
         this.feeBps = feeBps;
     }
 
     /** Matches all resting orders once, strictly in their accepted priority order. */
     public CompletionStage<Integer> matchQueuedOrders() {
-        return matchQueuedOrders(true);
+        return matchQueuedOrders(true, false);
+    }
+
+    /**
+     * Opening quote maintenance waits only until its post-commit callback has been dispatched.
+     * It never waits for maintenance completion, and ordinary player order submission stays detached.
+     */
+    CompletionStage<Integer> matchQueuedOrdersAfterNotificationDispatch() {
+        return matchQueuedOrders(true, true);
     }
 
     /** System quote placement uses this to avoid scheduling itself in a feedback loop. */
     CompletionStage<Integer> matchQueuedOrdersSilently() {
-        return matchQueuedOrders(false);
+        return matchQueuedOrders(false, false);
     }
 
-    private CompletionStage<Integer> matchQueuedOrders(boolean notify) {
+    private CompletionStage<Integer> matchQueuedOrders(boolean notify, boolean awaitNotificationDispatch) {
         if (!session.get().acceptsMatching()) return CompletableFuture.completedFuture(0);
         return CompletableFuture.supplyAsync(() -> transactions.inTransaction(this::matchQueuedOrders), sql)
-                .thenApply(matches -> {
-                    if (notify && matches > 0) scheduleAfterMatchedOrders();
-                    return matches;
+                .thenCompose(matches -> {
+                    if (!notify || matches == 0) return CompletableFuture.completedFuture(matches);
+                    CompletionStage<Void> dispatched = scheduleAfterMatchedOrders();
+                    return awaitNotificationDispatch ? dispatched.thenApply(ignored -> matches) : CompletableFuture.completedFuture(matches);
                 });
     }
 
@@ -70,22 +88,32 @@ public final class SecondaryMarketService {
     }
 
     /** Schedules maker maintenance after settlement without allowing a failed or stalled refill to fail the trade. */
-    private void scheduleAfterMatchedOrders() {
+    private CompletionStage<Void> scheduleAfterMatchedOrders() {
         Supplier<CompletionStage<Void>> listener = afterMatchedOrders.get();
-        CompletableFuture.runAsync(() -> {
+        CompletableFuture<Void> dispatched = new CompletableFuture<>();
+        try {
+            postCommitNotifications.execute(() -> {
             try {
                 CompletionStage<Void> maintenance = listener.get();
                 if (maintenance == null) {
                     LOGGER.warning("Post-trade market-maker maintenance returned no completion stage");
+                    dispatched.complete(null);
                     return;
                 }
                 maintenance.whenComplete((ignored, failure) -> {
                     if (failure != null) LOGGER.log(Level.WARNING, "Post-trade market-maker maintenance failed after settlement", failure);
                 });
+                dispatched.complete(null);
             } catch (RuntimeException failure) {
                 LOGGER.log(Level.WARNING, "Post-trade market-maker maintenance could not be scheduled after settlement", failure);
+                dispatched.complete(null);
             }
-        });
+            });
+        } catch (RuntimeException failure) {
+            LOGGER.log(Level.WARNING, "Post-trade market-maker notification executor rejected maintenance", failure);
+            dispatched.complete(null);
+        }
+        return dispatched;
     }
 
     int matchQueuedOrders(java.sql.Connection connection) throws java.sql.SQLException {

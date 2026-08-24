@@ -13,7 +13,9 @@ import cn.blockeco.exchange.ports.BluechipRepository;
 import java.nio.file.Files;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
@@ -77,11 +79,12 @@ class BluechipMarketMakerServiceTest {
             session.set(new MarketSession(false));
             var preopenBuy = market.placeBuy(player, bluechip.listing().stockCode(), 5, Money.ofMinor(1_000_000)).toCompletableFuture().join().order();
             session.set(new MarketSession(true));
-            market.matchQueuedOrders().toCompletableFuture().join();
+            market.matchQueuedOrdersAfterNotificationDispatch().toCompletableFuture().join();
 
             assertThat(tradeCount(database)).isEqualTo(5);
             awaitUntil(() -> systemOrders(database, bluechip, "BUY").size() == 5
                     && systemOrders(database, bluechip, "SELL").size() == 5);
+            awaitUntil(() -> systemOrderHistoryCount(database, bluechip) == 20);
             assertThat(systemOrders(database, bluechip, "BUY")).hasSize(5);
             assertThat(systemOrders(database, bluechip, "SELL")).hasSize(5);
             assertThat(orders.findOrder(preopenBuy.id()).orElseThrow().remainingShares()).isZero();
@@ -168,6 +171,59 @@ class BluechipMarketMakerServiceTest {
                     && systemOrders(database, bluechip, "SELL").size() == 5);
             assertThat(orders.findOrder(queuedBuy.id()).orElseThrow().state().name()).isEqualTo("FILLED");
         } finally { file.toFile().deleteOnExit(); }
+    }
+
+    @Test
+    void productionOpeningSweepWaitsForItsDelayedSettlementNotificationAndReplenishesOnlyOnce() throws Exception {
+        var file = Files.createTempFile("blockstock-maker-delayed-opening-notification-", ".db");
+        try (var database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate();
+            var repository = new SqlBluechipRepository(database.dataSource());
+            new BluechipBootstrapServiceTestSupport(database, repository, NOW).initializeOne();
+            BluechipRepository.BluechipCompany bluechip = repository.all().getFirst();
+            var cash = new SqlSecuritiesCashRepository(database.dataSource());
+            var orders = new SqlSecondaryTradingRepository(database.dataSource(), cash);
+            var openingQuotePass = new java.util.concurrent.atomic.AtomicBoolean(false);
+            var sessionChecks = new AtomicInteger();
+            java.util.function.Supplier<MarketSession> openingSweepSession = () -> {
+                if (!openingQuotePass.get()) return new MarketSession(false);
+                int check = sessionChecks.incrementAndGet();
+                return new MarketSession(check <= 2 || check > 12);
+            };
+            var notificationQueued = new CountDownLatch(1);
+            var releaseNotification = new CountDownLatch(1);
+            var market = new SecondaryMarketService(orders, database, Runnable::run, () -> NOW, 0, openingSweepSession,
+                    command -> {
+                        notificationQueued.countDown();
+                        try {
+                            if (!releaseNotification.await(2, TimeUnit.SECONDS)) throw new AssertionError("notification was not released");
+                        } catch (InterruptedException exception) {
+                            Thread.currentThread().interrupt();
+                            throw new AssertionError(exception);
+                        }
+                        command.run();
+                    });
+            UUID player = UUID.randomUUID();
+            database.inTransaction(connection -> { cash.creditAvailable(connection, player, Money.ofMinor(10_000_000), NOW); return null; });
+            market.placeBuy(player, bluechip.listing().stockCode(), 5, Money.ofMinor(1_000_000)).toCompletableFuture().join();
+            openingQuotePass.set(true);
+            var maker = new BluechipMarketMakerService(repository, market, openingSweepSession, () -> NOW);
+            market.setAfterMatchedOrdersListener(maker::replenishAfterMatch);
+
+            CompletableFuture<BluechipMarketMakerService.QuoteRefreshResult> opening = CompletableFuture.supplyAsync(
+                    () -> maker.refreshQuotes().toCompletableFuture().join());
+
+            assertThat(notificationQueued.await(2, TimeUnit.SECONDS)).isTrue();
+            // The maker pass must remain active until the queued sweep's notification has marked the
+            // batch deferred; otherwise the late callback schedules a non-coalesced second refill.
+            assertThat(opening).isNotDone();
+            releaseNotification.countDown();
+            opening.join();
+
+            awaitUntil(() -> systemOrders(database, bluechip, "BUY").size() == 5
+                    && systemOrders(database, bluechip, "SELL").size() == 5);
+            assertThat(systemOrderHistoryCount(database, bluechip)).isEqualTo(20);
+        } finally { Files.deleteIfExists(file); }
     }
 
     @Test
@@ -326,6 +382,13 @@ class BluechipMarketMakerServiceTest {
     private static long tradeCount(Database database) {
         try (var connection = database.dataSource().getConnection(); var statement = connection.prepareStatement("SELECT COUNT(*) FROM stock_trades"); var rows = statement.executeQuery()) {
             rows.next(); return rows.getLong(1);
+        } catch (Exception exception) { throw new AssertionError(exception); }
+    }
+
+    private static long systemOrderHistoryCount(Database database, BluechipRepository.BluechipCompany bluechip) {
+        try (var connection = database.dataSource().getConnection(); var statement = connection.prepareStatement("SELECT COUNT(*) FROM stock_orders WHERE player_uuid = ? AND stock_code = ?")) {
+            statement.setString(1, bluechip.systemAccountId().toString()); statement.setString(2, bluechip.listing().stockCode());
+            try (var rows = statement.executeQuery()) { rows.next(); return rows.getLong(1); }
         } catch (Exception exception) { throw new AssertionError(exception); }
     }
 

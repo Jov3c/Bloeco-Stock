@@ -35,7 +35,7 @@ public final class BluechipMarketMakerService {
         // The opening queued sweep settles real pre-open player orders.  It must therefore emit the
         // ordinary post-commit notification so this pass can schedule one bounded quote refill.
         // systemQuotePassActive coalesces that callback and prevents the refill from recursing.
-        this(bluechips, market, session, clock, market::matchQueuedOrders);
+        this(bluechips, market, session, clock, market::matchQueuedOrdersAfterNotificationDispatch);
     }
 
     BluechipMarketMakerService(BluechipRepository bluechips, SecondaryMarketService market, Supplier<MarketSession> session, AppClock clock,
