@@ -25,6 +25,7 @@ try{
   Start-QA 'Etc/GMT+10';Run-Gui 'PREOPEN';Stop-QA
   Start-QA 'Etc/UTC';Run-Gui 'OPEN';Stop-QA
   Start-QA 'Etc/GMT-12';Run-Gui 'POSTCLOSE';Start-Sleep -Seconds 70;Stop-QA
+  Start-QA 'Etc/UTC';Start-Sleep -Seconds 12;Stop-QA
   Set-DividendFixture
   Start-QA 'Etc/GMT-12';Start-Sleep -Seconds 70;Stop-QA
   Start-QA 'Etc/GMT-12';Start-Sleep -Seconds 70;Stop-QA

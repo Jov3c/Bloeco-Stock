@@ -91,3 +91,23 @@ now requires the actual custom data-component labels `卖1`..`卖5` and
 `买1`..`买5`, in addition to the real trade/holding assertions.  This stricter
 test failed before any downstream lifecycle assertion could be honestly run.
 QA was stopped; no 25565 connection was made.
+
+## Final fresh rerun — share issuance conservation blocker
+
+After accepting partial fills as the intended five one-share maker levels, the
+fresh QA runner completed its real session/lifecycle sequence and stopped the
+server for SQLite acceptance.  The hard share-conservation query failed for
+all ten bluechips:
+
+```text
+stock_listings.issued_shares = 1,000,000
+sum(share_holdings.available_shares + reserved_shares) = 100,000
+```
+
+`initial-fund-shares` is seeded into the system holder while `total-shares` is
+recorded as the listing's issued quantity.  The remaining 900,000 shares per
+company have no holder, so the securities ledger is not conserved.  This is a
+product accounting invariant failure, independent of partial matching; the
+QA assertion remains strict.  Fix either the issued quantity semantics or
+allocate every issued share through a tracked holder before claiming final
+acceptance.
