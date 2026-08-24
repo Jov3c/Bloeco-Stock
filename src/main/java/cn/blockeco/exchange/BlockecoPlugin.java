@@ -86,6 +86,9 @@ public final class BlockecoPlugin extends JavaPlugin {
     private org.bukkit.scheduler.BukkitTask marketSessionTransitions;
     private SecondaryTradingGate secondaryTradingGate;
     private BluechipSchedulers bluechipSchedulers;
+    /** Bluechip escrow/bootstrap is deliberately completed off the primary thread before wiring player-facing services. */
+    private volatile boolean bluechipBootstrapReady;
+    private volatile boolean bluechipBootstrapStarted;
 
     @Override public void onEnable() {
         try {
@@ -138,7 +141,19 @@ public final class BlockecoPlugin extends JavaPlugin {
         var bluechipBootstrap = new BluechipBootstrapService(bluechipConfig, bluechipAccountId, companies,
                 new cn.blockeco.exchange.infrastructure.sql.SqlStockListingRepository(db.dataSource()), new SqlBluechipRepository(db.dataSource()),
                 cashRepository, bluechipFunding, new SqlBluechipBootstrapFundingRepository(db.dataSource()), db, sqlExecutor, clock);
-        bluechipBootstrap.initializeMissing().toCompletableFuture().join();
+        if (!bluechipBootstrapReady) {
+            if (!bluechipBootstrapStarted) {
+                bluechipBootstrapStarted = true;
+                bluechipBootstrap.initializeMissing().whenComplete((ignored, failure) -> mainThread.submit(() -> {
+                    if (failure != null) failEnable(startupFailureMessage(failure));
+                    else { bluechipBootstrapReady = true; finishEnable(db); }
+                    return null;
+                }));
+            }
+            // The initial command handlers remain in their explicit "initializing" state;
+            // player-facing readiness is only published by attachStockAfterInitialRefresh below.
+            return true;
+        }
         var finance = new SqlCompanyFinanceRepository(db.dataSource());
         var escrow = new VaultTreasuryEscrowGateway(economy, mainThread, escrowId);
         var registration = new CompanyRegistrationService(companies, sagas, new SqlAuditLog(), db, economy, mainThread, sqlExecutor, clock, creationRules.current().registrationFee(), creationRules::current, finance, escrow, creationRules.current().initialShares());

@@ -10,6 +10,9 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executor;
 
 /**
  * Funds the finite system market-maker account once. Each provider call has a durable
@@ -36,6 +39,10 @@ public final class BluechipBootstrapFundingService {
                 case AMBIGUOUS -> throw new IllegalStateException("bluechip bootstrap funding requires manual recovery: "+funding.detail());
             }
         }
+    }
+    /** Runs the durable DB/provider handshake away from the caller (never synchronously waits on Paper's main thread). */
+    public CompletionStage<BluechipBootstrapFundingRepository.Funding> ensureEscrowFundedAsync(Money amount, Executor executor) {
+        return CompletableFuture.supplyAsync(() -> ensureEscrowFunded(amount), Objects.requireNonNull(executor));
     }
     /** Kept out of EconomyGateway: the escrow account is supplied by the small adapter below. */
     public interface EscrowEconomy extends EconomyGateway { EconomyGateway.Result depositEscrow(Money amount); }

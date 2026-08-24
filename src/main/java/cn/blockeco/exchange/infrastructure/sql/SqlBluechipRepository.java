@@ -78,14 +78,16 @@ public final class SqlBluechipRepository implements BluechipRepository {
         } catch (SQLException exception) { throw new IllegalStateException("could not record bluechip liquidity status", exception); }
     }
     @Override public void adjustFund(Connection connection, String stockCode, String kind, long delta, Instant occurredAt) throws SQLException {
-        requireTransaction(connection); BluechipCompany company=findByStockCode(stockCode).orElseThrow(()->new IllegalArgumentException("unknown bluechip"));
+        requireTransaction(connection);
+        // Cash is a real Vault-backed escrow liability.  An SQL-only operator delta would
+        // manufacture (or destroy) backing, so only share inventory may be adjusted here.
+        if ("cash".equals(kind)) throw new IllegalArgumentException("cash fund adjustments require escrow funding and are disabled");
+        BluechipCompany company=findByStockCode(stockCode).orElseThrow(()->new IllegalArgumentException("unknown bluechip"));
         if (!"cash".equals(kind) && !"shares".equals(kind)) throw new IllegalArgumentException("unknown fund kind");
-        if ("cash".equals(kind)) {
-            try (PreparedStatement statement=connection.prepareStatement("UPDATE securities_cash_accounts SET available_minor = available_minor + ? WHERE player_uuid = ? AND available_minor + ? >= 0")) { statement.setLong(1,delta);statement.setString(2,company.systemAccountId().toString());statement.setLong(3,delta);if(statement.executeUpdate()!=1)throw new IllegalArgumentException("negative cash"); }
-        } else {
+        {
             try (PreparedStatement statement=connection.prepareStatement("UPDATE share_holdings SET available_shares = available_shares + ? WHERE company_id = ? AND holder_uuid = ? AND available_shares + ? >= 0")) { statement.setLong(1,delta);statement.setString(2,company.companyId().value().toString());statement.setString(3,company.systemAccountId().toString());statement.setLong(4,delta);if(statement.executeUpdate()!=1)throw new IllegalArgumentException("negative shares"); }
         }
-        try (PreparedStatement statement=connection.prepareStatement("INSERT INTO bluechip_fund_audit (id, company_id, operation, cash_delta_minor, shares_delta, occurred_at) VALUES (?, ?, 'ADMIN_FUND_ADJUSTED', ?, ?, ?)")) { statement.setString(1,UUID.randomUUID().toString());statement.setString(2,company.companyId().value().toString());statement.setLong(3,"cash".equals(kind)?delta:0);statement.setLong(4,"shares".equals(kind)?delta:0);statement.setString(5,occurredAt.toString());statement.executeUpdate(); }
+        try (PreparedStatement statement=connection.prepareStatement("INSERT INTO bluechip_fund_audit (id, company_id, operation, cash_delta_minor, shares_delta, occurred_at) VALUES (?, ?, 'ADMIN_FUND_ADJUSTED', 0, ?, ?)")) { statement.setString(1,UUID.randomUUID().toString());statement.setString(2,company.companyId().value().toString());statement.setLong(3,delta);statement.setString(4,occurredAt.toString());statement.executeUpdate(); }
     }
 
     @Override public void insertInitial(Connection connection, BluechipSeed seed) throws SQLException {

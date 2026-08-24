@@ -9,9 +9,30 @@ import cn.blockeco.exchange.infrastructure.sql.SqlBluechipBootstrapFundingReposi
 import java.nio.file.Files;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import org.junit.jupiter.api.Test;
 
 class BluechipBootstrapFundingServiceTest {
+    @Test
+    void fundingChainDoesNotSynchronouslyWaitForMainThreadWork() throws Exception {
+        var file = Files.createTempFile("blockstock-bluechip-async-", ".db");
+        try (var database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate(); var mainWork = new CompletableFuture<cn.blockeco.exchange.ports.EconomyGateway.Result>();
+            var service = new BluechipBootstrapFundingService(UUID.randomUUID(), new SqlBluechipBootstrapFundingRepository(database.dataSource()), database,
+                    new BluechipBootstrapFundingService.EscrowEconomy() {
+                        @Override public cn.blockeco.exchange.ports.EconomyGateway.Result withdraw(UUID player, Money amount) { return cn.blockeco.exchange.ports.EconomyGateway.Result.success("ok"); }
+                        @Override public cn.blockeco.exchange.ports.EconomyGateway.Result deposit(UUID player, Money amount) { return cn.blockeco.exchange.ports.EconomyGateway.Result.success("ok"); }
+                        @Override public cn.blockeco.exchange.ports.EconomyGateway.Result depositEscrow(Money amount) { return cn.blockeco.exchange.ports.EconomyGateway.Result.success("ok"); }
+                    }, new cn.blockeco.exchange.ports.MainThreadExecutor() { @Override public <T> java.util.concurrent.CompletionStage<T> submit(java.util.function.Supplier<T> work) { return (java.util.concurrent.CompletionStage<T>) mainWork; } }, () -> Instant.EPOCH);
+            var background = java.util.concurrent.Executors.newSingleThreadExecutor();
+            var pending = service.ensureEscrowFundedAsync(Money.ofMinor(100), background);
+            assertThat(pending).isNotCompleted();
+            mainWork.complete(cn.blockeco.exchange.ports.EconomyGateway.Result.success("ok"));
+            assertThat(pending.toCompletableFuture().get()).isNotNull();
+            background.shutdownNow();
+        } finally { Files.deleteIfExists(file); }
+    }
     @Test
     void uncertainSourceCreditIsPersistedAndNeverIssuedAgainOnRestart() throws Exception {
         var file = Files.createTempFile("blockstock-bluechip-funding-", ".db");

@@ -1,6 +1,7 @@
 package cn.blockeco.exchange.infrastructure.sql;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import cn.blockeco.exchange.application.BluechipBootstrapService;
 import cn.blockeco.exchange.application.BluechipBootstrapFundingService;
@@ -17,6 +18,15 @@ import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.Test;
 
 class SqlBluechipRepositoryTest {
+    @Test
+    void repositoryRejectsCashFundMutationEvenWhenCalledOutsideTheAdminCommand() throws Exception {
+        var file = Files.createTempFile("blockstock-bluechip-cash-", ".db");
+        try (Database database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate(); var repository = new SqlBluechipRepository(database.dataSource());
+            assertThatThrownBy(() -> database.inTransaction(c -> { repository.adjustFund(c, "UNKNOWN", "cash", 1, Instant.EPOCH); return null; }))
+                    .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("cash");
+        } finally { Files.deleteIfExists(file); }
+    }
     @Test
     void findsSeededBluechipByItsAllocatedStockCodeWithItsFiniteBalances() throws Exception {
         var file = Files.createTempFile("blockstock-bluechip-repository-", ".db");

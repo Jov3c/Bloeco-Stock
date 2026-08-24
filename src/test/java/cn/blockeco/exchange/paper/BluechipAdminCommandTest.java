@@ -9,6 +9,12 @@ import org.bukkit.entity.Player;
 import org.junit.jupiter.api.Test;
 
 class BluechipAdminCommandTest {
+    @Test void cashFundAdjustmentIsRejectedWithoutCallingTheFundControl() {
+        Player player = mock(Player.class); when(player.hasPermission(BluechipAdminCommand.PERMISSION)).thenReturn(true);
+        BluechipAdminCommand command = new BluechipAdminCommand(() -> { }, paused -> { }, (code, kind, value) -> { throw new AssertionError("cash must not mutate internal ledgers"); },
+                new BluechipAdminCommand.EventControl() { @Override public void company(String code, int impact) { } @Override public void industry(String industry, int impact) { } @Override public void market(int impact) { } }, new Messages(new org.bukkit.configuration.file.YamlConfiguration()));
+        command.onCommand(player, mock(Command.class), "stockadmin", new String[]{"bluechip", "fund", "BLC", "cash", "100"});
+    }
     @Test void authorizedIndustryEventPassesTheConfiguredIndustryToEventControl() {
         Player player = mock(Player.class); when(player.hasPermission(BluechipAdminCommand.PERMISSION)).thenReturn(true);
         java.util.concurrent.atomic.AtomicReference<String> scope = new java.util.concurrent.atomic.AtomicReference<>();
