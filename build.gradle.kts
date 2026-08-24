@@ -15,6 +15,7 @@ repositories {
         url = uri("https://repo.papermc.io/repository/maven-public/")
     }
     maven("https://jitpack.io")
+    maven("https://mvn.wesjd.net/")
 }
 
 dependencies {
@@ -25,6 +26,7 @@ dependencies {
 
     implementation("org.xerial:sqlite-jdbc:3.50.3.0")
     implementation("com.zaxxer:HikariCP:6.3.0")
+    implementation("net.wesjd:anvilgui:1.10.13-SNAPSHOT")
 
     testImplementation(platform("org.junit:junit-bom:5.13.4"))
     testImplementation("org.junit.jupiter:junit-jupiter")
@@ -66,6 +68,7 @@ tasks.shadowJar {
     dependsOn(removeLegacyBlockecoShadowJar)
     relocate("com.zaxxer.hikari", "cn.blockeco.exchange.libs.com.zaxxer.hikari")
     relocate("org.sqlite", "cn.blockeco.exchange.libs.org.sqlite")
+    relocate("net.wesjd.anvilgui", "cn.blockeco.exchange.libs.anvilgui")
 }
 
 tasks.runServer {

@@ -9,15 +9,15 @@ import org.bukkit.entity.Player;
 import org.junit.jupiter.api.Test;
 
 class BluechipAdminCommandTest {
-    @Test void authorizedIndustryEventRoutesToIndustryEventControl() {
+    @Test void authorizedIndustryEventPassesTheConfiguredIndustryToEventControl() {
         Player player = mock(Player.class); when(player.hasPermission(BluechipAdminCommand.PERMISSION)).thenReturn(true);
         java.util.concurrent.atomic.AtomicReference<String> scope = new java.util.concurrent.atomic.AtomicReference<>();
         BluechipAdminCommand command = new BluechipAdminCommand(() -> { }, paused -> { }, (code, kind, value) -> { },
-                (target, impact) -> scope.set(target + ":" + impact), new Messages(new org.bukkit.configuration.file.YamlConfiguration()));
+                (target, impact) -> scope.set(target + ":" + impact), new Messages(new org.bukkit.configuration.file.YamlConfiguration()), java.util.List.of("Energy"));
 
-        command.onCommand(player, mock(Command.class), "stockadmin", new String[]{"bluechip", "event", "industry", "500"});
+        command.onCommand(player, mock(Command.class), "stockadmin", new String[]{"bluechip", "event", "industry", "Energy", "500"});
 
-        assertThat(scope).hasValue("industry:500");
+        assertThat(scope).hasValue("Energy:500");
     }
     @Test void rejectsPlayerWithoutBluechipPermissionBeforeAnyMutation() {
         Player player = mock(Player.class); when(player.hasPermission(BluechipAdminCommand.PERMISSION)).thenReturn(false);

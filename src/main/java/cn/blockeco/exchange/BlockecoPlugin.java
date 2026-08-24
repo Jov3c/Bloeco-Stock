@@ -124,7 +124,8 @@ public final class BlockecoPlugin extends JavaPlugin {
         int scale = getConfig().getInt("currency.scale");
         var bluechipAccountId = configuredBluechipSystemAccount();
         if (getServer().getOfflinePlayer(bluechipAccountId).hasPlayedBefore()) throw new IllegalStateException("蓝筹系统账户不能是已知真实玩家");
-        var bluechipBootstrap = new BluechipBootstrapService(BluechipConfig.load(getConfig(), scale), bluechipAccountId, companies,
+        var bluechipConfig = BluechipConfig.load(getConfig(), scale);
+        var bluechipBootstrap = new BluechipBootstrapService(bluechipConfig, bluechipAccountId, companies,
                 new cn.blockeco.exchange.infrastructure.sql.SqlStockListingRepository(db.dataSource()), new SqlBluechipRepository(db.dataSource()),
                 db, sqlExecutor, clock);
         bluechipBootstrap.initializeMissing().toCompletableFuture().join();
@@ -185,7 +186,8 @@ public final class BlockecoPlugin extends JavaPlugin {
                 () -> bluechipBootstrap.initializeMissing(),
                 paused -> marketMaker.setQuotesPaused(paused),
                 (code, kind, value) -> db.inTransaction(connection -> { bluechipRepository.adjustFund(connection, code, kind, value, clock.now()); return null; }),
-                (scope, impact) -> { if ("market".equalsIgnoreCase(scope)) marketEvents.triggerTestMarketEvent(impact); else if ("industry".equalsIgnoreCase(scope)) marketEvents.triggerTestIndustryEvent("industry", impact); else marketEvents.triggerTestEvent(scope.toUpperCase(java.util.Locale.ROOT), impact); }, messages);
+                (scope, impact) -> { if ("market".equalsIgnoreCase(scope)) marketEvents.triggerTestMarketEvent(impact); else marketEvents.triggerTestEvent(scope.toUpperCase(java.util.Locale.ROOT), impact); }, messages,
+                bluechipConfig.definitions().stream().map(cn.blockeco.exchange.domain.bluechip.BluechipDefinition::industry).distinct().toList());
         adminCommand.setExecutor((sender, registered, label, args) -> args.length > 0 && "bluechip".equalsIgnoreCase(args[0])
                 ? bluechipAdmin.onCommand(sender, registered, label, args) : adminConfig.onCommand(sender, registered, label, args));
         adminCommand.setTabCompleter((sender, registered, label, args) -> args.length > 0 && "bluechip".equalsIgnoreCase(args[0])

@@ -194,7 +194,7 @@ messages:
   stockadmin-minimum-capital: '当前最低注册资本：%capital%'
   usage-stockadmin-config: '用法：/stockadmin config [min-capital <金额>]'
   usage-stockadmin-recovery: '用法：/stockadmin recovery <cash|reconcile>'
-  usage-stockadmin-bluechip: '用法：/stockadmin bluechip <init|pause|resume|fund <代码> <cash|shares> <值>|event <代码|market|industry> <影响万分比>>'
+  usage-stockadmin-bluechip: '用法：/stockadmin bluechip <init|pause|resume|fund <代码> <cash|shares> <值>|event <代码|market> <影响万分比>|event industry <行业> <影响万分比>>'
   stockadmin-recovery-unavailable: '恢复诊断暂不可用，请稍后再试。'
   stockadmin-recovery-summary: '证券恢复：物理托管=%physical% 最终负债=%liabilities% 已确认差额=%difference% 不确定外部金额=%uncertain% 变更=%gate%'
   stockadmin-recovery-cash-row: '现金操作=%id% 方向=%direction% 状态=%state% 已确认=%stage% 金额=%amount% 原因=%reason%'
