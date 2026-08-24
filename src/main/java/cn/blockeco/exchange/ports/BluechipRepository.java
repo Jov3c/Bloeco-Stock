@@ -18,10 +18,12 @@ public interface BluechipRepository {
     List<CompanyId> bluechipCompanyIds();
     List<BluechipMetadata> allMetadata();
     List<SeedAudit> initializedSeeds(CompanyId companyId);
+    /** Append a protection transition only when its state differs from the last observed state. */
+    void recordLiquidityStatus(CompanyId companyId, boolean degraded, Instant occurredAt);
     void insertInitial(Connection connection, BluechipSeed seed) throws SQLException;
 
     record BluechipCompany(CompanyId companyId, StockListing listing, String industry, UUID systemAccountId,
-                           Money referencePrice, Money lowerPrice, Money upperPrice, long fundShares, Money fundCash) { }
+                           Money referencePrice, Money lowerPrice, Money upperPrice, int spreadBps, long fundShares, Money fundCash) { }
 
     record BluechipMetadata(CompanyId companyId, StockListing listing, String industry, UUID systemAccountId,
                             Money referencePrice, Money lowerPrice, Money upperPrice, int spreadBps,

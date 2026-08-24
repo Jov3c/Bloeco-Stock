@@ -30,7 +30,10 @@ public interface SecondaryTradingRepository {
     void releaseOrder(Connection connection, UUID orderId, LimitOrder.State terminalState) throws SQLException;
     void cancelTakerForSelfTrade(Connection connection, UUID orderId) throws SQLException;
     Optional<LimitOrder> findOrder(Connection connection, UUID orderId) throws SQLException;
+    /** Active order ids belonging to one account in one stock book, for owner-scoped cancellation. */
+    List<UUID> activeOrderIds(Connection connection, UUID playerId, String stockCode) throws SQLException;
     Optional<LimitOrder> findOrder(UUID orderId);
+    Money availableCash(UUID playerId);
     Optional<ShareHolding> findHolding(cn.blockeco.exchange.domain.company.CompanyId companyId, UUID playerId);
     Money compensationFund();
     PortfolioView portfolio(UUID playerId);

@@ -19,7 +19,7 @@ import javax.sql.DataSource;
 public final class SqlBluechipRepository implements BluechipRepository {
     private static final String SELECT = """
             SELECT bc.company_id, bc.industry, bc.system_account_uuid, bc.model_price_minor, bc.lower_price_minor,
-                   bc.upper_price_minor, sl.stock_code, sl.issue_reference_price_minor, sl.issued_shares, sl.listed_at,
+                   bc.upper_price_minor, bc.spread_bps, sl.stock_code, sl.issue_reference_price_minor, sl.issued_shares, sl.listed_at,
                    h.available_shares, COALESCE((SELECT SUM(cash_delta_minor) FROM bluechip_fund_audit fa
                        WHERE fa.company_id = bc.company_id), 0) AS fund_cash_minor
             FROM bluechip_companies bc
@@ -58,6 +58,20 @@ public final class SqlBluechipRepository implements BluechipRepository {
             statement.setString(1, companyId.value().toString()); try (ResultSet rows = statement.executeQuery()) { java.util.ArrayList<SeedAudit> audits = new java.util.ArrayList<>(); while (rows.next()) audits.add(new SeedAudit(Money.ofMinor(rows.getLong(1)), rows.getLong(2))); return List.copyOf(audits); }
         } catch (SQLException exception) { throw new IllegalStateException("could not read bluechip seed audit", exception); }
     }
+    @Override public void recordLiquidityStatus(CompanyId companyId, boolean degraded, Instant occurredAt) {
+        String eventType = degraded ? "BLUECHIP_LIQUIDITY_DEGRADED" : "BLUECHIP_LIQUIDITY_RESTORED";
+        try (Connection connection = dataSource.getConnection()) {
+            String previous = null;
+            try (PreparedStatement statement = connection.prepareStatement("SELECT event_type FROM audit_events WHERE company_id = ? AND event_type IN ('BLUECHIP_LIQUIDITY_DEGRADED', 'BLUECHIP_LIQUIDITY_RESTORED') ORDER BY occurred_at DESC, event_id DESC LIMIT 1")) {
+                statement.setString(1, companyId.value().toString()); try (ResultSet rows = statement.executeQuery()) { if (rows.next()) previous = rows.getString(1); }
+            }
+            if (eventType.equals(previous)) return;
+            try (PreparedStatement statement = connection.prepareStatement("INSERT INTO audit_events (event_id, company_id, actor_uuid, event_type, payload_json, occurred_at) VALUES (?, ?, NULL, ?, ?, ?)")) {
+                statement.setString(1, UUID.randomUUID().toString()); statement.setString(2, companyId.value().toString()); statement.setString(3, eventType);
+                statement.setString(4, "{\"degraded\":" + degraded + "}"); statement.setString(5, occurredAt.toString()); statement.executeUpdate();
+            }
+        } catch (SQLException exception) { throw new IllegalStateException("could not record bluechip liquidity status", exception); }
+    }
 
     @Override public void insertInitial(Connection connection, BluechipSeed seed) throws SQLException {
         requireTransaction(connection);
@@ -94,7 +108,7 @@ public final class SqlBluechipRepository implements BluechipRepository {
     private static BluechipCompany map(ResultSet row) throws SQLException {
         CompanyId companyId = new CompanyId(UUID.fromString(row.getString("company_id")));
         StockListing listing = new StockListing(companyId, row.getString("stock_code"), Money.ofMinor(row.getLong("issue_reference_price_minor")), row.getLong("issued_shares"), Instant.parse(row.getString("listed_at")));
-        return new BluechipCompany(companyId, listing, row.getString("industry"), UUID.fromString(row.getString("system_account_uuid")), Money.ofMinor(row.getLong("model_price_minor")), Money.ofMinor(row.getLong("lower_price_minor")), Money.ofMinor(row.getLong("upper_price_minor")), row.getLong("available_shares"), Money.ofMinor(row.getLong("fund_cash_minor")));
+        return new BluechipCompany(companyId, listing, row.getString("industry"), UUID.fromString(row.getString("system_account_uuid")), Money.ofMinor(row.getLong("model_price_minor")), Money.ofMinor(row.getLong("lower_price_minor")), Money.ofMinor(row.getLong("upper_price_minor")), row.getInt("spread_bps"), row.getLong("available_shares"), Money.ofMinor(row.getLong("fund_cash_minor")));
     }
     private static BluechipMetadata mapMetadata(ResultSet row) throws SQLException {
         CompanyId companyId = new CompanyId(UUID.fromString(row.getString("company_id")));

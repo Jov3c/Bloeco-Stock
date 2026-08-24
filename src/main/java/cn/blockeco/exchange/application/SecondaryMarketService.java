@@ -61,6 +61,12 @@ public final class SecondaryMarketService {
         return place(player, stockCode, shares, limit, LimitOrder.Side.SELL);
     }
 
+    /** Fee basis points applied when this service reserves a buy order. */
+    public int buyerFeeBps() { return feeBps; }
+
+    /** Current spendable cash for an account, excluding funds already reserved by open buy orders. */
+    public Money availableCash(UUID player) { return orders.availableCash(Objects.requireNonNull(player, "player")); }
+
     public CompletionStage<OrderPlacementResult> cancel(UUID player, UUID orderId) {
         Objects.requireNonNull(player, "player"); Objects.requireNonNull(orderId, "orderId");
         return CompletableFuture.supplyAsync(() -> transactions.inTransaction(connection -> {
@@ -69,6 +75,19 @@ public final class SecondaryMarketService {
             if (current.state() == LimitOrder.State.CANCELLED || current.state() == LimitOrder.State.SELF_TRADE_PREVENTED || current.state() == LimitOrder.State.FILLED) return new OrderPlacementResult(current);
             orders.releaseOrder(connection, orderId, LimitOrder.State.CANCELLED);
             return new OrderPlacementResult(terminal(current, LimitOrder.State.CANCELLED));
+        }), sql);
+    }
+
+    /** Cancels active orders for their owner in one stock book; it cannot affect any other player's GTC orders. */
+    public CompletionStage<Integer> cancelOpenOrders(UUID player, String stockCode) {
+        Objects.requireNonNull(player, "player"); Objects.requireNonNull(stockCode, "stockCode");
+        return CompletableFuture.supplyAsync(() -> transactions.inTransaction(connection -> {
+            int cancelled = 0;
+            for (UUID orderId : orders.activeOrderIds(connection, player, stockCode)) {
+                orders.releaseOrder(connection, orderId, LimitOrder.State.CANCELLED);
+                cancelled++;
+            }
+            return cancelled;
         }), sql);
     }
 
