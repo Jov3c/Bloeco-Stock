@@ -3,6 +3,7 @@ package cn.blockeco.exchange.infrastructure.sql;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import cn.blockeco.exchange.application.BluechipBootstrapService;
+import cn.blockeco.exchange.application.BluechipBootstrapFundingService;
 import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.paper.BluechipConfig;
 import java.nio.file.Files;
@@ -22,9 +23,16 @@ class SqlBluechipRepositoryTest {
         try (Database database = new Database("jdbc:sqlite:" + file)) {
             database.migrate();
             SqlBluechipRepository repository = new SqlBluechipRepository(database.dataSource());
-            BluechipBootstrapService service = new BluechipBootstrapService(config(), UUID.fromString("00000000-0000-0000-0000-000000000099"),
+            UUID system = UUID.fromString("00000000-0000-0000-0000-000000000099");
+            var records = new SqlBluechipBootstrapFundingRepository(database.dataSource());
+            var funding = new BluechipBootstrapFundingService(system, records, database, new BluechipBootstrapFundingService.EscrowEconomy() {
+                @Override public cn.blockeco.exchange.ports.EconomyGateway.Result withdraw(UUID player, Money amount) { return cn.blockeco.exchange.ports.EconomyGateway.Result.success("ok"); }
+                @Override public cn.blockeco.exchange.ports.EconomyGateway.Result deposit(UUID player, Money amount) { return cn.blockeco.exchange.ports.EconomyGateway.Result.success("ok"); }
+                @Override public cn.blockeco.exchange.ports.EconomyGateway.Result depositEscrow(Money amount) { return cn.blockeco.exchange.ports.EconomyGateway.Result.success("ok"); }
+            }, new cn.blockeco.exchange.ports.MainThreadExecutor() { @Override public <T> java.util.concurrent.CompletionStage<T> submit(java.util.function.Supplier<T> work) { return java.util.concurrent.CompletableFuture.completedFuture(work.get()); } }, () -> Instant.parse("2026-08-24T00:00:00Z"));
+            BluechipBootstrapService service = new BluechipBootstrapService(config(), system,
                     new SqlCompanyRepository(database.dataSource()), new SqlStockListingRepository(database.dataSource()), repository,
-                    database, Runnable::run, () -> Instant.parse("2026-08-24T00:00:00Z"));
+                    new SqlSecuritiesCashRepository(database.dataSource()), funding, records, database, Runnable::run, () -> Instant.parse("2026-08-24T00:00:00Z"));
 
             service.initializeMissing().toCompletableFuture().join();
             var seeded = repository.all().getFirst();

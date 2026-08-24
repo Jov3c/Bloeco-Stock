@@ -91,7 +91,6 @@ public final class SqlBluechipRepository implements BluechipRepository {
     @Override public void insertInitial(Connection connection, BluechipSeed seed) throws SQLException {
         requireTransaction(connection);
         insertHolding(connection, seed);
-        creditSystemCash(connection, seed.systemAccountId(), seed.fundCash());
         try (PreparedStatement statement = connection.prepareStatement("""
                 INSERT INTO bluechip_companies (company_id, industry, system_account_uuid, lower_price_minor, upper_price_minor,
                   model_price_minor, spread_bps, event_sensitivity_bps, payout_bps, next_event_at, next_dividend_at)
@@ -315,17 +314,6 @@ public final class SqlBluechipRepository implements BluechipRepository {
     private static void insertHolding(Connection connection, BluechipSeed seed) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("INSERT INTO share_holdings (company_id, holder_uuid, available_shares, reserved_shares) VALUES (?, ?, ?, 0)")) {
             statement.setString(1, seed.companyId().value().toString()); statement.setString(2, seed.systemAccountId().toString()); statement.setLong(3, seed.fundShares()); statement.executeUpdate();
-        }
-    }
-    private static void creditSystemCash(Connection connection, UUID accountId, Money amount) throws SQLException {
-        try (PreparedStatement select = connection.prepareStatement("SELECT available_minor, reserved_minor FROM securities_cash_accounts WHERE player_uuid = ?")) {
-            select.setString(1, accountId.toString()); try (ResultSet rows = select.executeQuery()) {
-                if (!rows.next()) { try (PreparedStatement insert = connection.prepareStatement("INSERT INTO securities_cash_accounts (player_uuid, available_minor, reserved_minor) VALUES (?, ?, 0)")) { insert.setString(1, accountId.toString()); insert.setLong(2, amount.minorUnits()); insert.executeUpdate(); } return; }
-                long available = Math.addExact(rows.getLong(1), amount.minorUnits()); long reserved = rows.getLong(2);
-                try (PreparedStatement update = connection.prepareStatement("UPDATE securities_cash_accounts SET available_minor = ? WHERE player_uuid = ? AND available_minor = ? AND reserved_minor = ?")) {
-                    update.setLong(1, available); update.setString(2, accountId.toString()); update.setLong(3, rows.getLong(1)); update.setLong(4, reserved); if (update.executeUpdate() != 1) throw new IllegalStateException("system cash account changed during bootstrap");
-                }
-            }
         }
     }
     private static UUID deterministicId(String prefix, CompanyId companyId) { return UUID.nameUUIDFromBytes((prefix + companyId.value()).getBytes(StandardCharsets.UTF_8)); }

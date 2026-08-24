@@ -136,7 +136,7 @@ class MarketEventServiceTest {
     private static Database migrated(java.nio.file.Path file) throws Exception { var database = new Database("jdbc:sqlite:" + file); database.migrate(); return database; }
     private static SqlBluechipRepository seeded(Database database, MutableClock clock) {
         var repository = new SqlBluechipRepository(database.dataSource());
-        new BluechipBootstrapService(config(), UUID.fromString("00000000-0000-0000-0000-000000000099"), new SqlCompanyRepository(database.dataSource()), new SqlStockListingRepository(database.dataSource()), repository, database, Runnable::run, clock::now).initializeMissing().toCompletableFuture().join();
+        TestBluechipFixture.bootstrap(database, repository, config(), UUID.fromString("00000000-0000-0000-0000-000000000099"), clock.now());
         return repository;
     }
     private static BluechipConfig config() {

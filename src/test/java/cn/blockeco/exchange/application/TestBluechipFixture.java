@@ -3,7 +3,9 @@ package cn.blockeco.exchange.application;
 import cn.blockeco.exchange.domain.company.CompanyId;
 import cn.blockeco.exchange.infrastructure.sql.Database;
 import cn.blockeco.exchange.infrastructure.sql.SqlBluechipRepository;
+import cn.blockeco.exchange.infrastructure.sql.SqlBluechipBootstrapFundingRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlCompanyRepository;
+import cn.blockeco.exchange.infrastructure.sql.SqlSecuritiesCashRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlStockListingRepository;
 import cn.blockeco.exchange.paper.BluechipConfig;
 import cn.blockeco.exchange.ports.BluechipRepository;
@@ -28,9 +30,17 @@ final class TestBluechipFixture {
     }
 
     static void seed(Database database, SqlBluechipRepository repository, Instant now) {
-        new BluechipBootstrapService(config(), SYSTEM, new SqlCompanyRepository(database.dataSource()),
-                new SqlStockListingRepository(database.dataSource()), repository, database, Runnable::run, () -> now)
-                .initializeMissing().toCompletableFuture().join();
+        bootstrap(database, repository, config(), SYSTEM, now);
+    }
+    static void bootstrap(Database database, SqlBluechipRepository repository, BluechipConfig config, UUID system, Instant now) {
+        var records = new SqlBluechipBootstrapFundingRepository(database.dataSource());
+        var funding = new BluechipBootstrapFundingService(system, records, database, new BluechipBootstrapFundingService.EscrowEconomy() {
+            @Override public cn.blockeco.exchange.ports.EconomyGateway.Result withdraw(UUID player, cn.blockeco.exchange.domain.money.Money amount) { return cn.blockeco.exchange.ports.EconomyGateway.Result.success("ok"); }
+            @Override public cn.blockeco.exchange.ports.EconomyGateway.Result deposit(UUID player, cn.blockeco.exchange.domain.money.Money amount) { return cn.blockeco.exchange.ports.EconomyGateway.Result.success("ok"); }
+            @Override public cn.blockeco.exchange.ports.EconomyGateway.Result depositEscrow(cn.blockeco.exchange.domain.money.Money amount) { return cn.blockeco.exchange.ports.EconomyGateway.Result.success("ok"); }
+        }, new cn.blockeco.exchange.ports.MainThreadExecutor() { @Override public <T> java.util.concurrent.CompletionStage<T> submit(java.util.function.Supplier<T> work) { return java.util.concurrent.CompletableFuture.completedFuture(work.get()); } }, () -> now);
+        new BluechipBootstrapService(config, system, new SqlCompanyRepository(database.dataSource()), new SqlStockListingRepository(database.dataSource()), repository,
+                new SqlSecuritiesCashRepository(database.dataSource()), funding, records, database, Runnable::run, () -> now).initializeMissing().toCompletableFuture().join();
     }
 
     static UUID addExternalHolder(Database database, BluechipRepository.BluechipCompany company, long shares) {

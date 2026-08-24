@@ -9,7 +9,9 @@ import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.paper.BluechipConfig;
 import cn.blockeco.exchange.ports.AppClock;
 import cn.blockeco.exchange.ports.BluechipRepository;
+import cn.blockeco.exchange.ports.BluechipBootstrapFundingRepository;
 import cn.blockeco.exchange.ports.CompanyRepository;
+import cn.blockeco.exchange.ports.SecuritiesCashRepository;
 import cn.blockeco.exchange.ports.StockListingRepository;
 import cn.blockeco.exchange.ports.TransactionRunner;
 import java.nio.charset.StandardCharsets;
@@ -23,30 +25,44 @@ import java.util.concurrent.Executor;
 /** Creates the configured fictional companies through the ordinary company/listing/holding ledgers. */
 public final class BluechipBootstrapService {
     private final BluechipConfig config; private final UUID systemAccountId; private final CompanyRepository companies;
-    private final StockListingRepository listings; private final BluechipRepository bluechips; private final TransactionRunner transactions;
+    private final StockListingRepository listings; private final BluechipRepository bluechips; private final SecuritiesCashRepository cash;
+    private final BluechipBootstrapFundingService funding; private final BluechipBootstrapFundingRepository fundingRecords; private final TransactionRunner transactions;
     private final Executor executor; private final AppClock clock;
 
     public BluechipBootstrapService(BluechipConfig config, UUID systemAccountId, CompanyRepository companies, StockListingRepository listings,
-            BluechipRepository bluechips, TransactionRunner transactions, Executor executor, AppClock clock) {
+            BluechipRepository bluechips, SecuritiesCashRepository cash, BluechipBootstrapFundingService funding,
+            BluechipBootstrapFundingRepository fundingRecords, TransactionRunner transactions, Executor executor, AppClock clock) {
         this.config = Objects.requireNonNull(config); this.systemAccountId = requireSystemAccount(systemAccountId); this.companies = Objects.requireNonNull(companies);
-        this.listings = Objects.requireNonNull(listings); this.bluechips = Objects.requireNonNull(bluechips); this.transactions = Objects.requireNonNull(transactions);
+        this.listings = Objects.requireNonNull(listings); this.bluechips = Objects.requireNonNull(bluechips); this.cash=Objects.requireNonNull(cash); this.funding=Objects.requireNonNull(funding); this.fundingRecords=Objects.requireNonNull(fundingRecords); this.transactions = Objects.requireNonNull(transactions);
         this.executor = Objects.requireNonNull(executor); this.clock = Objects.requireNonNull(clock);
     }
     public CompletionStage<BluechipBootstrapResult> initializeMissing() { return CompletableFuture.supplyAsync(this::initialize, executor); }
     private BluechipBootstrapResult initialize() {
         validateMetadataSet();
-        int created = 0;
-        for (BluechipDefinition definition : config.definitions()) if (initialize(definition)) created++;
-        return new BluechipBootstrapResult(created);
+        Money total = Money.ofMinor(config.definitions().stream().mapToLong(BluechipDefinition::initialFundCash).reduce(0L, Math::addExact));
+        var funded = funding.ensureEscrowFunded(total);
+        var persisted = bluechips.bluechipCompanyIds();
+        if (persisted.isEmpty()) {
+            transactions.inTransaction(connection -> {
+                for (BluechipDefinition definition : config.definitions()) seed(connection, definition);
+                cash.applyBootstrapLiquidity(connection, systemAccountId, total, true, clock.now());
+                fundingRecords.complete(connection, funded.id(), clock.now());
+                return null;
+            });
+            return new BluechipBootstrapResult(config.definitions().size());
+        }
+        for (BluechipDefinition definition : config.definitions()) validateExisting(bluechips.findByCompanyId(companyId(definition.code())).orElseThrow(), companies.findById(companyId(definition.code())).orElseThrow(), definition);
+        if (funded.state() == BluechipBootstrapFundingRepository.State.ESCROW_DEPOSITED) transactions.inTransaction(connection -> {
+            cash.applyBootstrapLiquidity(connection, systemAccountId, total, false, clock.now());
+            fundingRecords.complete(connection, funded.id(), clock.now());
+            return null;
+        });
+        return new BluechipBootstrapResult(0);
     }
-    private boolean initialize(BluechipDefinition definition) {
+    private void seed(java.sql.Connection connection, BluechipDefinition definition) throws java.sql.SQLException {
         CompanyId id = companyId(definition.code());
-        var bluechip = bluechips.findByCompanyId(id);
-        var company = companies.findById(id);
-        var sameName = companies.findByNormalizedName(Company.normalizeName(definition.displayName()));
-        if (bluechip.isPresent()) { validateExisting(bluechip.orElseThrow(), company.orElseThrow(), definition); return false; }
-        if (company.isPresent() || sameName.isPresent()) throw new IllegalStateException("bluechip collision for " + definition.code());
-        transactions.inTransaction(connection -> {
+        // initialize() already established that no bluechip metadata exists.  Do not open a
+        // second pooled connection here: SQLite is deliberately configured with one owner.
             Company seeded = Company.rehydrate(id, definition.displayName(), Company.normalizeName(definition.displayName()), systemAccountId,
                     Money.zero(), definition.totalShares(), DividendRate.FIFTY, CompanyStatus.LISTED, clock.now());
             companies.insert(connection, seeded);
@@ -55,9 +71,6 @@ public final class BluechipBootstrapService {
                     Money.ofMinor(definition.referencePrice()), Money.ofMinor(definition.lowerBound()), Money.ofMinor(definition.upperBound()),
                     definition.spreadBps(), definition.eventSensitivityBps(), definition.dividendPayoutBps(), definition.initialFundShares(),
                     Money.ofMinor(definition.initialFundCash()), clock.now()));
-            return null;
-        });
-        return true;
     }
     private void validateMetadataSet() {
         var persistedIds = bluechips.bluechipCompanyIds();

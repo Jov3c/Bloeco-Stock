@@ -18,7 +18,7 @@ final class BluechipBootstrapServiceTestSupport {
     BluechipBootstrapServiceTestSupport(Database database, SqlBluechipRepository bluechips, Instant now) { this.database = database; this.bluechips = bluechips; this.now = now; }
     void initializeOne() {
         // Bootstrap validates a complete ten-company configuration, so seed the standard set and use its first company.
-        new BluechipBootstrapService(config(), SYSTEM, new SqlCompanyRepository(database.dataSource()), new SqlStockListingRepository(database.dataSource()), bluechips, database, Runnable::run, () -> now).initializeMissing().toCompletableFuture().join();
+        TestBluechipFixture.bootstrap(database, bluechips, config(), SYSTEM, now);
     }
     private static BluechipConfig config() {
         var yaml = new YamlConfiguration(); var entries = new java.util.ArrayList<Map<String, Object>>();

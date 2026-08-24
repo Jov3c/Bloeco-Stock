@@ -151,6 +151,22 @@ class MigrationTest {
     }
 
     @Test
+    void v012_creates_durable_bluechip_bootstrap_funding_states() throws Exception {
+        Path databaseFile = Files.createTempFile("blockstock-v012-migration-", ".db");
+        try (Database database = new Database("jdbc:sqlite:" + databaseFile)) {
+            database.migrate(); database.migrate();
+            try (Connection connection = database.dataSource().getConnection()) {
+                assertThat(tableExists(connection, "bluechip_bootstrap_funding")).isTrue();
+                assertThat(historyRows(connection, "V012")).isEqualTo(1);
+                try (PreparedStatement invalid = connection.prepareStatement("INSERT INTO bluechip_bootstrap_funding VALUES ('id','system',1,'RETRIED','',?,?)")) {
+                    invalid.setString(1, ANNOUNCED_AT.toString()); invalid.setString(2, ANNOUNCED_AT.toString());
+                    assertThatThrownBy(invalid::executeUpdate).isInstanceOf(Exception.class);
+                }
+            }
+        } finally { Files.deleteIfExists(databaseFile); }
+    }
+
+    @Test
     void v003_creates_finance_tables_with_one_cash_account_and_holding_per_owner() throws Exception {
         Path databaseFile = Files.createTempFile("blockeco-v003-migration-", ".db");
         try (Database database = new Database("jdbc:sqlite:" + databaseFile)) {

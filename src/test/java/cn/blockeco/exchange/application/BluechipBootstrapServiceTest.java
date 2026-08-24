@@ -9,7 +9,9 @@ import cn.blockeco.exchange.domain.company.DividendRate;
 import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.infrastructure.sql.Database;
 import cn.blockeco.exchange.infrastructure.sql.SqlBluechipRepository;
+import cn.blockeco.exchange.infrastructure.sql.SqlBluechipBootstrapFundingRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlCompanyRepository;
+import cn.blockeco.exchange.infrastructure.sql.SqlSecuritiesCashRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlStockListingRepository;
 import cn.blockeco.exchange.paper.BluechipConfig;
 import java.nio.file.Files;
@@ -44,6 +46,22 @@ class BluechipBootstrapServiceTest {
             assertThat(first.fundCash()).isEqualTo(Money.ofMinor(config.definitions().getFirst().initialFundCash()));
             assertThat(first.systemAccountId()).isEqualTo(SYSTEM_ACCOUNT);
             assertThat(first.listing().stockCode()).startsWith("BS");
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
+    @Test
+    void initialSystemLiquidityIsBackedByTheEscrowLedger() throws Exception {
+        var file = Files.createTempFile("blockstock-bluechip-escrow-ledger-", ".db");
+        try (Database database = migratedDatabase(file)) {
+            BluechipBootstrapService service = service(database, new SqlBluechipRepository(database.dataSource()), config());
+
+            service.initializeMissing().toCompletableFuture().join();
+
+            long seededCash = systemCash(database);
+            assertThat(new SqlSecuritiesCashRepository(database.dataSource())
+                    .reconcile(Money.ofMinor(seededCash)).confirmedDifference()).isEqualTo(Money.zero());
         } finally {
             Files.deleteIfExists(file);
         }
@@ -136,8 +154,15 @@ class BluechipBootstrapServiceTest {
     }
 
     private BluechipBootstrapService service(Database database, SqlBluechipRepository repository, BluechipConfig config) {
+        var fundingRecords = new SqlBluechipBootstrapFundingRepository(database.dataSource());
+        var funding = new BluechipBootstrapFundingService(SYSTEM_ACCOUNT, fundingRecords, database, new BluechipBootstrapFundingService.EscrowEconomy() {
+            @Override public cn.blockeco.exchange.ports.EconomyGateway.Result withdraw(UUID player, Money amount) { return cn.blockeco.exchange.ports.EconomyGateway.Result.success("withdrawn"); }
+            @Override public cn.blockeco.exchange.ports.EconomyGateway.Result deposit(UUID player, Money amount) { return cn.blockeco.exchange.ports.EconomyGateway.Result.success("deposited"); }
+            @Override public cn.blockeco.exchange.ports.EconomyGateway.Result depositEscrow(Money amount) { return cn.blockeco.exchange.ports.EconomyGateway.Result.success("escrow deposited"); }
+        }, new cn.blockeco.exchange.ports.MainThreadExecutor() { @Override public <T> java.util.concurrent.CompletionStage<T> submit(java.util.function.Supplier<T> work) { return java.util.concurrent.CompletableFuture.completedFuture(work.get()); } }, () -> NOW);
         return new BluechipBootstrapService(config, SYSTEM_ACCOUNT, new SqlCompanyRepository(database.dataSource()),
-                new SqlStockListingRepository(database.dataSource()), repository, database, Runnable::run, () -> NOW);
+                new SqlStockListingRepository(database.dataSource()), repository, new SqlSecuritiesCashRepository(database.dataSource()), funding, fundingRecords,
+                database, Runnable::run, () -> NOW);
     }
 
     private static Database migratedDatabase(java.nio.file.Path file) throws Exception {

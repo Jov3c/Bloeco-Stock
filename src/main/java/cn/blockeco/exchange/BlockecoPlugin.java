@@ -31,6 +31,7 @@ import cn.blockeco.exchange.infrastructure.sql.SqlSecondaryTradingRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlSecuritiesCashRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlNativeAssetRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlBluechipRepository;
+import cn.blockeco.exchange.infrastructure.sql.SqlBluechipBootstrapFundingRepository;
 import cn.blockeco.exchange.infrastructure.vault.VaultEconomyGateway;
 import cn.blockeco.exchange.infrastructure.vault.VaultSecuritiesCashGateway;
 import cn.blockeco.exchange.infrastructure.vault.VaultTreasuryEscrowGateway;
@@ -125,11 +126,19 @@ public final class BlockecoPlugin extends JavaPlugin {
         var bluechipAccountId = configuredBluechipSystemAccount();
         if (getServer().getOfflinePlayer(bluechipAccountId).hasPlayedBefore()) throw new IllegalStateException("蓝筹系统账户不能是已知真实玩家");
         var bluechipConfig = BluechipConfig.load(getConfig(), scale);
+        var economy = new VaultEconomyGateway(getServer(), scale);
+        var cashRepository = new SqlSecuritiesCashRepository(db.dataSource());
+        var bluechipFunding = new cn.blockeco.exchange.application.BluechipBootstrapFundingService(bluechipAccountId,
+                new SqlBluechipBootstrapFundingRepository(db.dataSource()), db,
+                new cn.blockeco.exchange.application.BluechipBootstrapFundingService.EscrowEconomy() {
+                    @Override public cn.blockeco.exchange.ports.EconomyGateway.Result withdraw(java.util.UUID player, Money amount) { return economy.withdraw(player, amount); }
+                    @Override public cn.blockeco.exchange.ports.EconomyGateway.Result deposit(java.util.UUID player, Money amount) { return economy.deposit(player, amount); }
+                    @Override public cn.blockeco.exchange.ports.EconomyGateway.Result depositEscrow(Money amount) { return economy.deposit(escrowId, amount); }
+                }, mainThread, clock);
         var bluechipBootstrap = new BluechipBootstrapService(bluechipConfig, bluechipAccountId, companies,
                 new cn.blockeco.exchange.infrastructure.sql.SqlStockListingRepository(db.dataSource()), new SqlBluechipRepository(db.dataSource()),
-                db, sqlExecutor, clock);
+                cashRepository, bluechipFunding, new SqlBluechipBootstrapFundingRepository(db.dataSource()), db, sqlExecutor, clock);
         bluechipBootstrap.initializeMissing().toCompletableFuture().join();
-        var economy = new VaultEconomyGateway(getServer(), scale);
         var finance = new SqlCompanyFinanceRepository(db.dataSource());
         var escrow = new VaultTreasuryEscrowGateway(economy, mainThread, escrowId);
         var registration = new CompanyRegistrationService(companies, sagas, new SqlAuditLog(), db, economy, mainThread, sqlExecutor, clock, creationRules.current().registrationFee(), creationRules::current, finance, escrow, creationRules.current().initialShares());
@@ -156,7 +165,6 @@ public final class BlockecoPlugin extends JavaPlugin {
         ZoneId marketZone = ZoneId.of(getConfig().getString("market.time-zone", "Asia/Shanghai"));
         var publicRepository = new SqlPublicStockRepository(db.dataSource());
         var publicQueries = new cn.blockeco.exchange.application.PublicStockQueryService(publicRepository, sqlExecutor, Clock.systemUTC(), marketZone);
-        var cashRepository = new SqlSecuritiesCashRepository(db.dataSource());
         var tradingRepository = new SqlSecondaryTradingRepository(db.dataSource(), cashRepository);
         var bluechipRepository = new SqlBluechipRepository(db.dataSource());
         var cashGateway = new VaultSecuritiesCashGateway(economy, mainThread, escrowId);

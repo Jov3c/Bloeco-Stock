@@ -16,6 +16,7 @@ import java.util.List;
 public interface SecuritiesCashRepository {
     Optional<SecuritiesCashAccount> find(UUID playerId);
     void creditAvailable(Connection connection, UUID playerId, Money amount, Instant occurredAt) throws SQLException;
+    void applyBootstrapLiquidity(Connection connection, UUID systemAccountId, Money amount, boolean creditCash, Instant occurredAt) throws SQLException;
     void reserve(Connection connection, UUID playerId, Money amount) throws SQLException;
     void release(Connection connection, UUID playerId, Money amount) throws SQLException;
     void prepareOperation(Connection connection, SecuritiesCashOperation operation) throws SQLException;
