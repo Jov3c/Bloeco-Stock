@@ -186,7 +186,11 @@ public final class BlockecoPlugin extends JavaPlugin {
                 () -> bluechipBootstrap.initializeMissing(),
                 paused -> marketMaker.setQuotesPaused(paused),
                 (code, kind, value) -> db.inTransaction(connection -> { bluechipRepository.adjustFund(connection, code, kind, value, clock.now()); return null; }),
-                (scope, impact) -> { if ("market".equalsIgnoreCase(scope)) marketEvents.triggerTestMarketEvent(impact); else marketEvents.triggerTestEvent(scope.toUpperCase(java.util.Locale.ROOT), impact); }, messages,
+                new BluechipAdminCommand.EventControl() {
+                    @Override public void company(String code, int impact) { marketEvents.triggerTestEvent(code.toUpperCase(java.util.Locale.ROOT), impact); }
+                    @Override public void industry(String industry, int impact) { marketEvents.triggerTestIndustryEvent(industry, impact); }
+                    @Override public void market(int impact) { marketEvents.triggerTestMarketEvent(impact); }
+                }, messages,
                 bluechipConfig.definitions().stream().map(cn.blockeco.exchange.domain.bluechip.BluechipDefinition::industry).distinct().toList());
         adminCommand.setExecutor((sender, registered, label, args) -> args.length > 0 && "bluechip".equalsIgnoreCase(args[0])
                 ? bluechipAdmin.onCommand(sender, registered, label, args) : adminConfig.onCommand(sender, registered, label, args));

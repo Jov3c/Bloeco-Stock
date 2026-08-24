@@ -22,7 +22,7 @@ public final class BluechipAdminCommand implements CommandExecutor, TabCompleter
             case "pause" -> { if(args.length!=2){usage(sender);break;} quotes.setPaused(true); sender.sendMessage(messages.result("蓝筹报价已暂停。")); }
             case "resume" -> { if(args.length!=2){usage(sender);break;} quotes.setPaused(false); sender.sendMessage(messages.result("蓝筹报价已恢复。")); }
             case "fund" -> { if(args.length!=5){usage(sender);break;} long value=Long.parseLong(args[4]); if(value==0){sender.sendMessage(messages.result("资金调整不能为零。"));break;} fund.adjust(args[2].toUpperCase(Locale.ROOT),args[3].toLowerCase(Locale.ROOT),value);sender.sendMessage(messages.result("蓝筹资金已调整。")); }
-            case "event" -> { if(args.length<3){usage(sender);break;} if("industry".equalsIgnoreCase(args[2])) { if(args.length!=5){usage(sender);break;} if(!industries.contains(args[3])) throw new IllegalArgumentException("unknown industry"); events.trigger(args[3],Integer.parseInt(args[4])); } else { if(args.length!=4){usage(sender);break;} events.trigger(args[2],Integer.parseInt(args[3])); } sender.sendMessage(messages.result("蓝筹事件已触发。")); }
+            case "event" -> { if(args.length<3){usage(sender);break;} if("industry".equalsIgnoreCase(args[2])) { if(args.length!=5){usage(sender);break;} if(!industries.contains(args[3])) throw new IllegalArgumentException("unknown industry"); events.industry(args[3],Integer.parseInt(args[4])); } else if("market".equalsIgnoreCase(args[2])) { if(args.length!=4){usage(sender);break;} events.market(Integer.parseInt(args[3])); } else { if(args.length!=4){usage(sender);break;} events.company(args[2],Integer.parseInt(args[3])); } sender.sendMessage(messages.result("蓝筹事件已触发。")); }
             default -> usage(sender);
         }} catch (IllegalArgumentException failure) { sender.sendMessage(messages.result("蓝筹参数无效，调整后余额不得为负。")); } catch (RuntimeException failure) { sender.sendMessage(messages.result("蓝筹操作失败，请检查代码和状态。")); }
         return true;
@@ -33,5 +33,5 @@ public final class BluechipAdminCommand implements CommandExecutor, TabCompleter
     @FunctionalInterface public interface Initializer { void initialize(); }
     @FunctionalInterface public interface PauseControl { void setPaused(boolean paused); }
     @FunctionalInterface public interface FundControl { void adjust(String code,String kind,long value); }
-    @FunctionalInterface public interface EventControl { void trigger(String scope,int impact); }
+    public interface EventControl { void company(String code, int impact); void industry(String industry, int impact); void market(int impact); }
 }

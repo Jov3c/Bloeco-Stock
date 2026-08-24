@@ -13,7 +13,7 @@ class BluechipAdminCommandTest {
         Player player = mock(Player.class); when(player.hasPermission(BluechipAdminCommand.PERMISSION)).thenReturn(true);
         java.util.concurrent.atomic.AtomicReference<String> scope = new java.util.concurrent.atomic.AtomicReference<>();
         BluechipAdminCommand command = new BluechipAdminCommand(() -> { }, paused -> { }, (code, kind, value) -> { },
-                (target, impact) -> scope.set(target + ":" + impact), new Messages(new org.bukkit.configuration.file.YamlConfiguration()), java.util.List.of("Energy"));
+                new BluechipAdminCommand.EventControl() { @Override public void company(String code, int impact) { throw new AssertionError("wrong route"); } @Override public void industry(String industry, int impact) { scope.set(industry + ":" + impact); } @Override public void market(int impact) { throw new AssertionError("wrong route"); } }, new Messages(new org.bukkit.configuration.file.YamlConfiguration()), java.util.List.of("Energy"));
 
         command.onCommand(player, mock(Command.class), "stockadmin", new String[]{"bluechip", "event", "industry", "Energy", "500"});
 
@@ -23,7 +23,7 @@ class BluechipAdminCommandTest {
         Player player = mock(Player.class); when(player.hasPermission(BluechipAdminCommand.PERMISSION)).thenReturn(false);
         BluechipAdminCommand command = new BluechipAdminCommand(() -> { throw new AssertionError("must not initialize"); },
                 paused -> { throw new AssertionError("must not pause"); }, (code, kind, value) -> { throw new AssertionError("must not fund"); },
-                (scope, impact) -> { throw new AssertionError("must not trigger event"); }, new Messages(new org.bukkit.configuration.file.YamlConfiguration()));
+                new BluechipAdminCommand.EventControl() { @Override public void company(String code, int impact) { throw new AssertionError("must not trigger event"); } @Override public void industry(String industry, int impact) { throw new AssertionError("must not trigger event"); } @Override public void market(int impact) { throw new AssertionError("must not trigger event"); } }, new Messages(new org.bukkit.configuration.file.YamlConfiguration()));
 
         assertThat(command.onCommand(player, mock(Command.class), "stockadmin", new String[]{"bluechip", "init"})).isTrue();
     }
