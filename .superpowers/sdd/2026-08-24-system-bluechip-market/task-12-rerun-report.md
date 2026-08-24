@@ -177,3 +177,23 @@ minor units, must equal `escrow_ledger_entries` liabilities, and those must
 equal securities cash accounts plus the compensation fund.  It cannot be
 executed in this fresh run because the prior mandatory GUI invariant blocks
 the lifecycle stages.
+
+## Task 21 fresh rerun — production opening matcher is still silent
+
+Task 21 (`cc0cc08`) was rebuilt and run with another fresh database.  The
+same real Paper result remains: PREOPEN queues, five opening trades commit,
+and the OPEN vanilla NOVA detail has no `卖1`.  The exact reason is now a
+separate production-wiring gap: the default `BluechipMarketMakerService`
+constructor supplies `market::matchQueuedOrdersSilently` for the opening quote
+batch.  That method has `notify=false`, so it never invokes
+`SecondaryMarketService.afterMatchedOrders` at all.  Task 21's deferred flag
+can only act after the callback is requested; it is never requested on this
+actual opening path.
+
+The Task 21 unit test injects a custom queued matcher which manually calls
+`replenishAfterMatch()`, and thus does not exercise the production default
+silent-matcher wiring.  The repair needs an opening matcher path that reports
+whether it made trades and requests exactly one non-recursive refill (or an
+equivalent explicit signal), plus an integration test using the default
+constructor.  QA stopped at the same mandatory GUI invariant; no final full
+test/shadowJar pass is asserted.
