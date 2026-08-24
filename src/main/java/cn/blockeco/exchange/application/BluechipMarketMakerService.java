@@ -81,14 +81,14 @@ public final class BluechipMarketMakerService {
 
     private List<Quote> quotes(BluechipRepository.BluechipCompany bluechip, Money availableCash) {
         List<Quote> quotes = new ArrayList<>(); long cash = availableCash.minorUnits(), shares = bluechip.fundShares();
-        long step = Math.max(1, ceilDiv(Math.multiplyExact(bluechip.referencePrice().minorUnits(), Math.max(1, bluechip.spreadBps())), 20_000));
+        long step = Math.max(1, ceilDiv(Math.multiplyExact(bluechip.modelPrice().minorUnits(), Math.max(1, bluechip.spreadBps())), 20_000));
         for (int level = 1; level <= LEVELS; level++) {
-            long bid = bluechip.referencePrice().minorUnits() - Math.multiplyExact(step, level);
+            long bid = bluechip.modelPrice().minorUnits() - Math.multiplyExact(step, level);
             if (bid > bluechip.lowerPrice().minorUnits()) {
                 long cost = Math.addExact(bid, FeePolicy.cumulativeFee(Money.ofMinor(bid), market.buyerFeeBps()).minorUnits());
                 if (cash >= cost) { quotes.add(new Quote(Side.BUY, Money.ofMinor(bid), 1)); cash -= cost; }
             }
-            long ask = bluechip.referencePrice().minorUnits() + Math.multiplyExact(step, level);
+            long ask = bluechip.modelPrice().minorUnits() + Math.multiplyExact(step, level);
             if (ask < bluechip.upperPrice().minorUnits() && shares > 0) { quotes.add(new Quote(Side.SELL, Money.ofMinor(ask), 1)); shares--; }
         }
         return List.copyOf(quotes);

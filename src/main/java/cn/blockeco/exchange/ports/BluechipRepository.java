@@ -6,6 +6,7 @@ import cn.blockeco.exchange.domain.money.Money;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -21,15 +22,25 @@ public interface BluechipRepository {
     /** Append a protection transition only when its state differs from the last observed state. */
     void recordLiquidityStatus(CompanyId companyId, boolean degraded, Instant occurredAt);
     void insertInitial(Connection connection, BluechipSeed seed) throws SQLException;
+    void persistEvent(Connection connection, cn.blockeco.exchange.domain.bluechip.BluechipEvent event) throws SQLException;
+    void applyModelImpact(Connection connection, String scope, String companyId, String industry, int impactBps) throws SQLException;
+    void decayModels(Connection connection) throws SQLException;
+    void closeCandle(Connection connection, CompanyId companyId, LocalDate day) throws SQLException;
+    List<cn.blockeco.exchange.domain.bluechip.BluechipEvent> recentEvents(int limit);
+    Optional<Candle> candle(CompanyId companyId, LocalDate day);
+    List<BluechipCompany> dueCompanyEvents(Instant now);
+    boolean marketEventDue(Instant now);
+    void scheduleNextCompanyEvent(Connection connection, CompanyId companyId, Instant nextEventAt) throws SQLException;
 
     record BluechipCompany(CompanyId companyId, StockListing listing, String industry, UUID systemAccountId,
-                           Money referencePrice, Money lowerPrice, Money upperPrice, int spreadBps, long fundShares, Money fundCash) { }
+                           Money referencePrice, Money modelPrice, Money lowerPrice, Money upperPrice, int spreadBps, long fundShares, Money fundCash) { }
 
     record BluechipMetadata(CompanyId companyId, StockListing listing, String industry, UUID systemAccountId,
                             Money referencePrice, Money lowerPrice, Money upperPrice, int spreadBps,
                             int eventSensitivityBps, int payoutBps) { }
 
     record SeedAudit(Money cash, long shares) { }
+    record Candle(Money open, Money high, Money low, Money close, long volumeShares) { }
 
     record BluechipSeed(CompanyId companyId, StockListing listing, String industry, UUID systemAccountId,
                         Money referencePrice, Money lowerPrice, Money upperPrice, int spreadBps,

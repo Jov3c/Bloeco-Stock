@@ -24,4 +24,5 @@ public final class PublicStockQueryService {
     public CompletionStage<List<PublicAnnouncement>> announcements(String companyNameOrCode, int limit) { return CompletableFuture.supplyAsync(()->repository.findAnnouncements(companyNameOrCode,limit), sqlExecutor); }
     public CompletionStage<Optional<UUID>> resolveOpenOffering(String companyNameOrCode) { return CompletableFuture.supplyAsync(()->repository.findOpenOfferingByCompanyOrCode(companyNameOrCode), sqlExecutor); }
     public CompletionStage<List<PublicStockSymbol>> symbols() { return CompletableFuture.supplyAsync(repository::symbols, sqlExecutor); }
+    public CompletionStage<List<MarketNewsItem>> recentNews(int limit) { return CompletableFuture.supplyAsync(()->repository.recentNews(limit), sqlExecutor); }
 }

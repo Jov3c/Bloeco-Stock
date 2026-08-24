@@ -16,4 +16,5 @@ public interface PublicStockRepository {
     List<PublicAnnouncement> findAnnouncements(String companyNameOrCode, int limit);
     Optional<UUID> findOpenOfferingByCompanyOrCode(String companyNameOrCode);
     List<PublicStockSymbol> symbols();
+    default List<MarketNewsItem> recentNews(int limit) { return List.of(); }
 }

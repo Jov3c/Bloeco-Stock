@@ -10,6 +10,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
@@ -104,21 +105,60 @@ public final class SqlBluechipRepository implements BluechipRepository {
         }
     }
 
+    @Override public void persistEvent(Connection connection, cn.blockeco.exchange.domain.bluechip.BluechipEvent event) throws SQLException {
+        requireTransaction(connection);
+        try (PreparedStatement s = connection.prepareStatement("INSERT INTO bluechip_events (id, scope, company_id, industry, headline, body, price_impact_bps, profit_impact_bps, starts_at, ends_at, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+            s.setString(1,event.id()); s.setString(2,event.scope()); s.setString(3,event.companyId()); s.setString(4,event.industry()); s.setString(5,event.headline()); s.setString(6,event.body()); s.setInt(7,event.priceImpactBps()); s.setInt(8,event.profitImpactBps()); s.setString(9,event.startsAt().toString()); s.setString(10,event.endsAt().toString()); s.setString(11,event.state()); s.executeUpdate();
+        }
+        if (event.companyId() != null) try (PreparedStatement s = connection.prepareStatement("INSERT INTO company_announcements (id, company_id, body, created_at) VALUES (?, ?, ?, ?)")) {
+            s.setString(1, UUID.nameUUIDFromBytes(("event-announcement:"+event.id()).getBytes(StandardCharsets.UTF_8)).toString()); s.setString(2,event.companyId()); s.setString(3,event.headline()+" — "+event.body()); s.setString(4,event.startsAt().toString()); s.executeUpdate();
+        }
+        if ("INDUSTRY".equals(event.scope())) try (PreparedStatement companies = connection.prepareStatement("SELECT company_id FROM company_industry WHERE industry=?"); PreparedStatement announcement = connection.prepareStatement("INSERT INTO company_announcements (id, company_id, body, created_at) VALUES (?, ?, ?, ?)")) {
+            companies.setString(1,event.industry()); try(ResultSet rows=companies.executeQuery()){while(rows.next()){String id=rows.getString(1);announcement.setString(1,UUID.nameUUIDFromBytes(("event-announcement:"+event.id()+":"+id).getBytes(StandardCharsets.UTF_8)).toString());announcement.setString(2,id);announcement.setString(3,event.headline()+" — "+event.body());announcement.setString(4,event.startsAt().toString());announcement.addBatch();} announcement.executeBatch();}
+        }
+        try (PreparedStatement s = connection.prepareStatement("INSERT INTO audit_events (event_id, company_id, actor_uuid, event_type, payload_json, occurred_at) VALUES (?, ?, NULL, 'BLUECHIP_EVENT', ?, ?)")) {
+            s.setString(1, UUID.nameUUIDFromBytes(("event-audit:"+event.id()).getBytes(StandardCharsets.UTF_8)).toString()); s.setString(2,event.companyId()); s.setString(3,"{\"scope\":\""+event.scope()+"\",\"impactBps\":"+event.priceImpactBps()+"}"); s.setString(4,event.startsAt().toString()); s.executeUpdate();
+        }
+    }
+    @Override public void applyModelImpact(Connection connection, String scope, String companyId, String industry, int impactBps) throws SQLException {
+        requireTransaction(connection); String predicate = "COMPANY".equals(scope) ? "company_id = ?" : "industry = ?";
+        try (PreparedStatement select = connection.prepareStatement("SELECT company_id, model_price_minor, lower_price_minor, upper_price_minor, event_sensitivity_bps FROM bluechip_companies WHERE " + predicate); PreparedStatement update = connection.prepareStatement("UPDATE bluechip_companies SET model_price_minor=? WHERE company_id=?")) {
+            select.setString(1, "COMPANY".equals(scope) ? companyId : industry); try (ResultSet rows=select.executeQuery()) { while(rows.next()) { long old=rows.getLong(2); long delta=Math.round(old * (impactBps / 10_000.0d) * (rows.getInt(5) / 10_000.0d)); long next=Math.max(rows.getLong(3)+1,Math.min(rows.getLong(4)-1,Math.addExact(old,delta))); update.setLong(1,next); update.setString(2,rows.getString(1)); update.addBatch(); } update.executeBatch(); }
+        }
+    }
+    @Override public void decayModels(Connection connection) throws SQLException {
+        requireTransaction(connection);
+        try (PreparedStatement select=connection.prepareStatement("SELECT bc.company_id,bc.model_price_minor,sl.issue_reference_price_minor,bc.lower_price_minor,bc.upper_price_minor FROM bluechip_companies bc JOIN stock_listings sl ON sl.company_id=bc.company_id"); PreparedStatement update=connection.prepareStatement("UPDATE bluechip_companies SET model_price_minor=? WHERE company_id=?")) { try(ResultSet rows=select.executeQuery()) { while(rows.next()) { long model=rows.getLong(2),reference=rows.getLong(3), step=Math.max(1,Math.abs(model-reference)/4); long next=model==reference?model:(model>reference?Math.max(reference,model-step):Math.min(reference,model+step)); next=Math.max(rows.getLong(4)+1,Math.min(rows.getLong(5)-1,next)); update.setLong(1,next);update.setString(2,rows.getString(1));update.addBatch(); } update.executeBatch(); } }
+    }
+    @Override public void closeCandle(Connection connection, CompanyId companyId, LocalDate day) throws SQLException {
+        requireTransaction(connection); long fallback;
+        try(PreparedStatement s=connection.prepareStatement("SELECT model_price_minor FROM bluechip_companies WHERE company_id=?")){s.setString(1,companyId.value().toString());try(ResultSet r=s.executeQuery()){if(!r.next())return;fallback=r.getLong(1);}}
+        long open=fallback,high=fallback,low=fallback,close=fallback,volume=0; try(PreparedStatement s=connection.prepareStatement("SELECT price_minor,shares FROM stock_trades WHERE company_id=? AND occurred_at >= ? AND occurred_at < ? ORDER BY occurred_at,id")){s.setString(1,companyId.value().toString());s.setString(2,day.atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toString());s.setString(3,day.plusDays(1).atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toString());try(ResultSet r=s.executeQuery()){boolean any=false;while(r.next()){long price=r.getLong(1);if(!any){open=price;any=true;}close=price;high=Math.max(high,price);low=Math.min(low,price);volume=Math.addExact(volume,r.getLong(2));}}}
+        try(PreparedStatement s=connection.prepareStatement("INSERT INTO market_candles (company_id,trading_day,open_minor,high_minor,low_minor,close_minor,volume_shares) VALUES (?,?,?,?,?,?,?) ON CONFLICT(company_id,trading_day) DO UPDATE SET open_minor=excluded.open_minor,high_minor=excluded.high_minor,low_minor=excluded.low_minor,close_minor=excluded.close_minor,volume_shares=excluded.volume_shares")){s.setString(1,companyId.value().toString());s.setString(2,day.toString());s.setLong(3,open);s.setLong(4,high);s.setLong(5,low);s.setLong(6,close);s.setLong(7,volume);s.executeUpdate();}
+    }
+    @Override public List<cn.blockeco.exchange.domain.bluechip.BluechipEvent> recentEvents(int requested) { int limit=Math.max(1,Math.min(50,requested)); try(Connection c=dataSource.getConnection();PreparedStatement s=c.prepareStatement("SELECT id,scope,company_id,industry,headline,body,price_impact_bps,profit_impact_bps,starts_at,ends_at,state FROM bluechip_events ORDER BY starts_at DESC,id DESC LIMIT ?")){s.setInt(1,limit);try(ResultSet r=s.executeQuery()){java.util.ArrayList<cn.blockeco.exchange.domain.bluechip.BluechipEvent> result=new java.util.ArrayList<>();while(r.next())result.add(event(r));return List.copyOf(result);}}catch(SQLException e){throw new IllegalStateException("could not read bluechip events",e);} }
+    @Override public Optional<Candle> candle(CompanyId companyId,LocalDate day) { try(Connection c=dataSource.getConnection();PreparedStatement s=c.prepareStatement("SELECT open_minor,high_minor,low_minor,close_minor,volume_shares FROM market_candles WHERE company_id=? AND trading_day=?")){s.setString(1,companyId.value().toString());s.setString(2,day.toString());try(ResultSet r=s.executeQuery()){return r.next()?Optional.of(new Candle(Money.ofMinor(r.getLong(1)),Money.ofMinor(r.getLong(2)),Money.ofMinor(r.getLong(3)),Money.ofMinor(r.getLong(4)),r.getLong(5))):Optional.empty();}}catch(SQLException e){throw new IllegalStateException("could not read market candle",e);} }
+    @Override public List<BluechipCompany> dueCompanyEvents(Instant now) { return bluechips(" WHERE next_event_at <= ? ORDER BY next_event_at, company_id", now.toString()); }
+    @Override public boolean marketEventDue(Instant now) { try(Connection c=dataSource.getConnection();PreparedStatement s=c.prepareStatement("SELECT starts_at FROM bluechip_events WHERE scope IN ('INDUSTRY','MARKET') ORDER BY starts_at DESC LIMIT 1");ResultSet r=s.executeQuery()){return !r.next() || !Instant.parse(r.getString(1)).plus(24,ChronoUnit.HOURS).isAfter(now);}catch(SQLException e){throw new IllegalStateException("could not inspect market event schedule",e);} }
+    @Override public void scheduleNextCompanyEvent(Connection connection,CompanyId companyId,Instant next) throws SQLException { requireTransaction(connection);try(PreparedStatement s=connection.prepareStatement("UPDATE bluechip_companies SET next_event_at=? WHERE company_id=?")){s.setString(1,next.toString());s.setString(2,companyId.value().toString());s.executeUpdate();} }
+
     private Optional<BluechipCompany> findOne(String sql, String value) {
         try (Connection connection = dataSource.getConnection(); PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setString(1, value); try (ResultSet rows = statement.executeQuery()) { return rows.next() ? Optional.of(map(rows)) : Optional.empty(); }
         } catch (SQLException exception) { throw new IllegalStateException("could not read bluechip company", exception); }
     }
+    private List<BluechipCompany> bluechips(String suffix,String value) { try(Connection c=dataSource.getConnection();PreparedStatement s=c.prepareStatement(SELECT+suffix)){s.setString(1,value);try(ResultSet r=s.executeQuery()){java.util.ArrayList<BluechipCompany> result=new java.util.ArrayList<>();while(r.next())result.add(map(r));return List.copyOf(result);}}catch(SQLException e){throw new IllegalStateException("could not read due bluechip events",e);} }
     private static BluechipCompany map(ResultSet row) throws SQLException {
         CompanyId companyId = new CompanyId(UUID.fromString(row.getString("company_id")));
         StockListing listing = new StockListing(companyId, row.getString("stock_code"), Money.ofMinor(row.getLong("issue_reference_price_minor")), row.getLong("issued_shares"), Instant.parse(row.getString("listed_at")));
-        return new BluechipCompany(companyId, listing, row.getString("industry"), UUID.fromString(row.getString("system_account_uuid")), Money.ofMinor(row.getLong("model_price_minor")), Money.ofMinor(row.getLong("lower_price_minor")), Money.ofMinor(row.getLong("upper_price_minor")), row.getInt("spread_bps"), row.getLong("available_shares"), Money.ofMinor(row.getLong("fund_cash_minor")));
+        return new BluechipCompany(companyId, listing, row.getString("industry"), UUID.fromString(row.getString("system_account_uuid")), listing.issueReferencePrice(), Money.ofMinor(row.getLong("model_price_minor")), Money.ofMinor(row.getLong("lower_price_minor")), Money.ofMinor(row.getLong("upper_price_minor")), row.getInt("spread_bps"), row.getLong("available_shares"), Money.ofMinor(row.getLong("fund_cash_minor")));
     }
     private static BluechipMetadata mapMetadata(ResultSet row) throws SQLException {
         CompanyId companyId = new CompanyId(UUID.fromString(row.getString("company_id")));
         StockListing listing = new StockListing(companyId, row.getString("stock_code"), Money.ofMinor(row.getLong("issue_reference_price_minor")), row.getLong("issued_shares"), Instant.parse(row.getString("listed_at")));
         return new BluechipMetadata(companyId, listing, row.getString("industry"), UUID.fromString(row.getString("system_account_uuid")), Money.ofMinor(row.getLong("model_price_minor")), Money.ofMinor(row.getLong("lower_price_minor")), Money.ofMinor(row.getLong("upper_price_minor")), row.getInt("spread_bps"), row.getInt("event_sensitivity_bps"), row.getInt("payout_bps"));
     }
+    private static cn.blockeco.exchange.domain.bluechip.BluechipEvent event(ResultSet r)throws SQLException{return new cn.blockeco.exchange.domain.bluechip.BluechipEvent(r.getString(1),r.getString(2),r.getString(3),r.getString(4),r.getString(5),r.getString(6),r.getInt(7),r.getInt(8),Instant.parse(r.getString(9)),Instant.parse(r.getString(10)),r.getString(11));}
     private static void insertHolding(Connection connection, BluechipSeed seed) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("INSERT INTO share_holdings (company_id, holder_uuid, available_shares, reserved_shares) VALUES (?, ?, ?, 0)")) {
             statement.setString(1, seed.companyId().value().toString()); statement.setString(2, seed.systemAccountId().toString()); statement.setLong(3, seed.fundShares()); statement.executeUpdate();
