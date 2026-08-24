@@ -130,6 +130,47 @@ class BluechipMarketMakerServiceTest {
     }
 
     @Test
+    void productionOpeningSweepReplenishesFiveLevelsAfterPreopenBuyConsumesMakerOffers() throws Exception {
+        var file = Files.createTempFile("blockstock-maker-production-opening-refill-", ".db");
+        var database = new Database("jdbc:sqlite:" + file);
+        try (database) {
+            database.migrate();
+            var repository = new SqlBluechipRepository(database.dataSource());
+            new BluechipBootstrapServiceTestSupport(database, repository, NOW).initializeOne();
+            BluechipRepository.BluechipCompany bluechip = repository.all().getFirst();
+            var cash = new SqlSecuritiesCashRepository(database.dataSource());
+            var orders = new SqlSecondaryTradingRepository(database.dataSource(), cash);
+            var openingQuotePass = new java.util.concurrent.atomic.AtomicBoolean(false);
+            var sessionChecks = new AtomicInteger();
+            // The book is considered open for the quote pass itself, but only its final queued sweep
+            // may match. This isolates the production queued-matcher notification path from the normal
+            // per-order placement callback.
+            java.util.function.Supplier<MarketSession> openingSweepSession = () -> {
+                if (!openingQuotePass.get()) return new MarketSession(false);
+                int check = sessionChecks.incrementAndGet();
+                return new MarketSession(check <= 2 || check > 12);
+            };
+            var market = new SecondaryMarketService(orders, database, Runnable::run, () -> NOW, 0, openingSweepSession);
+            UUID player = UUID.randomUUID();
+            database.inTransaction(connection -> { cash.creditAvailable(connection, player, Money.ofMinor(10_000_000), NOW); return null; });
+            var queuedBuy = market.placeBuy(player, bluechip.listing().stockCode(), 5, Money.ofMinor(1_000_000)).toCompletableFuture().join().order();
+            openingQuotePass.set(true);
+
+            // This is the production constructor path: it owns the queued-opening matcher and receives
+            // settlement callbacks through the real SecondaryMarketService listener.
+            var maker = new BluechipMarketMakerService(repository, market, openingSweepSession, () -> NOW);
+            market.setAfterMatchedOrdersListener(maker::replenishAfterMatch);
+
+            maker.refreshQuotes().toCompletableFuture().join();
+
+            assertThat(tradeCount(database)).isEqualTo(5);
+            awaitUntil(() -> systemOrders(database, bluechip, "BUY").size() == 5
+                    && systemOrders(database, bluechip, "SELL").size() == 5);
+            assertThat(orders.findOrder(queuedBuy.id()).orElseThrow().state().name()).isEqualTo("FILLED");
+        } finally { file.toFile().deleteOnExit(); }
+    }
+
+    @Test
     void openSessionCreatesAtMostFiveBidAndFiveAskOrdersPerBluechip() throws Exception {
         var file = Files.createTempFile("blockstock-maker-", ".db");
         try (var database = new Database("jdbc:sqlite:" + file)) {
