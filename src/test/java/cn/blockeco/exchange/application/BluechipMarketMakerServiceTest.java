@@ -14,10 +14,45 @@ import java.nio.file.Files;
 import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class BluechipMarketMakerServiceTest {
     private static final Instant NOW = Instant.parse("2026-08-24T09:00:00Z");
+
+    @Test
+    void openingRefreshMatchesThePreopenPlayerBuyOnceAfterAllMakerQuotesExist() throws Exception {
+        var file = Files.createTempFile("blockstock-maker-opening-queue-", ".db");
+        try (var database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate();
+            var repository = new SqlBluechipRepository(database.dataSource());
+            new BluechipBootstrapServiceTestSupport(database, repository, NOW).initializeOne();
+            BluechipRepository.BluechipCompany bluechip = repository.all().getFirst();
+            var cash = new SqlSecuritiesCashRepository(database.dataSource());
+            var orders = new SqlSecondaryTradingRepository(database.dataSource(), cash);
+            var session = new AtomicReference<>(new MarketSession(false));
+            var market = new SecondaryMarketService(orders, database, Runnable::run, () -> NOW, 0, session::get);
+            UUID player = UUID.randomUUID();
+            database.inTransaction(connection -> { cash.creditAvailable(connection, player, Money.ofMinor(100_000), NOW); return null; });
+            var queuedBuy = market.placeBuy(player, bluechip.listing().stockCode(), 1, Money.ofMinor(100_000)).toCompletableFuture().join().order();
+
+            session.set(new MarketSession(true));
+            assertThat(new MarketSessionService(market, orders, database, Runnable::run, () -> NOW,
+                    java.time.ZoneId.of("Asia/Shanghai"), session::get).onSessionTransition().toCompletableFuture().join()).isZero();
+            AtomicInteger queuedMatches = new AtomicInteger();
+            var maker = new BluechipMarketMakerService(repository, market, session::get, () -> NOW,
+                    () -> { queuedMatches.incrementAndGet(); return market.matchQueuedOrders(); });
+
+            maker.refreshQuotes().toCompletableFuture().join();
+
+            assertThat(queuedMatches).hasValue(1);
+            assertThat(tradeCount(database)).isEqualTo(1);
+            assertThat(orders.findOrder(queuedBuy.id()).orElseThrow().state().name()).isEqualTo("FILLED");
+            // The pre-open player order rests first, so the system ask executes at that maker order's limit.
+            assertThat(lastTradePrice(database)).isEqualTo(100_000);
+        } finally { Files.deleteIfExists(file); }
+    }
 
     @Test
     void openSessionCreatesAtMostFiveBidAndFiveAskOrdersPerBluechip() throws Exception {
@@ -169,6 +204,18 @@ class BluechipMarketMakerServiceTest {
     private static long auditEvents(Database database, CompanyId company, String type) {
         try (var connection = database.dataSource().getConnection(); var statement = connection.prepareStatement("SELECT COUNT(*) FROM audit_events WHERE company_id = ? AND event_type = ?")) {
             statement.setString(1, company.value().toString()); statement.setString(2, type); try (var rows = statement.executeQuery()) { rows.next(); return rows.getLong(1); }
+        } catch (Exception exception) { throw new AssertionError(exception); }
+    }
+
+    private static long tradeCount(Database database) {
+        try (var connection = database.dataSource().getConnection(); var statement = connection.prepareStatement("SELECT COUNT(*) FROM stock_trades"); var rows = statement.executeQuery()) {
+            rows.next(); return rows.getLong(1);
+        } catch (Exception exception) { throw new AssertionError(exception); }
+    }
+
+    private static long lastTradePrice(Database database) {
+        try (var connection = database.dataSource().getConnection(); var statement = connection.prepareStatement("SELECT price_minor FROM stock_trades ORDER BY occurred_at DESC, id DESC LIMIT 1"); var rows = statement.executeQuery()) {
+            rows.next(); return rows.getLong(1);
         } catch (Exception exception) { throw new AssertionError(exception); }
     }
 

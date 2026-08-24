@@ -21,13 +21,20 @@ public final class BluechipMarketMakerService {
     private final SecondaryMarketService market;
     private final Supplier<MarketSession> session;
     private final AppClock clock;
+    private final Supplier<CompletionStage<Integer>> queuedMatcher;
     private CompletionStage<Void> lifecycle = CompletableFuture.completedFuture(null);
     private boolean closeRequested;
     private boolean operatorPaused;
 
     public BluechipMarketMakerService(BluechipRepository bluechips, SecondaryMarketService market, Supplier<MarketSession> session, AppClock clock) {
+        this(bluechips, market, session, clock, market::matchQueuedOrders);
+    }
+
+    BluechipMarketMakerService(BluechipRepository bluechips, SecondaryMarketService market, Supplier<MarketSession> session, AppClock clock,
+                                Supplier<CompletionStage<Integer>> queuedMatcher) {
         this.bluechips = Objects.requireNonNull(bluechips, "bluechips"); this.market = Objects.requireNonNull(market, "market");
         this.session = Objects.requireNonNull(session, "session"); this.clock = Objects.requireNonNull(clock, "clock");
+        this.queuedMatcher = Objects.requireNonNull(queuedMatcher, "queuedMatcher");
     }
 
     public synchronized CompletionStage<QuoteRefreshResult> refreshQuotes() {
@@ -44,7 +51,13 @@ public final class BluechipMarketMakerService {
         for (BluechipRepository.BluechipCompany bluechip : bluechips.all()) {
             chain = chain.thenCompose(total -> refresh(bluechip).thenApply(result -> { if (result.degraded()) degraded.add(bluechip.listing().stockCode()); return total + result.orders(); }));
         }
-        return chain.thenApply(orders -> new QuoteRefreshResult(Set.copyOf(new LinkedHashSet<>(degraded)), orders));
+        return chain.thenCompose(orders -> {
+            QuoteRefreshResult result = new QuoteRefreshResult(Set.copyOf(new LinkedHashSet<>(degraded)), orders);
+            // The opening catch-up can run before these system orders exist. Match once only after the full quote batch.
+            return session.get().acceptsMatching()
+                    ? queuedMatcher.get().thenApply(ignored -> result)
+                    : CompletableFuture.completedFuture(result);
+        });
     }
 
     public synchronized CompletionStage<Integer> cancelSystemQuotesAtClose() {
