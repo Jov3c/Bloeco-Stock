@@ -74,3 +74,20 @@ actual 1.21.4 item data-components and strictly asserts each configured ticker
 and the selectable `NOVA` detail title; it intentionally does not accept a
 generic BS symbol.  QA was stopped and no later acceptance stage was skipped
 or weakened pending the product-side configured-ticker repair.
+
+## Task 15 fresh acceptance — market-maker blocker
+
+Task 15 corrected the configured ticker contract.  A new fresh Shadow JAR and
+fresh QA DB confirmed all ten configured symbols in the native market GUI and
+opened `BlockStock NOVA`.  GUI cash deposit and the two Anvil inputs succeeded
+under an OPEN session.  But a real `NOVA` GUI buy of ten shares at `12.00`
+returned `待成交`; stopped/readonly SQLite inspection showed no new
+`stock_trades` row.
+
+This is a product failure of the required system maker/open matching path.
+The original harness only tested that five quote *slots* were non-null, which
+is insufficient because the GUI's filler panes occupy every empty slot.  It
+now requires the actual custom data-component labels `卖1`..`卖5` and
+`买1`..`买5`, in addition to the real trade/holding assertions.  This stricter
+test failed before any downstream lifecycle assertion could be honestly run.
+QA was stopped; no 25565 connection was made.

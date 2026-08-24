@@ -16,7 +16,7 @@ function Stop-QA{if($null -eq $script:qaProcess -or $script:qaProcess.HasExited)
 function Run-Gui([string]$phase){$env:QA_CLOCK_PHASE=$phase;Push-Location $PSScriptRoot;try{& node .\bluechip-gui-e2e.mjs;if($LASTEXITCODE -ne 0){throw "GUI acceptance failed in $phase"}}finally{Pop-Location;Remove-Item Env:QA_CLOCK_PHASE -ErrorAction SilentlyContinue}}
 function Set-DividendFixture{Push-Location $PSScriptRoot;try{& node --input-type=module -e "import {DatabaseSync} from 'node:sqlite';const d=new DatabaseSync('../plugins/BlockStock/blockeco.db');d.exec(\"UPDATE bluechip_companies SET next_dividend_at='2000-01-01T00:00:00Z'\");d.close();"}finally{Pop-Location}}
 function Reset-EscrowFixture{if(!(Test-Path $escrowData)){return};Copy-Item -Force $escrowData ($escrowData+'.qa-backup-'+(Get-Date -Format 'yyyyMMddHHmmss'));$c=[IO.File]::ReadAllText($escrowData,[Text.UTF8Encoding]::new($false));$c=[regex]::Replace($c,'(?m)^money: .*$',"money: '0.0'");[IO.File]::WriteAllText($escrowData,$c,[Text.UTF8Encoding]::new($false))}
-if(Get-NetTCPConnection -LocalPort 25566 -ErrorAction SilentlyContinue){throw 'QA port 25566 already in use; refusing unknown process'}
+if(Get-NetTCPConnection -LocalPort 25566 -State Listen -ErrorAction SilentlyContinue){throw 'QA port 25566 already in use; refusing unknown process'}
 Copy-Item -Force $jar (Join-Path $qa 'plugins\BlockStock.jar')
 Copy-Item -Force (Join-Path $root 'src\main\resources\config.yml') $config
 Reset-EscrowFixture
