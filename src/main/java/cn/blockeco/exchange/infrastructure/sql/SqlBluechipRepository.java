@@ -147,6 +147,144 @@ public final class SqlBluechipRepository implements BluechipRepository {
     @Override public void saveMarketSchedule(Connection connection,MarketSchedule schedule) throws SQLException { requireTransaction(connection);try(PreparedStatement s=connection.prepareStatement("UPDATE market_event_schedule SET next_company_event_at=?,next_market_event_at=? WHERE singleton=1")){s.setString(1,schedule.nextCompanyEventAt().toString());s.setString(2,schedule.nextMarketEventAt().toString());s.executeUpdate();} }
     @Override public void expireEvents(Connection connection,Instant now) throws SQLException { requireTransaction(connection);try(PreparedStatement s=connection.prepareStatement("UPDATE bluechip_events SET state='EXPIRED' WHERE state='ACTIVE' AND ends_at <= ?")){s.setString(1,now.toString());s.executeUpdate();} }
 
+    @Override public List<DividendSettlement> settleDueDividendRuns(Connection connection, Instant now, long bluechipBaseProfitMinor) throws SQLException {
+        requireTransaction(connection);
+        List<DividendSettlement> settled = new java.util.ArrayList<>();
+        try (PreparedStatement companies = connection.prepareStatement("""
+                SELECT c.id, c.dividend_basis_points, sl.listed_at, bc.system_account_uuid, bc.industry,
+                       bc.payout_bps, bc.next_dividend_at, f.cash_minor, f.reserved_minor, f.retained_earnings_minor
+                FROM companies c JOIN stock_listings sl ON sl.company_id = c.id
+                LEFT JOIN bluechip_companies bc ON bc.company_id = c.id
+                LEFT JOIN company_cash_accounts f ON f.company_id = c.id
+                ORDER BY c.id
+                """)) {
+            try (ResultSet rows = companies.executeQuery()) {
+                while (rows.next()) {
+                    CompanyId companyId = new CompanyId(UUID.fromString(rows.getString(1)));
+                    String systemAccount = rows.getString(4);
+                    Instant cycleAt = nextCycle(connection, companyId, systemAccount == null ? null : Instant.parse(rows.getString(7)), Instant.parse(rows.getString(3)));
+                    if (cycleAt.isAfter(now) || !claimRun(connection, companyId, cycleAt, now)) continue;
+                    long profit = systemAccount == null
+                            ? rows.getLong(10)
+                            : adjustedBluechipProfit(connection, companyId, rows.getString(5), now, bluechipBaseProfitMinor);
+                    long source = systemAccount == null ? availableCompanyCash(rows.getLong(8), rows.getLong(9)) : fundCash(connection, companyId);
+                    int payoutBps = systemAccount == null ? rows.getInt(2) : rows.getInt(6);
+                    long distributable = profit <= 0 ? 0 : Math.min(source, multiplyBps(profit, payoutBps));
+                    Distribution distribution = distributable == 0 ? Distribution.none() : distribute(connection, companyId, systemAccount, distributable);
+                    if (distribution.total() > 0) debitSource(connection, companyId, systemAccount, distribution.total(), cycleAt, now);
+                    completeRun(connection, companyId, cycleAt, distribution.total(), now);
+                    if (systemAccount != null) scheduleNextDividend(connection, companyId, cycleAt.plus(15, ChronoUnit.DAYS));
+                    writeReport(connection, companyId, cycleAt, profit, distribution, now);
+                    settled.add(new DividendSettlement(companyId, Money.ofMinor(profit), Money.ofMinor(distribution.total()), distribution.paymentCount(), idempotencyKey(companyId, cycleAt)));
+                }
+            }
+        }
+        return List.copyOf(settled);
+    }
+
+    private static Instant nextCycle(Connection connection, CompanyId companyId, Instant bluechipNext, Instant listedAt) throws SQLException {
+        if (bluechipNext != null) return bluechipNext;
+        try (PreparedStatement statement = connection.prepareStatement("SELECT dividend_at FROM dividend_runs WHERE company_id = ? AND state = 'COMPLETED' ORDER BY dividend_at DESC LIMIT 1")) {
+            statement.setString(1, companyId.value().toString());
+            try (ResultSet rows = statement.executeQuery()) {
+                return rows.next() ? Instant.parse(rows.getString(1)).plus(15, ChronoUnit.DAYS) : listedAt.plus(15, ChronoUnit.DAYS);
+            }
+        }
+    }
+
+    private static boolean claimRun(Connection connection, CompanyId companyId, Instant cycleAt, Instant now) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("INSERT INTO dividend_runs (company_id, dividend_at, state, total_payout_minor, created_at) VALUES (?, ?, 'PENDING', 0, ?) ON CONFLICT(company_id, dividend_at) DO NOTHING")) {
+            statement.setString(1, companyId.value().toString()); statement.setString(2, cycleAt.toString()); statement.setString(3, now.toString());
+            return statement.executeUpdate() == 1;
+        }
+    }
+
+    private static long adjustedBluechipProfit(Connection connection, CompanyId companyId, String industry, Instant now, long baseProfit) throws SQLException {
+        int impacts = 0;
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT COALESCE(SUM(profit_impact_bps), 0) FROM bluechip_events
+                WHERE state = 'ACTIVE' AND starts_at <= ? AND ends_at > ?
+                  AND (company_id = ? OR (scope = 'INDUSTRY' AND industry = ?) OR scope = 'MARKET')
+                """)) {
+            statement.setString(1, now.toString()); statement.setString(2, now.toString()); statement.setString(3, companyId.value().toString()); statement.setString(4, industry);
+            try (ResultSet rows = statement.executeQuery()) { if (rows.next()) impacts = rows.getInt(1); }
+        }
+        return multiplyBps(baseProfit, 10_000 + impacts);
+    }
+
+    private static long availableCompanyCash(long cash, long reserved) { return Math.max(0, Math.subtractExact(cash, reserved)); }
+    private static long multiplyBps(long amount, int bps) {
+        try { return Math.floorDiv(Math.multiplyExact(amount, (long) bps), 10_000L); }
+        catch (ArithmeticException exception) { throw new IllegalStateException("dividend amount exceeds Money range", exception); }
+    }
+    private static long fundCash(Connection connection, CompanyId companyId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT COALESCE(SUM(cash_delta_minor), 0) FROM bluechip_fund_audit WHERE company_id = ?")) {
+            statement.setString(1, companyId.value().toString()); try (ResultSet rows = statement.executeQuery()) { return rows.next() ? Math.max(0, rows.getLong(1)) : 0; }
+        }
+    }
+
+    private static Distribution distribute(Connection connection, CompanyId companyId, String excludedHolder, long distributable) throws SQLException {
+        List<Holder> holders = new java.util.ArrayList<>(); long shares = 0;
+        String sql = "SELECT holder_uuid, available_shares + reserved_shares FROM share_holdings WHERE company_id = ? AND available_shares + reserved_shares > 0" + (excludedHolder == null ? "" : " AND holder_uuid <> ?") + " ORDER BY holder_uuid";
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, companyId.value().toString()); if (excludedHolder != null) statement.setString(2, excludedHolder);
+            try (ResultSet rows = statement.executeQuery()) { while (rows.next()) { long holding = rows.getLong(2); holders.add(new Holder(UUID.fromString(rows.getString(1)), holding)); shares = Math.addExact(shares, holding); } }
+        }
+        if (shares == 0) return Distribution.none();
+        long total = 0; int payments = 0;
+        for (Holder holder : holders) {
+            long credit = Math.floorDiv(Math.multiplyExact(distributable, holder.shares()), shares);
+            if (credit == 0) continue;
+            creditSecuritiesCash(connection, holder.id(), credit); total = Math.addExact(total, credit); payments++;
+        }
+        return new Distribution(total, payments);
+    }
+
+    private static void creditSecuritiesCash(Connection connection, UUID holder, long credit) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("INSERT INTO securities_cash_accounts (player_uuid, available_minor, reserved_minor) VALUES (?, ?, 0) ON CONFLICT(player_uuid) DO UPDATE SET available_minor = available_minor + excluded.available_minor")) {
+            statement.setString(1, holder.toString()); statement.setLong(2, credit); statement.executeUpdate();
+        }
+    }
+    private static void debitSource(Connection connection, CompanyId companyId, String systemAccount, long amount, Instant cycleAt, Instant now) throws SQLException {
+        if (systemAccount == null) {
+            try (PreparedStatement statement = connection.prepareStatement("UPDATE company_cash_accounts SET cash_minor = cash_minor - ?, retained_earnings_minor = retained_earnings_minor - ? WHERE company_id = ? AND cash_minor - reserved_minor >= ? AND retained_earnings_minor >= ?")) {
+                statement.setLong(1, amount); statement.setLong(2, amount); statement.setString(3, companyId.value().toString()); statement.setLong(4, amount); statement.setLong(5, amount);
+                if (statement.executeUpdate() != 1) throw new IllegalStateException("company dividend source is no longer available");
+            }
+            return;
+        }
+        try (PreparedStatement statement = connection.prepareStatement("UPDATE securities_cash_accounts SET available_minor = available_minor - ? WHERE player_uuid = ? AND available_minor >= ?")) {
+            statement.setLong(1, amount); statement.setString(2, systemAccount); statement.setLong(3, amount);
+            if (statement.executeUpdate() != 1) throw new IllegalStateException("bluechip fund source is no longer available");
+        }
+        try (PreparedStatement statement = connection.prepareStatement("INSERT INTO bluechip_fund_audit (id, company_id, operation, cash_delta_minor, shares_delta, occurred_at) VALUES (?, ?, 'DIVIDEND_PAID', ?, 0, ?)")) {
+            statement.setString(1, UUID.nameUUIDFromBytes(("dividend-fund:" + idempotencyKey(companyId, cycleAt)).getBytes(StandardCharsets.UTF_8)).toString()); statement.setString(2, companyId.value().toString()); statement.setLong(3, -amount); statement.setString(4, now.toString()); statement.executeUpdate();
+        }
+    }
+    private static void completeRun(Connection connection, CompanyId companyId, Instant cycleAt, long payout, Instant now) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("UPDATE dividend_runs SET state = 'COMPLETED', total_payout_minor = ?, completed_at = ? WHERE company_id = ? AND dividend_at = ? AND state = 'PENDING'")) {
+            statement.setLong(1, payout); statement.setString(2, now.toString()); statement.setString(3, companyId.value().toString()); statement.setString(4, cycleAt.toString());
+            if (statement.executeUpdate() != 1) throw new IllegalStateException("dividend run state conflict");
+        }
+    }
+    private static void scheduleNextDividend(Connection connection, CompanyId companyId, Instant next) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("UPDATE bluechip_companies SET next_dividend_at = ? WHERE company_id = ?")) {
+            statement.setString(1, next.toString()); statement.setString(2, companyId.value().toString()); statement.executeUpdate();
+        }
+    }
+    private static void writeReport(Connection connection, CompanyId companyId, Instant cycleAt, long profit, Distribution distribution, Instant now) throws SQLException {
+        boolean paid = distribution.total() > 0;
+        String key = idempotencyKey(companyId, cycleAt); String type = paid ? "DIVIDEND_PAID" : "NO_DIVIDEND";
+        String body = (paid ? "DIVIDEND_PAID:" : "NO_DIVIDEND:") + " profitMinor=" + profit + ", distributedMinor=" + distribution.total() + ", payments=" + distribution.paymentCount();
+        try (PreparedStatement announcement = connection.prepareStatement("INSERT INTO company_announcements (id, company_id, body, created_at) VALUES (?, ?, ?, ?)"); PreparedStatement audit = connection.prepareStatement("INSERT INTO audit_events (event_id, company_id, actor_uuid, event_type, payload_json, occurred_at) VALUES (?, ?, NULL, ?, ?, ?)")) {
+            announcement.setString(1, UUID.nameUUIDFromBytes(("dividend-announcement:" + key).getBytes(StandardCharsets.UTF_8)).toString()); announcement.setString(2, companyId.value().toString()); announcement.setString(3, body); announcement.setString(4, now.toString()); announcement.executeUpdate();
+            audit.setString(1, UUID.nameUUIDFromBytes(("dividend-audit:" + key).getBytes(StandardCharsets.UTF_8)).toString()); audit.setString(2, companyId.value().toString()); audit.setString(3, type); audit.setString(4, "{\"profitMinor\":" + profit + ",\"distributedMinor\":" + distribution.total() + ",\"paymentCount\":" + distribution.paymentCount() + "}"); audit.setString(5, now.toString()); audit.executeUpdate();
+        }
+    }
+    private static String idempotencyKey(CompanyId companyId, Instant cycleAt) { return companyId.value() + ":" + cycleAt; }
+    private record Holder(UUID id, long shares) { }
+    private record Distribution(long total, int paymentCount) { static Distribution none() { return new Distribution(0, 0); } }
+
     private Optional<BluechipCompany> findOne(String sql, String value) {
         try (Connection connection = dataSource.getConnection(); PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setString(1, value); try (ResultSet rows = statement.executeQuery()) { return rows.next() ? Optional.of(map(rows)) : Optional.empty(); }

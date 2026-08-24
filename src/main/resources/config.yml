@@ -7,6 +7,8 @@ market:
   fee-bps: 10
   # 日内行情和成交日的时区；必须为 Java ZoneId，例如 Asia/Shanghai。
   time-zone: 'Asia/Shanghai'
+  # 每 15 天蓝筹模拟经营的基础利润；活跃事件会以万分比调整此金额。
+  dividend-base-profit: '1000.00'
 bluechips:
   - code: 'NOVA'
     display-name: 'Nova Forge'

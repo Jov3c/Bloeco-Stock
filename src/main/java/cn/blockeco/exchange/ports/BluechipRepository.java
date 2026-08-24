@@ -35,6 +35,8 @@ public interface BluechipRepository {
     Optional<MarketSchedule> marketSchedule();
     void saveMarketSchedule(Connection connection, MarketSchedule schedule) throws SQLException;
     void expireEvents(Connection connection, Instant now) throws SQLException;
+    /** Settles every listed company's next due dividend cycle in the caller's transaction. */
+    List<DividendSettlement> settleDueDividendRuns(Connection connection, Instant now, long bluechipBaseProfitMinor) throws SQLException;
 
     record BluechipCompany(CompanyId companyId, StockListing listing, String industry, UUID systemAccountId,
                            Money referencePrice, Money modelPrice, Money lowerPrice, Money upperPrice, int spreadBps, long fundShares, Money fundCash) { }
@@ -46,6 +48,7 @@ public interface BluechipRepository {
     record SeedAudit(Money cash, long shares) { }
     record Candle(Money open, Money high, Money low, Money close, long volumeShares) { }
     record MarketSchedule(Instant nextCompanyEventAt, Instant nextMarketEventAt) { }
+    record DividendSettlement(CompanyId companyId, Money profit, Money distributed, int paymentCount, String idempotencyKey) { }
 
     record BluechipSeed(CompanyId companyId, StockListing listing, String industry, UUID systemAccountId,
                         Money referencePrice, Money lowerPrice, Money upperPrice, int spreadBps,
