@@ -23,7 +23,7 @@ Reset-EscrowFixture
 if(Test-Path $db){Move-Item -LiteralPath $db -Destination (Join-Path (Split-Path $db -Parent) ('blockeco.qa-backup-'+(Get-Date -Format 'yyyyMMddHHmmss')+'.db'))}
 try{
   Start-QA 'Etc/GMT+10';Run-Gui 'PREOPEN';Stop-QA
-  Start-QA 'Etc/UTC';Run-Gui 'OPEN';Stop-QA
+  Start-QA 'Etc/UTC';Run-Gui 'OPEN';Run-Gui 'POSTSEED';Stop-QA
   Start-QA 'Etc/GMT-12';Run-Gui 'POSTCLOSE';Start-Sleep -Seconds 70;Stop-QA
   Start-QA 'Etc/UTC';Start-Sleep -Seconds 12;Stop-QA
   Set-DividendFixture
