@@ -61,15 +61,19 @@ public final class SqlBluechipRepository implements BluechipRepository {
     @Override public void recordLiquidityStatus(CompanyId companyId, boolean degraded, Instant occurredAt) {
         String eventType = degraded ? "BLUECHIP_LIQUIDITY_DEGRADED" : "BLUECHIP_LIQUIDITY_RESTORED";
         try (Connection connection = dataSource.getConnection()) {
-            String previous = null;
-            try (PreparedStatement statement = connection.prepareStatement("SELECT event_type FROM audit_events WHERE company_id = ? AND event_type IN ('BLUECHIP_LIQUIDITY_DEGRADED', 'BLUECHIP_LIQUIDITY_RESTORED') ORDER BY occurred_at DESC, event_id DESC LIMIT 1")) {
-                statement.setString(1, companyId.value().toString()); try (ResultSet rows = statement.executeQuery()) { if (rows.next()) previous = rows.getString(1); }
-            }
-            if (eventType.equals(previous)) return;
-            try (PreparedStatement statement = connection.prepareStatement("INSERT INTO audit_events (event_id, company_id, actor_uuid, event_type, payload_json, occurred_at) VALUES (?, ?, NULL, ?, ?, ?)")) {
-                statement.setString(1, UUID.randomUUID().toString()); statement.setString(2, companyId.value().toString()); statement.setString(3, eventType);
-                statement.setString(4, "{\"degraded\":" + degraded + "}"); statement.setString(5, occurredAt.toString()); statement.executeUpdate();
-            }
+            boolean autoCommit = connection.getAutoCommit(); connection.setAutoCommit(false);
+            try {
+                int changed;
+                try (PreparedStatement statement = connection.prepareStatement("UPDATE bluechip_companies SET quotes_paused = ? WHERE company_id = ? AND quotes_paused <> ?")) {
+                    statement.setInt(1, degraded ? 1 : 0); statement.setString(2, companyId.value().toString()); statement.setInt(3, degraded ? 1 : 0); changed = statement.executeUpdate();
+                }
+                if (changed == 1) try (PreparedStatement statement = connection.prepareStatement("INSERT INTO audit_events (event_id, company_id, actor_uuid, event_type, payload_json, occurred_at) VALUES (?, ?, NULL, ?, ?, ?)")) {
+                    statement.setString(1, UUID.randomUUID().toString()); statement.setString(2, companyId.value().toString()); statement.setString(3, eventType);
+                    statement.setString(4, "{\"degraded\":" + degraded + "}"); statement.setString(5, occurredAt.toString()); statement.executeUpdate();
+                }
+                connection.commit();
+            } catch (SQLException exception) { connection.rollback(); throw exception; }
+            finally { connection.setAutoCommit(autoCommit); }
         } catch (SQLException exception) { throw new IllegalStateException("could not record bluechip liquidity status", exception); }
     }
 

@@ -13,6 +13,7 @@ import cn.blockeco.exchange.ports.BluechipRepository;
 import java.nio.file.Files;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import org.junit.jupiter.api.Test;
 
 class BluechipMarketMakerServiceTest {
@@ -34,13 +35,68 @@ class BluechipMarketMakerServiceTest {
     }
 
     @Test
+    void firstHealthyRefreshDoesNotWriteARestoredAuditEvent() throws Exception {
+        var file = Files.createTempFile("blockstock-maker-healthy-", ".db");
+        try (var database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate(); var fixture = fixture(database);
+
+            fixture.maker.refreshQuotes().toCompletableFuture().join();
+
+            assertThat(auditEvents(database, fixture.bluechip.companyId(), "BLUECHIP_LIQUIDITY_RESTORED")).isZero();
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
+    void concurrentRefreshesLeaveNoMoreThanFiveLevelsPerSide() throws Exception {
+        var file = Files.createTempFile("blockstock-maker-concurrent-", ".db");
+        try (var database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate(); var fixture = fixture(database);
+
+            CompletableFuture.allOf(CompletableFuture.runAsync(() -> fixture.maker.refreshQuotes().toCompletableFuture().join()),
+                    CompletableFuture.runAsync(() -> fixture.maker.refreshQuotes().toCompletableFuture().join())).join();
+
+            assertThat(systemOrders(database, fixture.bluechip, "BUY")).hasSize(5);
+            assertThat(systemOrders(database, fixture.bluechip, "SELL")).hasSize(5);
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
+    void closeQueuedWithRefreshLeavesNoSystemQuotes() throws Exception {
+        var file = Files.createTempFile("blockstock-maker-close-race-", ".db");
+        try (var database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate(); var fixture = fixture(database);
+
+            CompletableFuture<?> refresh = CompletableFuture.runAsync(() -> fixture.maker.refreshQuotes().toCompletableFuture().join());
+            CompletableFuture<?> close = CompletableFuture.runAsync(() -> fixture.maker.cancelSystemQuotesAtClose().toCompletableFuture().join());
+            CompletableFuture.allOf(refresh, close).join();
+
+            assertThat(systemOrders(database, fixture.bluechip, "BUY")).isEmpty();
+            assertThat(systemOrders(database, fixture.bluechip, "SELL")).isEmpty();
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
+    void concurrentDegradedRefreshesAppendOnlyOneDegradedAudit() throws Exception {
+        var file = Files.createTempFile("blockstock-maker-degraded-race-", ".db");
+        try (var database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate(); var fixture = fixture(database);
+            setFundCash(database, fixture.bluechip.systemAccountId(), Money.zero());
+
+            CompletableFuture.allOf(CompletableFuture.runAsync(() -> fixture.maker.refreshQuotes().toCompletableFuture().join()),
+                    CompletableFuture.runAsync(() -> fixture.maker.refreshQuotes().toCompletableFuture().join())).join();
+
+            assertThat(auditEvents(database, fixture.bluechip.companyId(), "BLUECHIP_LIQUIDITY_DEGRADED")).isEqualTo(1);
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
     void emptyFundCashRemovesBidsWithoutCreatingMoneyAndRecordsProtectionChange() throws Exception {
         var file = Files.createTempFile("blockstock-maker-empty-cash-", ".db");
         try (var database = new Database("jdbc:sqlite:" + file)) {
             database.migrate();
             var fixture = fixture(database);
             fixture.maker.refreshQuotes().toCompletableFuture().join();
-            fixture.maker.cancelSystemQuotesAtClose().toCompletableFuture().join();
+            for (BluechipRepository.BluechipCompany bluechip : fixture.repository.all()) fixture.market.cancelOpenOrders(bluechip.systemAccountId(), bluechip.listing().stockCode()).toCompletableFuture().join();
             setFundCash(database, fixture.bluechip.systemAccountId(), Money.zero());
 
             var result = fixture.maker.refreshQuotes().toCompletableFuture().join();

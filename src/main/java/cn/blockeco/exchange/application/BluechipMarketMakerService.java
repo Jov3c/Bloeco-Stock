@@ -21,13 +21,20 @@ public final class BluechipMarketMakerService {
     private final SecondaryMarketService market;
     private final Supplier<MarketSession> session;
     private final AppClock clock;
+    private CompletionStage<Void> lifecycle = CompletableFuture.completedFuture(null);
+    private boolean closeRequested;
 
     public BluechipMarketMakerService(BluechipRepository bluechips, SecondaryMarketService market, Supplier<MarketSession> session, AppClock clock) {
         this.bluechips = Objects.requireNonNull(bluechips, "bluechips"); this.market = Objects.requireNonNull(market, "market");
         this.session = Objects.requireNonNull(session, "session"); this.clock = Objects.requireNonNull(clock, "clock");
     }
 
-    public CompletionStage<QuoteRefreshResult> refreshQuotes() {
+    public synchronized CompletionStage<QuoteRefreshResult> refreshQuotes() {
+        if (closeRequested) return CompletableFuture.completedFuture(new QuoteRefreshResult(Set.of(), 0));
+        return enqueue(() -> closeRequested ? CompletableFuture.completedFuture(new QuoteRefreshResult(Set.of(), 0)) : refreshOpenQuotes());
+    }
+
+    private CompletionStage<QuoteRefreshResult> refreshOpenQuotes() {
         if (!session.get().acceptsMatching()) return CompletableFuture.completedFuture(new QuoteRefreshResult(Set.of(), 0));
         List<String> degraded = new ArrayList<>();
         CompletionStage<Integer> chain = CompletableFuture.completedFuture(0);
@@ -37,12 +44,23 @@ public final class BluechipMarketMakerService {
         return chain.thenApply(orders -> new QuoteRefreshResult(Set.copyOf(new LinkedHashSet<>(degraded)), orders));
     }
 
-    public CompletionStage<Integer> cancelSystemQuotesAtClose() {
+    public synchronized CompletionStage<Integer> cancelSystemQuotesAtClose() {
+        closeRequested = true;
+        return enqueue(this::cancelSystemQuotes);
+    }
+
+    private CompletionStage<Integer> cancelSystemQuotes() {
         CompletionStage<Integer> chain = CompletableFuture.completedFuture(0);
         for (BluechipRepository.BluechipCompany bluechip : bluechips.all()) {
             chain = chain.thenCompose(total -> market.cancelOpenOrders(bluechip.systemAccountId(), bluechip.listing().stockCode()).thenApply(cancelled -> total + cancelled));
         }
         return chain;
+    }
+
+    private <T> CompletionStage<T> enqueue(java.util.function.Supplier<CompletionStage<T>> operation) {
+        CompletionStage<T> scheduled = lifecycle.handle((ignored, failure) -> null).thenCompose(ignored -> operation.get());
+        lifecycle = scheduled.handle((ignored, failure) -> null);
+        return scheduled;
     }
 
     private CompletionStage<CompanyQuoteResult> refresh(BluechipRepository.BluechipCompany original) {
