@@ -17,7 +17,7 @@ function Run-Gui([string]$phase){$env:QA_CLOCK_PHASE=$phase;Push-Location $PSScr
 function Set-DividendFixture{Push-Location $PSScriptRoot;try{$script=@'
 import {DatabaseSync} from 'node:sqlite';
 const d=new DatabaseSync('../plugins/BlockStock/blockeco.db');
-d.exec("UPDATE bluechip_companies SET next_dividend_at='2000-01-01T00:00:00Z'");
+d.exec(`UPDATE bluechip_companies SET next_dividend_at='2000-01-01T00:00:00Z'`);
 d.close();
 '@;& node --input-type=module -e $script;if($LASTEXITCODE -ne 0){throw 'Could not set the QA dividend lifecycle fixture'}}finally{Pop-Location}}
 function Reset-EscrowFixture{if(!(Test-Path $escrowData)){return};Copy-Item -Force $escrowData ($escrowData+'.qa-backup-'+(Get-Date -Format 'yyyyMMddHHmmss'));$c=[IO.File]::ReadAllText($escrowData,[Text.UTF8Encoding]::new($false));$c=[regex]::Replace($c,'(?m)^money: .*$',"money: '0.0'");[IO.File]::WriteAllText($escrowData,$c,[Text.UTF8Encoding]::new($false))}
