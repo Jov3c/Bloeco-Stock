@@ -197,3 +197,24 @@ whether it made trades and requests exactly one non-recursive refill (or an
 equivalent explicit signal), plus an integration test using the default
 constructor.  QA stopped at the same mandatory GUI invariant; no final full
 test/shadowJar pass is asserted.
+
+## Task 23 fresh rerun — upper-bound residual bid prevents every refill ask
+
+Task 23 (`c15c43f`) was rebuilt with `--rerun-tasks` and run from a new QA DB.
+It repairs the missing opening notification: the stopped DB shows the first
+five system bids as `CANCELLED` and a second set of five bids as `OPEN`, so a
+real replenishment pass ran. Nevertheless it produced zero new sells, and the
+native NOVA GUI therefore again failed the real `卖1` assertion.
+
+This is not a callback race or lack of inventory. The system holding retains
+99,995 available NOVA shares. The pre-open buyer retains five shares at a
+limit of 1200, which equals NOVA's configured `upperPrice` of 1200. The
+refill's `avoidRestingPlayerCross` policy raises each candidate ask to at least
+`highestBid + step` (1203 and above); the subsequent `ask < upperPrice` check
+rejects all of them. Thus the current price boundary and cross-avoidance rule
+make five executable sells impossible whenever such a residual bid exists.
+
+The product must make an explicit market-policy decision for an upper-limit
+residual bid (rather than silently emptying one side of the native five-level
+book), then cover it with the default-production opening integration path.
+QA remains strict and stopped before later lifecycle/final Gradle claims.
