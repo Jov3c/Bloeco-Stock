@@ -4,7 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import cn.blockeco.exchange.infrastructure.sql.Database;
 import cn.blockeco.exchange.infrastructure.sql.SqlBluechipRepository;
+import cn.blockeco.exchange.infrastructure.sql.SqlSecuritiesCashRepository;
 import cn.blockeco.exchange.domain.company.CompanyId;
+import cn.blockeco.exchange.domain.money.Money;
 import java.nio.file.Files;
 import java.time.Duration;
 import java.time.Instant;
@@ -79,6 +81,31 @@ class DividendCycleServiceTest {
             assertThat(TestBluechipFixture.securitiesCash(database, holder)).isEqualTo(20_000);
             assertThat(TestBluechipFixture.companyCash(database, company)).isEqualTo(20_000);
             assertThat(TestBluechipFixture.retainedEarnings(database, company)).isEqualTo(20_000);
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
+    void profitablePlayerCompanyDividendKeepsTheEscrowLedgerReconciled() throws Exception {
+        var file = Files.createTempFile("blockstock-dividend-player-ledger-", ".db");
+        try (Database database = TestBluechipFixture.migratedDatabase(file)) {
+            var repository = new SqlBluechipRepository(database.dataSource());
+            var holder = java.util.UUID.randomUUID();
+            CompanyId company = TestBluechipFixture.createListedPlayerCompany(database, START, holder, 40_000);
+            database.inTransaction(connection -> {
+                try (var ledger = connection.prepareStatement("INSERT INTO escrow_ledger_entries (id, liability_kind, company_id, player_uuid, amount_minor, operation_id, trade_id, occurred_at) VALUES (?, 'COMPANY_TREASURY', ?, NULL, 40000, NULL, NULL, ?)")) {
+                    ledger.setString(1, java.util.UUID.randomUUID().toString());
+                    ledger.setString(2, company.value().toString());
+                    ledger.setString(3, START.toString());
+                    ledger.executeUpdate();
+                }
+                return null;
+            });
+
+            new DividendCycleService(repository, database, Runnable::run, () -> START.plus(Duration.ofDays(15)), 0)
+                    .settleDueRuns().toCompletableFuture().join();
+
+            assertThat(new SqlSecuritiesCashRepository(database.dataSource()).reconcile(Money.ofMinor(40_000)).finalLiabilities())
+                    .isEqualTo(Money.ofMinor(40_000));
         } finally { Files.deleteIfExists(file); }
     }
 }

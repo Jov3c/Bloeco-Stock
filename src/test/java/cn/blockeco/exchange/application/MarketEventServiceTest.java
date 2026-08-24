@@ -32,6 +32,21 @@ class MarketEventServiceTest {
         } finally { Files.deleteIfExists(file); }
     }
 
+    @Test void marketEventMovesEveryBluechipAndChangesEveryPlayerCompanyExpectation() throws Exception {
+        var file = Files.createTempFile("blockstock-market-all-targets-", ".db");
+        try (var database = migrated(file)) {
+            var clock = new MutableClock(Instant.parse("2026-08-24T00:00:00Z")); var repository = seeded(database, clock);
+            var playerA = playerIndustry(database, "Industry A"); var playerB = playerIndustry(database, "Industry B");
+            var before = repository.all().stream().collect(java.util.stream.Collectors.toMap(c -> c.companyId(), c -> c.modelPrice().minorUnits()));
+
+            new MarketEventService(repository, database, Runnable::run, clock::now, new Random(7)).triggerTestMarketEvent(500).toCompletableFuture().join();
+
+            assertThat(repository.all()).allSatisfy(company -> assertThat(company.modelPrice().minorUnits()).isGreaterThan(before.get(company.companyId())));
+            assertThat(repository.profitExpectationBps(playerA)).isEqualTo(250);
+            assertThat(repository.profitExpectationBps(playerB)).isEqualTo(250);
+        } finally { Files.deleteIfExists(file); }
+    }
+
     @Test void recentNewsIncludesDividendAndLiquidityAnnouncements() throws Exception {
         var file = Files.createTempFile("blockstock-news-union-", ".db");
         try (var database = migrated(file)) {

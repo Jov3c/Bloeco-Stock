@@ -137,7 +137,8 @@ public final class SqlBluechipRepository implements BluechipRepository {
             if (!"MARKET".equals(scope)) select.setString(1, "COMPANY".equals(scope) ? companyId : industry); try (ResultSet rows=select.executeQuery()) { while(rows.next()) { long old=rows.getLong(2); long delta=Math.round(old * (impactBps / 10_000.0d) * (rows.getInt(5) / 10_000.0d)); long next=Math.max(rows.getLong(3)+1,Math.min(rows.getLong(4)-1,Math.addExact(old,delta))); update.setLong(1,next); update.setString(2,rows.getString(1)); update.addBatch(); } update.executeBatch(); }
         }
         if ("INDUSTRY".equals(scope) || "MARKET".equals(scope)) {
-            String expectationTargets = "MARKET".equals(scope) ? "SELECT company_id, ? FROM company_industry" : "SELECT company_id, ? FROM company_industry WHERE industry=?";
+            // SQLite reads ON after a bare FROM as a JOIN clause; an explicit WHERE disambiguates UPSERT.
+            String expectationTargets = "MARKET".equals(scope) ? "SELECT company_id, ? FROM company_industry WHERE 1=1" : "SELECT company_id, ? FROM company_industry WHERE industry=?";
             try (PreparedStatement s=connection.prepareStatement("INSERT INTO company_market_expectations (company_id,profit_impact_bps) " + expectationTargets + " ON CONFLICT(company_id) DO UPDATE SET profit_impact_bps=excluded.profit_impact_bps")) {
                 s.setInt(1,impactBps/2); if ("INDUSTRY".equals(scope)) s.setString(2,industry); s.executeUpdate();
             }
