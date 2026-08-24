@@ -218,3 +218,32 @@ The product must make an explicit market-policy decision for an upper-limit
 residual bid (rather than silently emptying one side of the native five-level
 book), then cover it with the default-production opening integration path.
 QA remains strict and stopped before later lifecycle/final Gradle claims.
+
+## Task 24 final fresh acceptance — passed
+
+The final clean-DB rerun passed every mandatory acceptance stage on isolated
+`127.0.0.1:25566`; the runner stopped the Paper process at completion and did
+not contact port 25565. The Mineflayer original client proved: PREOPEN GUI
+deposit and queued order; OPEN configured ten tickers, NOVA detail real bid and
+ask five levels, cash deposit, actual buy fill with holding/cash change, and
+administrator market event visible in native GUI news; and POSTCLOSE queued
+order followed by an OPEN-session fill.
+
+The lifecycle fixture uses a dynamically calculated server timezone to create
+an actual 21:00 post-close interval, rather than relying on wall-clock time.
+It produced ten idempotent K-line rows, ran a fixed 15-day dividend cycle once
+for each of the ten bluechips, then reset that same fixture for a second run to
+prove no duplicate dividend run. Stopped SQLite assertions passed: ten
+companies, no negative cash/holdings, issued-share conservation, one completed
+bootstrap escrow funding, event persistence, real fills for all three market
+phase clients, candle/dividend idempotency, and no negative payout. The final
+liability ledger was `118000000` minor units and exactly equalled the real
+stopped QA Vault escrow balance.
+
+Final build verification:
+
+```text
+./gradlew.bat test shadowJar --no-build-cache --no-daemon --console=plain
+BUILD SUCCESSFUL
+386 tests, 0 failures, 0 errors
+```
