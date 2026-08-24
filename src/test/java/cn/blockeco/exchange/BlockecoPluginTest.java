@@ -10,6 +10,9 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 import net.milkbowl.vault.economy.Economy;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -23,6 +26,43 @@ import cn.blockeco.exchange.application.PublicStockQueryService;
 import cn.blockeco.exchange.ports.MainThreadExecutor;
 
 class BlockecoPluginTest {
+
+    @Test
+    void second_bluechip_bootstrap_wiring_exception_is_reported_while_runtime_is_live() throws Exception {
+        PluginRuntime runtime = new PluginRuntime();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+
+        continueBluechipBootstrap(runtime, () -> { throw new IllegalStateException("late wiring"); }, failure::set);
+
+        assertThat(failure.get()).isInstanceOf(IllegalStateException.class).hasMessage("late wiring");
+    }
+
+    @Test
+    void second_bluechip_bootstrap_wiring_false_is_reported_while_runtime_is_live() throws Exception {
+        PluginRuntime runtime = new PluginRuntime();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+
+        continueBluechipBootstrap(runtime, () -> false, failure::set);
+
+        assertThat(failure.get()).isInstanceOf(IllegalStateException.class).hasMessage("bootstrap wiring failed");
+    }
+
+    @Test
+    void second_bluechip_bootstrap_does_not_report_failure_after_runtime_stops() throws Exception {
+        PluginRuntime runtime = new PluginRuntime();
+        runtime.stop();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+
+        continueBluechipBootstrap(runtime, () -> { throw new IllegalStateException("late wiring"); }, failure::set);
+
+        assertThat(failure.get()).isNull();
+    }
+
+    private static void continueBluechipBootstrap(PluginRuntime runtime, Supplier<Boolean> finish, Consumer<Throwable> failed) throws Exception {
+        var method = BlockecoPlugin.class.getDeclaredMethod("continueBluechipBootstrap", PluginRuntime.class, Supplier.class, Consumer.class);
+        method.setAccessible(true);
+        method.invoke(null, runtime, finish, failed);
+    }
 
     @Test
     void initial_stock_cache_refresh_opens_both_gates_only_after_success() {

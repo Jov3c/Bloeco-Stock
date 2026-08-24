@@ -145,8 +145,12 @@ public final class BlockecoPlugin extends JavaPlugin {
             if (!bluechipBootstrapStarted) {
                 bluechipBootstrapStarted = true;
                 bluechipBootstrap.initializeMissing().whenComplete((ignored, failure) -> mainThread.submit(() -> {
+                    if (!runtime.accepting()) return null;
                     if (failure != null) failEnable(startupFailureMessage(failure));
-                    else { bluechipBootstrapReady = true; finishEnable(db); }
+                    else continueBluechipBootstrap(runtime, () -> {
+                        bluechipBootstrapReady = true;
+                        return finishEnable(db);
+                    }, startupFailure -> failEnable(startupFailureMessage(startupFailure)));
                     return null;
                 }));
             }
@@ -337,5 +341,14 @@ public final class BlockecoPlugin extends JavaPlugin {
         return cache.refresh(queries).handle((ignored, error) -> main.<Void>submit(() -> { if (!runtime.accepting()) return null; if (error != null) { failed.accept(error); throw new java.util.concurrent.CompletionException(error); } runtime.attachReady(gates, database); return null; })).thenCompose(stage -> stage);
     }
     static void refreshSymbolsIfAccepting(PluginRuntime runtime, PublicStockSymbolCache cache, cn.blockeco.exchange.application.PublicStockQueryService queries, Consumer<Throwable> failed) { if (!runtime.accepting()) return; try { cache.refresh(queries).whenComplete((ignored, error) -> { if (error != null && runtime.accepting()) failed.accept(error); }); } catch (RuntimeException error) { if (runtime.accepting()) failed.accept(error); } }
+    /** The bluechip bootstrap resumes outside the original coordinator, so preserve its fail-closed contract here. */
+    private static void continueBluechipBootstrap(PluginRuntime runtime, java.util.function.Supplier<Boolean> finish, Consumer<Throwable> failed) {
+        if (!runtime.accepting()) return;
+        try {
+            if (!finish.get() && runtime.accepting()) failed.accept(new IllegalStateException("bootstrap wiring failed"));
+        } catch (Throwable failure) {
+            if (runtime.accepting()) failed.accept(failure);
+        }
+    }
     private void failEnable(String message) { getLogger().severe(message); getServer().getPluginManager().disablePlugin(this); }
 }
