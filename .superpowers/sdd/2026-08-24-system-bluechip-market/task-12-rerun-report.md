@@ -49,3 +49,28 @@ No product code was changed to bypass the gate.  The remaining full acceptance
 plan (queued-to-opening fill, 5-level maker trade, event/news, post-close
 queue, K-line, 15-day dividend idempotency, stopped ledger and final full
 Gradle test) remains intact and must be rerun after the gate repair.
+
+## Task 14 rerun correction and ticker blocker
+
+The apparent Task 14 maintenance state was a QA-fixture error, not a product
+failure: the runner moved the old SQLite DB but had retained the previous
+isolated Essentials escrow balance.  A new bluechip bootstrap therefore made
+the real escrow balance twice the fresh local liability, and recovery
+correctly kept mutations closed.  The runner now makes the external escrow
+fixture fresh too, retaining a timestamped backup before resetting it.
+
+With that fixture correction, fresh startup reported `secondary trading=open`.
+The vanilla bot completed GUI deposit and reached the market page.  It found
+exactly ten entries, but they were `BS000001 Nova Forge` through `BS000010
+Verdant Homes`, not the configured tickers.  Clicking Nova Forge opened
+`BlockStock BS000001`, while the configuration and acceptance contract require
+`NOVA` (and likewise AURORA, TERRAN, SKYLINE, IRONWOOD, LUMEN, RIVERMINT,
+ORBITAL, CINDER, VERDANT).
+
+The cause is `BluechipBootstrapService.seed()` using the generic
+`StockListingRepository.allocate(...)` path, which auto-generates `BS` codes
+instead of persisting `BluechipDefinition.code`.  The QA script now reads the
+actual 1.21.4 item data-components and strictly asserts each configured ticker
+and the selectable `NOVA` detail title; it intentionally does not accept a
+generic BS symbol.  QA was stopped and no later acceptance stage was skipped
+or weakened pending the product-side configured-ticker repair.
