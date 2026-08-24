@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import cn.blockeco.exchange.domain.company.CompanyId;
+import cn.blockeco.exchange.domain.market.MarketSession;
 import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.domain.trading.LimitOrder;
 import cn.blockeco.exchange.infrastructure.sql.Database;
@@ -120,6 +121,28 @@ class SecondaryMarketServiceTest {
         try(var db=new Database("jdbc:sqlite:"+file)){db.migrate();CompanyId company=Fixtures.company(db,100);UUID one=UUID.randomUUID(),two=UUID.randomUUID();seedListing(db,company);var cash=new SqlSecuritiesCashRepository(db.dataSource());db.inTransaction(c->{cash.creditAvailable(c,one,Money.ofMinor(100),Instant.EPOCH);cash.creditAvailable(c,two,Money.ofMinor(100),Instant.EPOCH);return null;});var service=new SecondaryMarketService(new SqlSecondaryTradingRepository(db.dataSource(),cash),db,sql,()->Instant.EPOCH,0);var gate=new CountDownLatch(1);
             var first=java.util.concurrent.CompletableFuture.supplyAsync(()->{await(gate);return service.placeBuy(one,"BS000001",1,Money.ofMinor(10)).toCompletableFuture().join().order();},callers);var second=java.util.concurrent.CompletableFuture.supplyAsync(()->{await(gate);return service.placeBuy(two,"BS000001",1,Money.ofMinor(10)).toCompletableFuture().join().order();},callers);gate.countDown();List<Long> sequences=java.util.stream.Stream.of(first.join(),second.join()).map(LimitOrder::prioritySequence).sorted().toList();assertThat(sequences).containsExactly(1L,2L);
         }finally{callers.shutdownNow();sql.shutdownNow();Files.deleteIfExists(file);}
+    }
+
+    @Test
+    void closedSessionReservesOrdersButDoesNotMatchUntilOpening() throws Exception {
+        var file=Files.createTempFile("blockstock-closed-session-", ".db");
+        try(var db=new Database("jdbc:sqlite:"+file)){db.migrate();CompanyId company=Fixtures.company(db,100);UUID seller=UUID.randomUUID(),buyer=UUID.randomUUID();seedListing(db,company);seedHolding(db,company,seller,10);var cash=new SqlSecuritiesCashRepository(db.dataSource());db.inTransaction(c->{cash.creditAvailable(c,buyer,Money.ofMinor(100),Instant.EPOCH);return null;});var repository=new SqlSecondaryTradingRepository(db.dataSource(),cash);
+            var closed=new SecondaryMarketService(repository,db,Runnable::run,()->Instant.EPOCH,0,()->new MarketSession(false));
+            closed.placeSell(seller,"BS000001",10,Money.ofMinor(9)).toCompletableFuture().join();closed.placeBuy(buyer,"BS000001",10,Money.ofMinor(10)).toCompletableFuture().join();
+            assertThat(number(db,"SELECT COUNT(*) FROM stock_trades")).isZero();assertThat(cash.find(buyer).orElseThrow().reserved()).isEqualTo(Money.ofMinor(100));
+            var open=new SecondaryMarketService(repository,db,Runnable::run,()->Instant.EPOCH,0,()->new MarketSession(true));
+            assertThat(open.matchQueuedOrders().toCompletableFuture().join()).isEqualTo(1);assertThat(number(db,"SELECT COUNT(*) FROM stock_trades")).isEqualTo(1);
+        }finally{Files.deleteIfExists(file);}
+    }
+
+    @Test
+    void openingMatchesExistingOrdersByPriceThenAcceptedPriority() throws Exception {
+        var file=Files.createTempFile("blockstock-opening-priority-", ".db");
+        try(var db=new Database("jdbc:sqlite:"+file)){db.migrate();CompanyId company=Fixtures.company(db,100);UUID firstSeller=UUID.randomUUID(),secondSeller=UUID.randomUUID(),buyer=UUID.randomUUID();seedListing(db,company);seedHolding(db,company,firstSeller,10);seedHolding(db,company,secondSeller,10);var cash=new SqlSecuritiesCashRepository(db.dataSource());db.inTransaction(c->{cash.creditAvailable(c,buyer,Money.ofMinor(100),Instant.EPOCH);return null;});var repository=new SqlSecondaryTradingRepository(db.dataSource(),cash);var closed=new SecondaryMarketService(repository,db,Runnable::run,()->Instant.EPOCH,0,()->new MarketSession(false));
+            UUID first=closed.placeSell(firstSeller,"BS000001",10,Money.ofMinor(9)).toCompletableFuture().join().order().id();UUID second=closed.placeSell(secondSeller,"BS000001",10,Money.ofMinor(9)).toCompletableFuture().join().order().id();closed.placeBuy(buyer,"BS000001",10,Money.ofMinor(10)).toCompletableFuture().join();
+            new SecondaryMarketService(repository,db,Runnable::run,()->Instant.EPOCH,0,()->new MarketSession(true)).matchQueuedOrders().toCompletableFuture().join();
+            assertThat(repository.findOrder(first).orElseThrow().state()).isEqualTo(LimitOrder.State.FILLED);assertThat(repository.findOrder(second).orElseThrow().state()).isEqualTo(LimitOrder.State.OPEN);
+        }finally{Files.deleteIfExists(file);}
     }
 
     private static void seedListing(Database db, CompanyId c) { seedListingRow(db,c); db.inTransaction(x->{try(var s=x.prepareStatement("UPDATE companies SET status='LISTED' WHERE id=?")){s.setString(1,c.value().toString());s.executeUpdate();}return null;}); }

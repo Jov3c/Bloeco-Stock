@@ -10,6 +10,7 @@ import java.sql.SQLException;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.List;
+import java.time.LocalDate;
 import cn.blockeco.exchange.application.*;
 
 /** SQL facts for reservations and fills. Every write is part of the caller's transaction. */
@@ -21,6 +22,10 @@ public interface SecondaryTradingRepository {
     Optional<StockListing> findListing(Connection connection, String stockCode) throws SQLException;
     /** Best active maker which crosses the supplied taker, using price-time priority. */
     Optional<LimitOrder> nextCrossingMaker(Connection connection, LimitOrder taker) throws SQLException;
+    /** Active orders in their immutable global acceptance order for an opening catch-up. */
+    List<LimitOrder> queuedOrders(Connection connection) throws SQLException;
+    /** Records an observed session and returns whether this opening still needs its one catch-up. */
+    boolean claimOpeningCatchUp(Connection connection, LocalDate tradingDay, boolean acceptsMatching) throws SQLException;
     Settlement settleTrade(Connection connection, Trade trade) throws SQLException;
     void releaseOrder(Connection connection, UUID orderId, LimitOrder.State terminalState) throws SQLException;
     void cancelTakerForSelfTrade(Connection connection, UUID orderId) throws SQLException;

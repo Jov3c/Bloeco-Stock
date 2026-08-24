@@ -10,6 +10,7 @@ import cn.blockeco.exchange.ports.SecondaryTradingRepository;
 import cn.blockeco.exchange.application.*;
 import java.sql.*;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.*;
 import javax.sql.DataSource;
 
@@ -31,6 +32,14 @@ public final class SqlSecondaryTradingRepository implements SecondaryTradingRepo
                 ? "SELECT * FROM stock_orders WHERE company_id=? AND stock_code=? AND side='SELL' AND state IN ('OPEN','PARTIALLY_FILLED') AND limit_price_minor<=? ORDER BY limit_price_minor ASC,priority_sequence ASC LIMIT 1"
                 : "SELECT * FROM stock_orders WHERE company_id=? AND stock_code=? AND side='BUY' AND state IN ('OPEN','PARTIALLY_FILLED') AND limit_price_minor>=? ORDER BY limit_price_minor DESC,priority_sequence ASC LIMIT 1";
         try(PreparedStatement s=c.prepareStatement(sql)){s.setString(1,taker.companyId().value().toString());s.setString(2,taker.stockCode());s.setLong(3,taker.limitPrice().minorUnits());try(ResultSet r=s.executeQuery()){return r.next()?Optional.of(read(r)):Optional.empty();}}
+    }
+    @Override public List<LimitOrder> queuedOrders(Connection c)throws SQLException{
+        requireTransaction(c);try(PreparedStatement s=c.prepareStatement("SELECT * FROM stock_orders WHERE state IN ('OPEN','PARTIALLY_FILLED') ORDER BY priority_sequence ASC")){try(ResultSet r=s.executeQuery()){List<LimitOrder> queued=new ArrayList<>();while(r.next())queued.add(read(r));return List.copyOf(queued);}}
+    }
+    @Override public boolean claimOpeningCatchUp(Connection c,LocalDate day,boolean open)throws SQLException{
+        requireTransaction(c);Objects.requireNonNull(day,"tradingDay");String previous=null;try(PreparedStatement s=c.prepareStatement("SELECT opening_catch_up_day FROM market_session_state WHERE singleton=1")){try(ResultSet r=s.executeQuery()){if(!r.next())throw new IllegalStateException("market session state missing");previous=r.getString(1);}}
+        try(PreparedStatement s=c.prepareStatement("UPDATE market_session_state SET observed_day=?,accepts_matching=?,opening_catch_up_day=? WHERE singleton=1")){s.setString(1,day.toString());s.setInt(2,open?1:0);s.setString(3,open?day.toString():previous);s.executeUpdate();}
+        return open&&!day.toString().equals(previous);
     }
     @Override public Settlement settleTrade(Connection c, Trade trade)throws SQLException {
         requireTransaction(c); LimitOrder buy=load(c,trade.buyOrderId()),sell=load(c,trade.sellOrderId()); validateFill(buy,sell,trade);

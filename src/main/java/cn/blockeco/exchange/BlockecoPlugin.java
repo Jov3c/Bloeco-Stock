@@ -9,6 +9,7 @@ import cn.blockeco.exchange.application.SecuritiesCashService;
 import cn.blockeco.exchange.application.SecondaryMarketRecoveryService;
 import cn.blockeco.exchange.application.SecondaryMarketQueryService;
 import cn.blockeco.exchange.application.SecondaryMarketService;
+import cn.blockeco.exchange.application.MarketSessionService;
 import cn.blockeco.exchange.application.IpoLifecycleScheduler;
 import cn.blockeco.exchange.application.NativeAssetService;
 import cn.blockeco.exchange.application.BluechipBootstrapService;
@@ -75,6 +76,7 @@ public final class BlockecoPlugin extends JavaPlugin {
     private final PluginRuntime runtime = new PluginRuntime();
     private final CompanyAssetAdapterRegistry assetAdapterRegistry = new CompanyAssetAdapterRegistryImpl();
     private IpoLifecycleScheduler ipoLifecycle;
+    private org.bukkit.scheduler.BukkitTask marketSessionTransitions;
     private SecondaryTradingGate secondaryTradingGate;
 
     @Override public void onEnable() {
@@ -150,7 +152,9 @@ public final class BlockecoPlugin extends JavaPlugin {
         var cashGateway = new VaultSecuritiesCashGateway(economy, mainThread, escrowId);
         secondaryTradingGate = new SecondaryTradingGate();
         var cashService = new SecuritiesCashService(cashRepository, db, cashGateway, sqlExecutor, clock, Duration.ofSeconds(15), secondaryTradingGate::mutationsOpen);
-        var secondaryMarket = new SecondaryMarketService(tradingRepository, db, sqlExecutor, clock, feeBps);
+        java.util.function.Supplier<cn.blockeco.exchange.domain.market.MarketSession> marketSession = () -> cn.blockeco.exchange.domain.market.MarketSession.at(clock.now(), marketZone);
+        var secondaryMarket = new SecondaryMarketService(tradingRepository, db, sqlExecutor, clock, feeBps, marketSession);
+        var marketSessions = new MarketSessionService(secondaryMarket, tradingRepository, db, sqlExecutor, clock, marketZone, marketSession);
         var secondaryQueries = new SecondaryMarketQueryService(tradingRepository, publicRepository, sqlExecutor, Clock.systemUTC(), marketZone);
         var secondaryRecovery = new SecondaryMarketRecoveryService(cashRepository, () -> {
             var legacy = new java.util.ArrayList<SecondaryMarketRecoveryService.LegacyRecoveryIssue>();
@@ -201,6 +205,8 @@ public final class BlockecoPlugin extends JavaPlugin {
                                     + (staleFailure == null ? count : "failed"))));
                     ipoLifecycle = new IpoLifecycleScheduler(task -> { var bukkitTask=getServer().getScheduler().runTaskTimerAsynchronously(this,task,20L,1200L); return bukkitTask::cancel; }, clock::now, primaryOfferings, failure -> getLogger().warning("IPO 状态调度失败，将在下个周期重试: " + failure.getMessage()), ignoredClose -> refreshSymbolsIfAccepting(runtime, symbols, publicQueries, error -> getLogger().warning("股票代码缓存刷新失败，将在下个周期重试: " + error.getMessage())));
                     ipoLifecycle.start();
+                    marketSessionTransitions = getServer().getScheduler().runTaskTimerAsynchronously(this,
+                            () -> marketSessions.onSessionTransition().exceptionally(failure -> { getLogger().warning("股票交易时段调度失败，将在下个周期重试: " + failure.getMessage()); return 0; }), 20L, 20L);
                 }));
         return true;
     }
@@ -222,6 +228,7 @@ public final class BlockecoPlugin extends JavaPlugin {
 
     @Override public void onDisable() {
         if (ipoLifecycle != null) ipoLifecycle.stop();
+        if (marketSessionTransitions != null) marketSessionTransitions.cancel();
         getServer().getServicesManager().unregisterAll(this);
         runtime.stop();
     }
