@@ -70,7 +70,12 @@ public class SqlCompanyFinanceRepository implements CompanyFinanceRepository {
         } catch (SQLException e) { throw new IllegalStateException("could not read ambiguous capitalizations", e); }
     }
     @Override public List<Company> findLegacyCompaniesWithoutFinance() {
-        String sql = "SELECT c.* FROM companies c LEFT JOIN company_cash_accounts f ON f.company_id = c.id WHERE f.company_id IS NULL";
+        String sql = """
+                SELECT c.* FROM companies c
+                LEFT JOIN company_cash_accounts f ON f.company_id = c.id
+                LEFT JOIN bluechip_companies bc ON bc.company_id = c.id
+                WHERE f.company_id IS NULL AND bc.company_id IS NULL
+                """;
         try (Connection c = dataSource.getConnection(); PreparedStatement s = c.prepareStatement(sql); ResultSet rows = s.executeQuery()) {
             java.util.ArrayList<Company> results = new java.util.ArrayList<>(); while (rows.next()) results.add(company(rows)); return results;
         } catch (SQLException e) { throw new IllegalStateException("could not find legacy companies", e); }

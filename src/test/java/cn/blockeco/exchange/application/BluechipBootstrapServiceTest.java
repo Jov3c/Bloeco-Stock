@@ -10,6 +10,7 @@ import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.infrastructure.sql.Database;
 import cn.blockeco.exchange.infrastructure.sql.SqlBluechipRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlBluechipBootstrapFundingRepository;
+import cn.blockeco.exchange.infrastructure.sql.SqlCompanyFinanceRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlCompanyRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlSecuritiesCashRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlStockListingRepository;
@@ -62,6 +63,31 @@ class BluechipBootstrapServiceTest {
             long seededCash = systemCash(database);
             assertThat(new SqlSecuritiesCashRepository(database.dataSource())
                     .reconcile(Money.ofMinor(seededCash)).confirmedDifference()).isEqualTo(Money.zero());
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
+    @Test
+    void recoveryDoesNotTreatInitializedBluechipsAsLegacyCompaniesWithoutFinance() throws Exception {
+        var file = Files.createTempFile("blockstock-bluechip-recovery-", ".db");
+        try (Database database = migratedDatabase(file)) {
+            BluechipBootstrapService bootstrap = service(database, new SqlBluechipRepository(database.dataSource()), config());
+            bootstrap.initializeMissing().toCompletableFuture().join();
+            RecordingEscrow escrow = new RecordingEscrow();
+            CompanyCapitalizationService recovery = new CompanyCapitalizationService(
+                    new SqlCompanyFinanceRepository(database.dataSource()), new cn.blockeco.exchange.infrastructure.sql.SqlAuditLog(),
+                    database, escrow, new cn.blockeco.exchange.ports.MainThreadExecutor() {
+                        @Override public <T> java.util.concurrent.CompletionStage<T> submit(java.util.function.Supplier<T> work) {
+                            return java.util.concurrent.CompletableFuture.completedFuture(work.get());
+                        }
+                    }, Runnable::run, () -> NOW);
+
+            assertThat(new SqlCompanyFinanceRepository(database.dataSource()).findLegacyCompaniesWithoutFinance()).isEmpty();
+            assertThat(recovery.recoverPendingCapitalizations().toCompletableFuture().join()).isZero();
+            assertThat(escrow.escrowDeposits).isZero();
+            assertThat(count(database, "SELECT COUNT(*) FROM treasury_operations")).isZero();
+            assertThat(count(database, "SELECT COUNT(*) FROM treasury_operations WHERE state = 'AMBIGUOUS'")).isZero();
         } finally {
             Files.deleteIfExists(file);
         }
@@ -177,6 +203,15 @@ class BluechipBootstrapServiceTest {
         } catch (Exception exception) { throw new AssertionError(exception); }
     }
 
+    private static long count(Database database, String sql) {
+        try (var connection = database.dataSource().getConnection(); var statement = connection.prepareStatement(sql); var rows = statement.executeQuery()) {
+            assertThat(rows.next()).isTrue();
+            return rows.getLong(1);
+        } catch (Exception exception) {
+            throw new AssertionError(exception);
+        }
+    }
+
     private static void insertExtraBluechipMetadata(Database database) {
         UUID id = UUID.randomUUID();
         database.inTransaction(connection -> {
@@ -207,5 +242,13 @@ class BluechipBootstrapServiceTest {
         }
         yaml.set("bluechips", entries);
         return BluechipConfig.load(yaml, 2);
+    }
+
+    private static final class RecordingEscrow implements cn.blockeco.exchange.ports.TreasuryEscrowGateway {
+        int escrowDeposits;
+        @Override public cn.blockeco.exchange.ports.EconomyGateway.Result withdrawPlayer(UUID playerId, Money amount, UUID operationId) { return cn.blockeco.exchange.ports.EconomyGateway.Result.success(""); }
+        @Override public cn.blockeco.exchange.ports.EconomyGateway.Result depositEscrow(Money amount, UUID operationId) { escrowDeposits++; return cn.blockeco.exchange.ports.EconomyGateway.Result.success(""); }
+        @Override public cn.blockeco.exchange.ports.EconomyGateway.Result withdrawEscrow(Money amount, UUID operationId) { return cn.blockeco.exchange.ports.EconomyGateway.Result.success(""); }
+        @Override public cn.blockeco.exchange.ports.EconomyGateway.Result refundPlayer(UUID playerId, Money amount, UUID operationId) { return cn.blockeco.exchange.ports.EconomyGateway.Result.success(""); }
     }
 }
