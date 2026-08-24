@@ -36,6 +36,13 @@ class BluechipConfigTest {
     }
 
     @Test
+    void rejectsPlayerSequenceCodesSoBluechipsCannotConsumeTheBSNamespace() {
+        assertThatThrownBy(() -> BluechipConfig.load(configWithEntries(10, entries -> entries.getFirst().put("code", "BS000001")), 2))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("reserved for player listings");
+    }
+
+    @Test
     void rejectsDisplayNamesThatCollideAfterCompanyNormalization() {
         assertThatThrownBy(() -> BluechipConfig.load(configWithEntries(10,
                 entries -> entries.get(1).put("display-name", "  fictional   0  ")), 2))

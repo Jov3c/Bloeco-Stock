@@ -35,6 +35,7 @@ public record BluechipConfig(List<BluechipDefinition> definitions) {
         String displayName = text(entry, "display-name");
         String industry = text(entry, "industry");
         if (!CODE.matcher(code).matches()) throw new IllegalArgumentException("invalid bluechip code: " + code);
+        if (code.matches("BS[0-9]{6}")) throw new IllegalArgumentException("bluechip code is reserved for player listings: " + code);
         if (!codes.add(code)) throw new IllegalArgumentException("duplicate bluechip code: " + code);
         if (!names.add(Company.normalizeName(displayName))) {
             throw new IllegalArgumentException("duplicate bluechip display name: " + displayName);

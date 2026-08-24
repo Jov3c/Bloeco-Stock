@@ -1,6 +1,7 @@
 package cn.blockeco.exchange.domain.trading;
 
 import cn.blockeco.exchange.domain.company.CompanyId;
+import cn.blockeco.exchange.domain.finance.StockListing;
 import cn.blockeco.exchange.domain.money.Money;
 import java.time.Instant;
 import java.util.Objects;
@@ -21,7 +22,7 @@ public record Trade(
     public Trade {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(companyId, "companyId");
-        if (!isValidStockCode(stockCode)) throw new IllegalArgumentException("stockCode must be a bounded stock code");
+        if (!StockListing.isValidStockCode(stockCode)) throw new IllegalArgumentException("stockCode must be a bounded stock code");
         Objects.requireNonNull(buyOrderId, "buyOrderId");
         Objects.requireNonNull(sellOrderId, "sellOrderId");
         if (buyOrderId.equals(sellOrderId)) throw new IllegalArgumentException("buyOrderId and sellOrderId must differ");
@@ -40,8 +41,4 @@ public record Trade(
         Objects.requireNonNull(occurredAt, "occurredAt");
     }
 
-    private static boolean isValidStockCode(String stockCode) {
-        return stockCode != null && stockCode.matches("BS\\d{6}")
-                && Integer.parseInt(stockCode.substring(2)) >= 1;
-    }
 }

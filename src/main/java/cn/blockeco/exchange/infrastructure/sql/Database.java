@@ -18,7 +18,7 @@ import java.util.Objects;
 
 public final class Database implements AutoCloseable, TransactionRunner {
 
-    private static final String[] MIGRATIONS = {"V001", "V002", "V003", "V004", "V005", "V006", "V007", "V008", "V009", "V010", "V011", "V012"};
+    private static final String[] MIGRATIONS = {"V001", "V002", "V003", "V004", "V005", "V006", "V007", "V008", "V009", "V010", "V011", "V012", "V013"};
     private final HikariDataSource dataSource;
     private final MigrationPrecondition precondition;
 
@@ -48,6 +48,8 @@ public final class Database implements AutoCloseable, TransactionRunner {
                 String checksum = checksum(script);
                 if (isApplied(connection, version, checksum)) continue;
                 precondition.verify(connection, version);
+                boolean rebuildsListingTable = "V013".equals(version);
+                if (rebuildsListingTable) setForeignKeys(connection, false);
                 boolean originalAutoCommit = connection.getAutoCommit();
                 connection.setAutoCommit(false);
                 try {
@@ -66,6 +68,10 @@ public final class Database implements AutoCloseable, TransactionRunner {
                     throw exception;
                 } finally {
                     connection.setAutoCommit(originalAutoCommit);
+                    if (rebuildsListingTable) {
+                        setForeignKeys(connection, true);
+                        verifyForeignKeyIntegrity(connection);
+                    }
                 }
             }
         }
@@ -104,8 +110,23 @@ public final class Database implements AutoCloseable, TransactionRunner {
     }
 
     private static void enableForeignKeys(Connection connection) throws SQLException {
+        setForeignKeys(connection, true);
+    }
+
+    private static void setForeignKeys(Connection connection, boolean enabled) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("PRAGMA foreign_keys=ON")) {
-            statement.execute();
+            if (enabled) statement.execute();
+        }
+        if (!enabled) {
+            try (PreparedStatement statement = connection.prepareStatement("PRAGMA foreign_keys=OFF")) {
+                statement.execute();
+            }
+        }
+    }
+
+    private static void verifyForeignKeyIntegrity(Connection connection) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("PRAGMA foreign_key_check"); ResultSet rows = statement.executeQuery()) {
+            if (rows.next()) throw new IllegalStateException("V013 migration foreign-key integrity check failed: " + rows.getString(1));
         }
     }
 

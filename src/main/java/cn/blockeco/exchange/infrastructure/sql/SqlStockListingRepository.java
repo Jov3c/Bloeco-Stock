@@ -56,6 +56,45 @@ public final class SqlStockListingRepository implements StockListingRepository {
         return listing;
     }
 
+    @Override
+    public StockListing allocateFixed(Connection connection, CompanyId companyId, String stockCode, Money issueReferencePrice, long issuedShares, Instant listedAt)
+            throws SQLException {
+        Optional<StockListing> existing = find(connection, "SELECT * FROM stock_listings WHERE company_id=?", companyId.value().toString());
+        if (existing.isPresent()) {
+            if (!existing.get().stockCode().equals(stockCode)) throw new IllegalStateException("company already has a different stock code");
+            return existing.get();
+        }
+        StockListing listing = new StockListing(companyId, stockCode, issueReferencePrice, issuedShares, listedAt);
+        if (find(connection, "SELECT * FROM stock_listings WHERE stock_code=?", stockCode).isPresent()) {
+            throw new IllegalStateException("reserved stock ticker is already in use: " + stockCode);
+        }
+        insert(connection, listing);
+        return listing;
+    }
+
+    @Override
+    public void reconcileLegacyBluechipTicker(Connection connection, CompanyId companyId, String configuredTicker) throws SQLException {
+        Optional<StockListing> current = find(connection, "SELECT * FROM stock_listings WHERE company_id=?", companyId.value().toString());
+        if (current.isEmpty() || current.get().stockCode().equals(configuredTicker)) return;
+        String legacyCode = current.get().stockCode();
+        if (!legacyCode.matches("BS[0-9]{6}") || Long.parseLong(legacyCode.substring(2)) == 0) {
+            throw new IllegalStateException("bluechip ticker collision for " + configuredTicker + ": persisted code is not a legacy BS code");
+        }
+        if (find(connection, "SELECT * FROM stock_listings WHERE stock_code=?", configuredTicker).isPresent()) {
+            throw new IllegalStateException("bluechip ticker collision for " + configuredTicker + ": configured ticker is already in use");
+        }
+        if (hasDependentTradesOrOrders(connection, companyId)) {
+            throw new IllegalStateException("bluechip ticker migration requires manual handling because orders or trades exist for " + legacyCode);
+        }
+        try (PreparedStatement update = connection.prepareStatement("UPDATE stock_listings SET stock_code=? WHERE company_id=? AND stock_code=?")) {
+            update.setString(1, configuredTicker); update.setString(2, companyId.value().toString()); update.setString(3, legacyCode);
+            if (update.executeUpdate() != 1) throw new IllegalStateException("bluechip ticker migration state conflict");
+        }
+        try (PreparedStatement updateAudit = connection.prepareStatement("UPDATE audit_events SET payload_json=REPLACE(payload_json, ?, ?) WHERE company_id=? AND payload_json LIKE ?")) {
+            updateAudit.setString(1, legacyCode); updateAudit.setString(2, configuredTicker); updateAudit.setString(3, companyId.value().toString()); updateAudit.setString(4, "%" + legacyCode + "%"); updateAudit.executeUpdate();
+        }
+    }
+
     private Optional<StockListing> find(String sql, String value) {
         try (Connection connection = dataSource.getConnection()) {
             return find(connection, sql, value);
@@ -81,6 +120,24 @@ public final class SqlStockListingRepository implements StockListingRepository {
             }
             return rows.getLong(1);
         }
+    }
+
+    private static void insert(Connection connection, StockListing listing) throws SQLException {
+        try (PreparedStatement insert = connection.prepareStatement(
+                "INSERT INTO stock_listings (company_id,stock_code,issue_reference_price_minor,issued_shares,listed_at) VALUES (?,?,?,?,?)")) {
+            insert.setString(1, listing.companyId().value().toString()); insert.setString(2, listing.stockCode());
+            insert.setLong(3, listing.issueReferencePrice().minorUnits()); insert.setLong(4, listing.issuedShares()); insert.setString(5, listing.listedAt().toString()); insert.executeUpdate();
+        }
+    }
+
+    private static boolean hasDependentTradesOrOrders(Connection connection, CompanyId companyId) throws SQLException {
+        for (String table : new String[] {"stock_orders", "stock_trades"}) {
+            try (PreparedStatement statement = connection.prepareStatement("SELECT 1 FROM " + table + " WHERE company_id=? LIMIT 1")) {
+                statement.setString(1, companyId.value().toString());
+                try (ResultSet rows = statement.executeQuery()) { if (rows.next()) return true; }
+            }
+        }
+        return false;
     }
 
     private static StockListing listing(ResultSet rows) throws SQLException {
