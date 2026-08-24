@@ -26,6 +26,12 @@ public final class SqlBluechipRepository implements BluechipRepository {
             JOIN stock_listings sl ON sl.company_id = bc.company_id
             JOIN share_holdings h ON h.company_id = bc.company_id AND h.holder_uuid = bc.system_account_uuid
             """;
+    private static final String METADATA_SELECT = """
+            SELECT bc.company_id, bc.industry, bc.system_account_uuid, bc.model_price_minor, bc.lower_price_minor,
+                   bc.upper_price_minor, bc.spread_bps, bc.event_sensitivity_bps, bc.payout_bps, sl.stock_code,
+                   sl.issue_reference_price_minor, sl.issued_shares, sl.listed_at
+            FROM bluechip_companies bc JOIN stock_listings sl ON sl.company_id = bc.company_id
+            """;
     private final DataSource dataSource;
 
     public SqlBluechipRepository(DataSource dataSource) { this.dataSource = dataSource; }
@@ -36,6 +42,16 @@ public final class SqlBluechipRepository implements BluechipRepository {
         try (Connection connection = dataSource.getConnection(); PreparedStatement statement = connection.prepareStatement(SELECT + " ORDER BY sl.stock_code"); ResultSet rows = statement.executeQuery()) {
             java.util.ArrayList<BluechipCompany> companies = new java.util.ArrayList<>(); while (rows.next()) companies.add(map(rows)); return List.copyOf(companies);
         } catch (SQLException exception) { throw new IllegalStateException("could not read bluechip companies", exception); }
+    }
+    @Override public List<BluechipMetadata> allMetadata() {
+        try (Connection connection = dataSource.getConnection(); PreparedStatement statement = connection.prepareStatement(METADATA_SELECT + " ORDER BY bc.company_id"); ResultSet rows = statement.executeQuery()) {
+            java.util.ArrayList<BluechipMetadata> metadata = new java.util.ArrayList<>(); while (rows.next()) metadata.add(mapMetadata(rows)); return List.copyOf(metadata);
+        } catch (SQLException exception) { throw new IllegalStateException("could not read bluechip metadata", exception); }
+    }
+    @Override public List<SeedAudit> initializedSeeds(CompanyId companyId) {
+        try (Connection connection = dataSource.getConnection(); PreparedStatement statement = connection.prepareStatement("SELECT cash_delta_minor, shares_delta FROM bluechip_fund_audit WHERE company_id = ? AND operation = 'BLUECHIP_INITIALIZED' ORDER BY id")) {
+            statement.setString(1, companyId.value().toString()); try (ResultSet rows = statement.executeQuery()) { java.util.ArrayList<SeedAudit> audits = new java.util.ArrayList<>(); while (rows.next()) audits.add(new SeedAudit(Money.ofMinor(rows.getLong(1)), rows.getLong(2))); return List.copyOf(audits); }
+        } catch (SQLException exception) { throw new IllegalStateException("could not read bluechip seed audit", exception); }
     }
 
     @Override public void insertInitial(Connection connection, BluechipSeed seed) throws SQLException {
@@ -74,6 +90,11 @@ public final class SqlBluechipRepository implements BluechipRepository {
         CompanyId companyId = new CompanyId(UUID.fromString(row.getString("company_id")));
         StockListing listing = new StockListing(companyId, row.getString("stock_code"), Money.ofMinor(row.getLong("issue_reference_price_minor")), row.getLong("issued_shares"), Instant.parse(row.getString("listed_at")));
         return new BluechipCompany(companyId, listing, row.getString("industry"), UUID.fromString(row.getString("system_account_uuid")), Money.ofMinor(row.getLong("model_price_minor")), Money.ofMinor(row.getLong("lower_price_minor")), Money.ofMinor(row.getLong("upper_price_minor")), row.getLong("available_shares"), Money.ofMinor(row.getLong("fund_cash_minor")));
+    }
+    private static BluechipMetadata mapMetadata(ResultSet row) throws SQLException {
+        CompanyId companyId = new CompanyId(UUID.fromString(row.getString("company_id")));
+        StockListing listing = new StockListing(companyId, row.getString("stock_code"), Money.ofMinor(row.getLong("issue_reference_price_minor")), row.getLong("issued_shares"), Instant.parse(row.getString("listed_at")));
+        return new BluechipMetadata(companyId, listing, row.getString("industry"), UUID.fromString(row.getString("system_account_uuid")), Money.ofMinor(row.getLong("model_price_minor")), Money.ofMinor(row.getLong("lower_price_minor")), Money.ofMinor(row.getLong("upper_price_minor")), row.getInt("spread_bps"), row.getInt("event_sensitivity_bps"), row.getInt("payout_bps"));
     }
     private static void insertHolding(Connection connection, BluechipSeed seed) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("INSERT INTO share_holdings (company_id, holder_uuid, available_shares, reserved_shares) VALUES (?, ?, ?, 0)")) {

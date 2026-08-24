@@ -14,6 +14,7 @@ import cn.blockeco.exchange.infrastructure.sql.SqlStockListingRepository;
 import cn.blockeco.exchange.paper.BluechipConfig;
 import java.nio.file.Files;
 import java.time.Instant;
+import java.sql.PreparedStatement;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -72,6 +73,68 @@ class BluechipBootstrapServiceTest {
         }
     }
 
+    @Test
+    void reinitializationAcceptsTradedFundBalancesAndDoesNotMintCashAgain() throws Exception {
+        var file = Files.createTempFile("blockstock-bluechip-live-fund-", ".db");
+        try (Database database = migratedDatabase(file)) {
+            SqlBluechipRepository repository = new SqlBluechipRepository(database.dataSource());
+            BluechipBootstrapService service = service(database, repository, config());
+            service.initializeMissing().toCompletableFuture().join();
+            long cashAfterSeed = systemCash(database);
+            var first = repository.all().getFirst();
+            database.inTransaction(connection -> {
+                try (PreparedStatement holding = connection.prepareStatement("UPDATE share_holdings SET available_shares = available_shares - 7 WHERE company_id = ? AND holder_uuid = ?")) {
+                    holding.setString(1, first.companyId().value().toString()); holding.setString(2, SYSTEM_ACCOUNT.toString()); holding.executeUpdate();
+                }
+                try (PreparedStatement cash = connection.prepareStatement("UPDATE securities_cash_accounts SET available_minor = available_minor - 500 WHERE player_uuid = ?")) {
+                    cash.setString(1, SYSTEM_ACCOUNT.toString()); cash.executeUpdate();
+                }
+                try (PreparedStatement audit = connection.prepareStatement("INSERT INTO bluechip_fund_audit (id, company_id, operation, cash_delta_minor, shares_delta, occurred_at) VALUES (?, ?, 'BLUECHIP_TRADE', -500, -7, ?)")) {
+                    audit.setString(1, UUID.randomUUID().toString()); audit.setString(2, first.companyId().value().toString()); audit.setString(3, NOW.toString()); audit.executeUpdate();
+                }
+                return null;
+            });
+
+            assertThat(service.initializeMissing().toCompletableFuture().join().createdCompanies()).isZero();
+            assertThat(systemCash(database)).isEqualTo(cashAfterSeed - 500);
+            assertThat(repository.all().getFirst().fundShares()).isEqualTo(first.fundShares() - 7);
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
+    @Test
+    void refusesCodeChangedConfigurationBeforeCreatingAnotherBluechip() throws Exception {
+        var file = Files.createTempFile("blockstock-bluechip-code-change-", ".db");
+        try (Database database = migratedDatabase(file)) {
+            SqlBluechipRepository repository = new SqlBluechipRepository(database.dataSource());
+            service(database, repository, config()).initializeMissing().toCompletableFuture().join();
+
+            assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> service(database, repository, config("CHANGED")).initializeMissing().toCompletableFuture().join()))
+                    .hasMessageContaining("bluechip metadata does not match configuration");
+            assertThat(repository.all()).hasSize(10);
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
+    @Test
+    void refusesExtraPersistedBluechipMetadataBeforeCreatingAnything() throws Exception {
+        var file = Files.createTempFile("blockstock-bluechip-extra-", ".db");
+        try (Database database = migratedDatabase(file)) {
+            SqlBluechipRepository repository = new SqlBluechipRepository(database.dataSource());
+            BluechipBootstrapService service = service(database, repository, config());
+            service.initializeMissing().toCompletableFuture().join();
+            insertExtraBluechipMetadata(database);
+
+            assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> service.initializeMissing().toCompletableFuture().join()))
+                    .hasMessageContaining("bluechip metadata does not match configuration");
+            assertThat(repository.allMetadata()).hasSize(11);
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
     private BluechipBootstrapService service(Database database, SqlBluechipRepository repository, BluechipConfig config) {
         return new BluechipBootstrapService(config, SYSTEM_ACCOUNT, new SqlCompanyRepository(database.dataSource()),
                 new SqlStockListingRepository(database.dataSource()), repository, database, Runnable::run, () -> NOW);
@@ -83,12 +146,33 @@ class BluechipBootstrapServiceTest {
         return database;
     }
 
-    private static BluechipConfig config() {
+    private static long systemCash(Database database) {
+        try (var connection = database.dataSource().getConnection(); var statement = connection.prepareStatement("SELECT available_minor FROM securities_cash_accounts WHERE player_uuid = ?")) {
+            statement.setString(1, SYSTEM_ACCOUNT.toString()); try (var rows = statement.executeQuery()) { assertThat(rows.next()).isTrue(); return rows.getLong(1); }
+        } catch (Exception exception) { throw new AssertionError(exception); }
+    }
+
+    private static void insertExtraBluechipMetadata(Database database) {
+        UUID id = UUID.randomUUID();
+        database.inTransaction(connection -> {
+            try (PreparedStatement company = connection.prepareStatement("INSERT INTO companies (id, normalized_name, display_name, founder_uuid, status, treasury_minor, total_shares, dividend_basis_points, created_at) VALUES (?, 'extra bluechip', 'Extra Bluechip', ?, 'LISTED', 0, 1000, 5000, ?)");
+                 PreparedStatement listing = connection.prepareStatement("INSERT INTO stock_listings (company_id, stock_code, issue_reference_price_minor, issued_shares, listed_at) VALUES (?, 'BS999999', 1, 1000, ?)");
+                 PreparedStatement metadata = connection.prepareStatement("INSERT INTO bluechip_companies (company_id, industry, system_account_uuid, lower_price_minor, upper_price_minor, model_price_minor, spread_bps, event_sensitivity_bps, payout_bps, next_event_at, next_dividend_at) VALUES (?, 'Extra', ?, 1, 3, 2, 0, 0, 0, ?, ?)")) {
+                company.setString(1, id.toString()); company.setString(2, UUID.randomUUID().toString()); company.setString(3, NOW.toString()); company.executeUpdate();
+                listing.setString(1, id.toString()); listing.setString(2, NOW.toString()); listing.executeUpdate();
+                metadata.setString(1, id.toString()); metadata.setString(2, SYSTEM_ACCOUNT.toString()); metadata.setString(3, NOW.toString()); metadata.setString(4, NOW.toString()); metadata.executeUpdate();
+            }
+            return null;
+        });
+    }
+
+    private static BluechipConfig config() { return config("BC0"); }
+    private static BluechipConfig config(String firstCode) {
         YamlConfiguration yaml = new YamlConfiguration();
         List<Map<String, Object>> entries = new ArrayList<>();
         for (int index = 0; index < 10; index++) {
             Map<String, Object> entry = new LinkedHashMap<>();
-            entry.put("code", "BC" + index);
+            entry.put("code", index == 0 ? firstCode : "BC" + index);
             entry.put("display-name", "System Company " + index);
             entry.put("industry", "Industry " + index);
             entry.put("reference-price", "10.00"); entry.put("lower-bound", "8.00"); entry.put("upper-bound", "12.00");

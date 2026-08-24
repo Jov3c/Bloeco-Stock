@@ -14,6 +14,7 @@ import cn.blockeco.exchange.ports.StockListingRepository;
 import cn.blockeco.exchange.ports.TransactionRunner;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -33,6 +34,7 @@ public final class BluechipBootstrapService {
     }
     public CompletionStage<BluechipBootstrapResult> initializeMissing() { return CompletableFuture.supplyAsync(this::initialize, executor); }
     private BluechipBootstrapResult initialize() {
+        validateMetadataSet();
         int created = 0;
         for (BluechipDefinition definition : config.definitions()) if (initialize(definition)) created++;
         return new BluechipBootstrapResult(created);
@@ -42,7 +44,7 @@ public final class BluechipBootstrapService {
         var bluechip = bluechips.findByCompanyId(id);
         var company = companies.findById(id);
         var sameName = companies.findByNormalizedName(Company.normalizeName(definition.displayName()));
-        if (bluechip.isPresent()) { validateExisting(bluechip.orElseThrow(), definition); return false; }
+        if (bluechip.isPresent()) { validateExisting(bluechip.orElseThrow(), company.orElseThrow(), definition); return false; }
         if (company.isPresent() || sameName.isPresent()) throw new IllegalStateException("bluechip collision for " + definition.code());
         transactions.inTransaction(connection -> {
             Company seeded = Company.rehydrate(id, definition.displayName(), Company.normalizeName(definition.displayName()), systemAccountId,
@@ -57,13 +59,25 @@ public final class BluechipBootstrapService {
         });
         return true;
     }
-    private void validateExisting(BluechipRepository.BluechipCompany existing, BluechipDefinition definition) {
+    private void validateMetadataSet() {
+        var metadata = bluechips.allMetadata();
+        if (metadata.isEmpty()) return;
+        Set<CompanyId> expected = config.definitions().stream().map(definition -> companyId(definition.code())).collect(java.util.stream.Collectors.toUnmodifiableSet());
+        Set<CompanyId> actual = metadata.stream().map(BluechipRepository.BluechipMetadata::companyId).collect(java.util.stream.Collectors.toUnmodifiableSet());
+        if (metadata.size() != 10 || !actual.equals(expected)) throw new IllegalStateException("bluechip metadata does not match configuration");
+    }
+    private void validateExisting(BluechipRepository.BluechipCompany existing, Company company, BluechipDefinition definition) {
         if (!existing.systemAccountId().equals(systemAccountId) || existing.listing().issuedShares() != definition.totalShares()
                 || existing.referencePrice().minorUnits() != definition.referencePrice() || existing.lowerPrice().minorUnits() != definition.lowerBound()
                 || existing.upperPrice().minorUnits() != definition.upperBound() || !existing.industry().equals(definition.industry())
-                || existing.fundShares() != definition.initialFundShares() || existing.fundCash().minorUnits() != definition.initialFundCash()) {
+                || company.status() != CompanyStatus.LISTED || !company.founderId().equals(systemAccountId)
+                || !company.displayName().equals(definition.displayName()) || company.totalShares() != definition.totalShares()) {
             throw new IllegalStateException("bluechip collision for " + definition.code());
         }
+        var metadata = bluechips.allMetadata().stream().filter(candidate -> candidate.companyId().equals(existing.companyId())).findFirst().orElseThrow(() -> new IllegalStateException("bluechip collision for " + definition.code()));
+        if (metadata.spreadBps() != definition.spreadBps() || metadata.eventSensitivityBps() != definition.eventSensitivityBps() || metadata.payoutBps() != definition.dividendPayoutBps()) throw new IllegalStateException("bluechip collision for " + definition.code());
+        var seeds = bluechips.initializedSeeds(existing.companyId());
+        if (seeds.size() != 1 || seeds.getFirst().cash().minorUnits() != definition.initialFundCash() || seeds.getFirst().shares() != definition.initialFundShares()) throw new IllegalStateException("bluechip collision for " + definition.code());
     }
     private static CompanyId companyId(String code) { return new CompanyId(UUID.nameUUIDFromBytes(("blockstock-bluechip:" + code).getBytes(StandardCharsets.UTF_8))); }
     private static UUID requireSystemAccount(UUID value) { Objects.requireNonNull(value, "systemAccountId"); if (value.getMostSignificantBits() == 0 && value.getLeastSignificantBits() == 0) throw new IllegalArgumentException("systemAccountId must not be zero"); return value; }
