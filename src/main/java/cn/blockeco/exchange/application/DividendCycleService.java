@@ -18,7 +18,6 @@ public final class DividendCycleService {
     private final Executor executor;
     private final AppClock clock;
     private final long bluechipBaseProfitMinor;
-    private volatile List<DividendRunResult> lastResults = List.of();
 
     public DividendCycleService(BluechipRepository repository, TransactionRunner transactions, Executor executor,
                                 AppClock clock, long bluechipBaseProfitMinor) {
@@ -35,8 +34,7 @@ public final class DividendCycleService {
                     .settleDueDividendRuns(connection, clock.now(), bluechipBaseProfitMinor).stream()
                     .map(run -> new DividendRunResult(run.companyId(), run.profit(), run.distributed(), run.paymentCount(), run.idempotencyKey()))
                     .toList());
-            if (!settled.isEmpty()) lastResults = settled;
-            return settled.isEmpty() ? lastResults : settled;
+            return settled;
         }, executor);
     }
 

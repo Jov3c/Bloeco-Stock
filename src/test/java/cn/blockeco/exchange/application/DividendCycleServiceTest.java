@@ -27,11 +27,13 @@ class DividendCycleServiceTest {
             var first = service.settleDueRuns().toCompletableFuture().join().stream()
                     .filter(run -> run.companyId().equals(repository.all().getFirst().companyId())).findFirst().orElseThrow();
             long balanceAfterFirst = TestBluechipFixture.securitiesCash(database, holder);
-            var retry = service.settleDueRuns().toCompletableFuture().join().stream()
-                    .filter(run -> run.companyId().equals(first.companyId())).findFirst().orElseThrow();
+            var retry = service.settleDueRuns().toCompletableFuture().join();
+            var restartedRetry = new DividendCycleService(repository, database, Runnable::run, now::get, 100_000)
+                    .settleDueRuns().toCompletableFuture().join();
 
             assertThat(first.distributed().minorUnits()).isPositive();
-            assertThat(first).isEqualTo(retry);
+            assertThat(retry).isEmpty();
+            assertThat(restartedRetry).isEmpty();
             assertThat(TestBluechipFixture.securitiesCash(database, holder)).isEqualTo(balanceAfterFirst);
             assertThat(TestBluechipFixture.count(database, "SELECT COUNT(*) FROM dividend_runs")).isEqualTo(10);
             assertThat(TestBluechipFixture.count(database, "SELECT COUNT(*) FROM audit_events WHERE event_type = 'DIVIDEND_PAID'")).isEqualTo(1);
