@@ -111,3 +111,18 @@ product accounting invariant failure, independent of partial matching; the
 QA assertion remains strict.  Fix either the issued quantity semantics or
 allocate every issued share through a tracked holder before claiming final
 acceptance.
+
+## Task 16 fresh rerun — opening queue ordering blocker
+
+Task 16's issued-share repair was built into a new Shadow JAR and the runner
+again created a fresh SQLite and isolated Vault fixture.  The PREOPEN vanilla
+bot submitted and durably queued its NOVA buy.  On the following OPEN restart,
+the required opening-fill assertion found zero trades for that queued order.
+
+The likely ordering is that `MarketSessionService` claims and matches the
+opening queue before the maker's first quote refresh creates the system five
+levels.  The subsequent quote refresh does not re-match existing customer
+orders, so only a later new taker could cross.  The script deliberately stops
+before the administrator event and later lifecycle checks when this mandatory
+PREOPEN -> OPEN contract fails; the resulting lack of a persisted event is
+therefore consequential, not an event assertion defect.
