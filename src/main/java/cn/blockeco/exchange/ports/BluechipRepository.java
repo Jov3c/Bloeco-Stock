@@ -34,6 +34,7 @@ public interface BluechipRepository {
     int profitExpectationBps(CompanyId companyId);
     Optional<MarketSchedule> marketSchedule();
     void saveMarketSchedule(Connection connection, MarketSchedule schedule) throws SQLException;
+    void expireEvents(Connection connection, Instant now) throws SQLException;
 
     record BluechipCompany(CompanyId companyId, StockListing listing, String industry, UUID systemAccountId,
                            Money referencePrice, Money modelPrice, Money lowerPrice, Money upperPrice, int spreadBps, long fundShares, Money fundCash) { }

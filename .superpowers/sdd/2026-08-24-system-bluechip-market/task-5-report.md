@@ -40,3 +40,21 @@
 
 - Focused: `./gradlew.bat test --tests '*MarketEventServiceTest' --tests '*MarketCandleServiceTest' --no-daemon --console=plain`
 - Full: `./gradlew.bat test --no-daemon --console=plain`
+
+## Fix round 2
+
+### RED
+
+- Added a simulated pre-commit claim failure followed by a fresh service instance; the restart must see no partial event and claim the initial due work exactly once.
+- Added an end-time boundary test which expires an event at exactly `ends_at` and repeats expiry after service restart.
+
+### GREEN
+
+- Due-event creation now drafts events, then persists their event/announcement/model effects and global next-due timestamps in one transaction. A failed claim leaves neither event nor schedule mutation durable.
+- Added a durable `EXPIRED` state transition and invoke it before due-event processing, decay, and explicit expiry runs.
+- Detail queries and global market news additionally filter for `ACTIVE` events whose `ends_at` is strictly after the current instant, so an expired row cannot be presented as active while a scheduler is offline.
+
+### Verification
+
+- Focused: `./gradlew.bat test --tests '*MarketEventServiceTest' --tests '*MarketCandleServiceTest' --no-daemon --console=plain` — passed.
+- Full: `./gradlew.bat test --no-daemon --console=plain` — passed.

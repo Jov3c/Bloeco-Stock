@@ -13,6 +13,7 @@ import java.time.Instant;
 import java.util.Random;
 import java.util.UUID;
 import java.sql.PreparedStatement;
+import cn.blockeco.exchange.ports.TransactionRunner;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.Test;
 
@@ -79,6 +80,31 @@ class MarketEventServiceTest {
             new MarketEventService(repository, database, Runnable::run, clock::now, new Random(7)).triggerTestIndustryEvent("Industry A", 500).toCompletableFuture().join();
             assertThat(repository.profitExpectationBps(matching)).isEqualTo(250);
             assertThat(repository.profitExpectationBps(other)).isZero();
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test void failedGlobalClaimLeavesNoPartialEventAndRestartCanClaimItOnce() throws Exception {
+        var file = Files.createTempFile("blockstock-atomic-claim-", ".db");
+        try (var database = migrated(file)) {
+            var clock = new MutableClock(Instant.parse("2026-08-24T00:00:00Z")); var repository = seeded(database, clock);
+            TransactionRunner failed = new TransactionRunner() { @Override public <T> T inTransaction(SqlWork<T> work) { throw new IllegalStateException("simulated crash before commit"); } };
+            assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> new MarketEventService(repository, failed, Runnable::run, clock::now, new Random(7)).triggerDueEvents().toCompletableFuture().join())).hasMessageContaining("simulated crash");
+            assertThat(repository.recentEvents(10)).isEmpty();
+            assertThat(new MarketEventService(repository, database, Runnable::run, clock::now, new Random(7)).triggerDueEvents().toCompletableFuture().join()).hasSize(2);
+            assertThat(new MarketEventService(repository, database, Runnable::run, clock::now, new Random(7)).triggerDueEvents().toCompletableFuture().join()).isEmpty();
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test void eventExpiresAtEndBoundaryAndRemainsExpiredAfterRestart() throws Exception {
+        var file = Files.createTempFile("blockstock-expiry-", ".db");
+        try (var database = migrated(file)) {
+            var clock = new MutableClock(Instant.parse("2026-08-24T00:00:00Z")); var repository = seeded(database, clock);
+            var service = new MarketEventService(repository, database, Runnable::run, clock::now, new Random(7));
+            var event=service.triggerTestEvent(repository.all().getFirst().listing().stockCode(),500).toCompletableFuture().join();
+            clock.advance(Duration.between(event.startsAt(),event.endsAt())); service.expireEvents().toCompletableFuture().join();
+            assertThat(repository.recentEvents(1).getFirst().state()).isEqualTo("EXPIRED");
+            new MarketEventService(repository,database,Runnable::run,clock::now,new Random(9)).expireEvents().toCompletableFuture().join();
+            assertThat(repository.recentEvents(1).getFirst().state()).isEqualTo("EXPIRED");
         } finally { Files.deleteIfExists(file); }
     }
 
