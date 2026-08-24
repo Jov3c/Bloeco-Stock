@@ -3,8 +3,8 @@ CREATE TABLE bluechip_companies (
   system_account_uuid TEXT NOT NULL, lower_price_minor INTEGER NOT NULL CHECK (lower_price_minor > 0),
   upper_price_minor INTEGER NOT NULL CHECK (upper_price_minor > lower_price_minor),
   model_price_minor INTEGER NOT NULL CHECK (model_price_minor > lower_price_minor AND model_price_minor < upper_price_minor),
-  spread_bps INTEGER NOT NULL CHECK (spread_bps >= 0), event_sensitivity_bps INTEGER NOT NULL CHECK (event_sensitivity_bps >= 0),
-  payout_bps INTEGER NOT NULL CHECK (payout_bps >= 0), quotes_paused INTEGER NOT NULL DEFAULT 0 CHECK (quotes_paused IN (0, 1)),
+  spread_bps INTEGER NOT NULL CHECK (spread_bps BETWEEN 0 AND 10000), event_sensitivity_bps INTEGER NOT NULL CHECK (event_sensitivity_bps BETWEEN 0 AND 10000),
+  payout_bps INTEGER NOT NULL CHECK (payout_bps BETWEEN 0 AND 10000), quotes_paused INTEGER NOT NULL DEFAULT 0 CHECK (quotes_paused IN (0, 1)),
   next_event_at TEXT NOT NULL, next_dividend_at TEXT NOT NULL
 );
 
@@ -31,6 +31,18 @@ CREATE TABLE bluechip_fund_audit (
   id TEXT PRIMARY KEY, company_id TEXT NOT NULL REFERENCES companies(id), operation TEXT NOT NULL,
   cash_delta_minor INTEGER NOT NULL, shares_delta INTEGER NOT NULL, occurred_at TEXT NOT NULL
 );
+
+CREATE TRIGGER bluechip_fund_audit_no_update
+BEFORE UPDATE ON bluechip_fund_audit
+BEGIN
+  SELECT RAISE(ABORT, 'bluechip_fund_audit is append-only');
+END;
+
+CREATE TRIGGER bluechip_fund_audit_no_delete
+BEFORE DELETE ON bluechip_fund_audit
+BEGIN
+  SELECT RAISE(ABORT, 'bluechip_fund_audit is append-only');
+END;
 
 CREATE TABLE dividend_runs (
   company_id TEXT NOT NULL REFERENCES companies(id), dividend_at TEXT NOT NULL, state TEXT NOT NULL,

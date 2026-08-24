@@ -100,6 +100,23 @@ class MigrationTest {
                     assertThat(tableExists(connection, table)).as(table).isTrue();
                 }
                 assertThat(historyRows(connection, "V009")).isEqualTo(1);
+                for (int bpsPosition = 0; bpsPosition < 3; bpsPosition++) {
+                    String companyId = "company-bps-" + bpsPosition;
+                    insertCompany(connection, companyId);
+                    try (PreparedStatement insert = connection.prepareStatement("""
+                            INSERT INTO bluechip_companies (company_id, industry, system_account_uuid,
+                            lower_price_minor, upper_price_minor, model_price_minor, spread_bps,
+                            event_sensitivity_bps, payout_bps, next_event_at, next_dividend_at)
+                            VALUES (?, 'industry', '00000000-0000-0000-0000-000000000001', 1, 3, 2, ?, ?, ?,
+                            '2026-08-24T00:00:00Z', '2026-09-24T00:00:00Z')
+                            """)) {
+                        insert.setString(1, companyId);
+                        insert.setInt(2, bpsPosition == 0 ? 10_001 : 0);
+                        insert.setInt(3, bpsPosition == 1 ? 10_001 : 0);
+                        insert.setInt(4, bpsPosition == 2 ? 10_001 : 0);
+                        assertThatThrownBy(insert::executeUpdate).isInstanceOf(Exception.class);
+                    }
+                }
                 try (PreparedStatement insert = connection.prepareStatement(
                         "INSERT INTO dividend_runs (company_id, dividend_at, state, created_at) VALUES (?, ?, ?, ?)")) {
                     insert.setString(1, "company-1");
@@ -108,6 +125,24 @@ class MigrationTest {
                     insert.setString(4, "2026-08-24T00:00:00Z");
                     insert.executeUpdate();
                     assertThatThrownBy(insert::executeUpdate).isInstanceOf(Exception.class);
+                }
+                try (PreparedStatement insert = connection.prepareStatement(
+                        "INSERT INTO bluechip_fund_audit VALUES (?, ?, ?, ?, ?, ?)")) {
+                    insert.setString(1, "audit-1");
+                    insert.setString(2, "company-1");
+                    insert.setString(3, "INITIALIZED");
+                    insert.setLong(4, 0);
+                    insert.setLong(5, 0);
+                    insert.setString(6, "2026-08-24T00:00:00Z");
+                    insert.executeUpdate();
+                }
+                try (PreparedStatement update = connection.prepareStatement(
+                        "UPDATE bluechip_fund_audit SET operation = 'MUTATED' WHERE id = 'audit-1'")) {
+                    assertThatThrownBy(update::executeUpdate).isInstanceOf(Exception.class);
+                }
+                try (PreparedStatement delete = connection.prepareStatement(
+                        "DELETE FROM bluechip_fund_audit WHERE id = 'audit-1'")) {
+                    assertThatThrownBy(delete::executeUpdate).isInstanceOf(Exception.class);
                 }
             }
         } finally {

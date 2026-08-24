@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.Test;
 
@@ -23,28 +24,45 @@ class BluechipConfigTest {
     }
 
     @Test
-    void rejectsNonFictionalOrNonTenBluechipConfiguration() {
+    void rejectsConfigurationsThatDoNotContainExactlyTenBluechips() {
         assertThatThrownBy(() -> BluechipConfig.load(configWithEntries(9), 2))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void rejectsCodesThatDoNotMatchTheMarketSymbolFormat() {
-        assertThatThrownBy(() -> BluechipConfig.load(configWithEntries(10, "bad-code"), 2))
+        assertThatThrownBy(() -> BluechipConfig.load(configWithEntries(10, entries -> entries.getFirst().put("code", "bad-code")), 2))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
-    private YamlConfiguration configWithEntries(int count) {
-        return configWithEntries(count, "NOVA");
+    @Test
+    void rejectsDisplayNamesThatCollideAfterCompanyNormalization() {
+        assertThatThrownBy(() -> BluechipConfig.load(configWithEntries(10,
+                entries -> entries.get(1).put("display-name", "  fictional   0  ")), 2))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
-    private YamlConfiguration configWithEntries(int count, String firstCode) {
+    @Test
+    void rejectsBasisPointValuesOutsideTheSupportedRange() {
+        for (String key : List.of("spread-bps", "event-sensitivity-bps", "dividend-payout-bps")) {
+            assertThatThrownBy(() -> BluechipConfig.load(configWithEntries(10,
+                    entries -> entries.getFirst().put(key, 10_001)), 2))
+                    .as(key)
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    private YamlConfiguration configWithEntries(int count) {
+        return configWithEntries(count, entries -> { });
+    }
+
+    private YamlConfiguration configWithEntries(int count, Consumer<List<Map<String, Object>>> customizer) {
         YamlConfiguration configuration = new YamlConfiguration();
         List<String> codes = List.of("NOVA", "AURORA", "TERRAN", "SKYLINE", "IRONWOOD", "LUMEN", "RIVERMINT", "ORBITAL", "CINDER", "VERDANT");
         List<Map<String, Object>> entries = new ArrayList<>();
         for (int index = 0; index < count; index++) {
             Map<String, Object> entry = new LinkedHashMap<>();
-            entry.put("code", index == 0 ? firstCode : codes.get(index));
+            entry.put("code", codes.get(index));
             entry.put("display-name", "Fictional " + index);
             entry.put("industry", "Industry " + index);
             entry.put("reference-price", "10.00");
@@ -58,6 +76,7 @@ class BluechipConfigTest {
             entry.put("dividend-payout-bps", 2_000);
             entries.add(entry);
         }
+        customizer.accept(entries);
         configuration.set("bluechips", entries);
         return configuration;
     }

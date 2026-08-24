@@ -1,6 +1,7 @@
 package cn.blockeco.exchange.paper;
 
 import cn.blockeco.exchange.domain.bluechip.BluechipDefinition;
+import cn.blockeco.exchange.domain.company.Company;
 import java.math.BigDecimal;
 import java.util.HashSet;
 import java.util.List;
@@ -35,7 +36,9 @@ public record BluechipConfig(List<BluechipDefinition> definitions) {
         String industry = text(entry, "industry");
         if (!CODE.matcher(code).matches()) throw new IllegalArgumentException("invalid bluechip code: " + code);
         if (!codes.add(code)) throw new IllegalArgumentException("duplicate bluechip code: " + code);
-        if (!names.add(displayName)) throw new IllegalArgumentException("duplicate bluechip display name: " + displayName);
+        if (!names.add(Company.normalizeName(displayName))) {
+            throw new IllegalArgumentException("duplicate bluechip display name: " + displayName);
+        }
         long lower = minor(entry, "lower-bound", scale);
         long reference = minor(entry, "reference-price", scale);
         long upper = minor(entry, "upper-bound", scale);
@@ -47,8 +50,8 @@ public record BluechipConfig(List<BluechipDefinition> definitions) {
         long initialFundShares = positiveLong(entry, "initial-fund-shares");
         if (initialFundShares > totalShares) throw new IllegalArgumentException("initial fund shares exceed total shares");
         return new BluechipDefinition(code, displayName, industry, reference, lower, upper, totalShares,
-                initialFundCash, initialFundShares, nonNegativeInt(entry, "spread-bps"),
-                nonNegativeInt(entry, "event-sensitivity-bps"), nonNegativeInt(entry, "dividend-payout-bps"));
+                initialFundCash, initialFundShares, basisPoints(entry, "spread-bps"),
+                basisPoints(entry, "event-sensitivity-bps"), basisPoints(entry, "dividend-payout-bps"));
     }
 
     private static String text(Map<?, ?> entry, String key) {
@@ -76,10 +79,10 @@ public record BluechipConfig(List<BluechipDefinition> definitions) {
         } catch (NumberFormatException exception) { throw new IllegalArgumentException("invalid bluechip " + key, exception); }
     }
 
-    private static int nonNegativeInt(Map<?, ?> entry, String key) {
+    private static int basisPoints(Map<?, ?> entry, String key) {
         try {
             int value = Integer.parseInt(text(entry, key));
-            if (value < 0) throw new IllegalArgumentException("bluechip " + key + " must not be negative");
+            if (value < 0 || value > 10_000) throw new IllegalArgumentException("bluechip " + key + " must be between 0 and 10000");
             return value;
         } catch (NumberFormatException exception) { throw new IllegalArgumentException("invalid bluechip " + key, exception); }
     }
