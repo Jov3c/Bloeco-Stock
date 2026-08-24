@@ -126,3 +126,27 @@ orders, so only a later new taker could cross.  The script deliberately stops
 before the administrator event and later lifecycle checks when this mandatory
 PREOPEN -> OPEN contract fails; the resulting lack of a persisted event is
 therefore consequential, not an event assertion defect.
+
+## Task 17 fresh rerun — maker replenishment blocker
+
+Task 17 (`564f670`) fixes the opening ordering.  The current fresh isolated
+Paper run proves it: the PREOPEN NOVA order became `PARTIALLY_FILLED` with
+five actual one-share trades at 1200 minor units immediately after the OPEN
+startup.  The runner now uses a bounded 15-second read-only SQLite poll for
+that required transition, rather than treating one instantaneous observation
+of an asynchronous opening task as conclusive.  The asserted condition itself
+is unchanged: at least one actual PREOPEN-to-OPEN trade is mandatory.
+
+The next unchanged strict acceptance caught a new product failure.  Those five
+trades consume the maker's five offers (1003, 1006, 1009, 1012, and 1015), but
+the maker does not replenish them.  The stopped fresh DB retains all five as
+`FILLED` with zero remaining shares and only the five bid orders as `OPEN`
+(997, 994, 991, 988, and 985).  Consequently the genuine vanilla NOVA detail
+GUI has no `卖1` through `卖5`, and the exact real-five-level assertion fails
+at `卖1`.  The server was stopped immediately, with `qa-server/logs/latest.log`
+and the fresh database retained as evidence.  No test condition was relaxed,
+no product source was changed, and no connection to port 25565 was made.
+
+The remaining event/news, POSTCLOSE, candle, dividend/idempotency, escrow
+reconciliation, and final Gradle acceptance must remain pending until the
+maker maintains five executable levels after an opening fill.
