@@ -185,7 +185,7 @@ public final class BlockecoPlugin extends JavaPlugin {
                 () -> bluechipBootstrap.initializeMissing(),
                 paused -> marketMaker.setQuotesPaused(paused),
                 (code, kind, value) -> db.inTransaction(connection -> { bluechipRepository.adjustFund(connection, code, kind, value, clock.now()); return null; }),
-                (scope, impact) -> { if ("market".equalsIgnoreCase(scope)) marketEvents.triggerTestMarketEvent(impact); else if ("industry".equalsIgnoreCase(scope)) throw new IllegalArgumentException("industry requires configured industry name"); else marketEvents.triggerTestEvent(scope.toUpperCase(java.util.Locale.ROOT), impact); }, messages);
+                (scope, impact) -> { if ("market".equalsIgnoreCase(scope)) marketEvents.triggerTestMarketEvent(impact); else if ("industry".equalsIgnoreCase(scope)) marketEvents.triggerTestIndustryEvent("industry", impact); else marketEvents.triggerTestEvent(scope.toUpperCase(java.util.Locale.ROOT), impact); }, messages);
         adminCommand.setExecutor((sender, registered, label, args) -> args.length > 0 && "bluechip".equalsIgnoreCase(args[0])
                 ? bluechipAdmin.onCommand(sender, registered, label, args) : adminConfig.onCommand(sender, registered, label, args));
         adminCommand.setTabCompleter((sender, registered, label, args) -> args.length > 0 && "bluechip".equalsIgnoreCase(args[0])

@@ -6,6 +6,7 @@ import cn.blockeco.exchange.infrastructure.sql.Database;
 import cn.blockeco.exchange.infrastructure.sql.SqlBluechipRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlCompanyRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlStockListingRepository;
+import cn.blockeco.exchange.infrastructure.sql.SqlPublicStockRepository;
 import cn.blockeco.exchange.paper.BluechipConfig;
 import java.nio.file.Files;
 import java.time.Duration;
@@ -18,6 +19,30 @@ import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.Test;
 
 class MarketEventServiceTest {
+    @Test void marketEventIsShownAsTheCurrentEventForEveryBluechipDetail() throws Exception {
+        var file = Files.createTempFile("blockstock-market-detail-", ".db");
+        try (var database = migrated(file)) {
+            var clock = new MutableClock(Instant.parse("2026-08-24T00:00:00Z")); var repository = seeded(database, clock);
+            new MarketEventService(repository, database, Runnable::run, clock::now, new Random(7)).triggerTestMarketEvent(500).toCompletableFuture().join();
+
+            var info = new SqlPublicStockRepository(database.dataSource()).findInfo(repository.all().getFirst().listing().stockCode()).orElseThrow();
+
+            assertThat(info.marketState().flatMap(state -> state.currentEvent())).isPresent();
+            assertThat(info.marketState().orElseThrow().currentEvent().orElseThrow().headline()).contains("大盘");
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test void recentNewsIncludesDividendAndLiquidityAnnouncements() throws Exception {
+        var file = Files.createTempFile("blockstock-news-union-", ".db");
+        try (var database = migrated(file)) {
+            var clock = new MutableClock(Instant.parse("2026-08-24T00:00:00Z")); var repository = seeded(database, clock); var company = repository.all().getFirst();
+            database.inTransaction(connection -> { try (var dividend = connection.prepareStatement("INSERT INTO company_announcements (id,company_id,body,created_at) VALUES (?,?,?,?)"); var liquidity = connection.prepareStatement("INSERT INTO audit_events (event_id,company_id,actor_uuid,event_type,payload_json,occurred_at) VALUES (?, ?, NULL, 'BLUECHIP_LIQUIDITY_DEGRADED', '{}', ?)")) { dividend.setString(1,UUID.randomUUID().toString());dividend.setString(2,company.companyId().value().toString());dividend.setString(3,"DIVIDEND_PAID: distributedMinor=10");dividend.setString(4,clock.now().toString());dividend.executeUpdate();liquidity.setString(1,UUID.randomUUID().toString());liquidity.setString(2,company.companyId().value().toString());liquidity.setString(3,clock.now().plusSeconds(1).toString());liquidity.executeUpdate(); } return null; });
+
+            var headlines = new SqlPublicStockRepository(database.dataSource()).recentNews(5).stream().map(MarketNewsItem::headline).toList();
+
+            assertThat(headlines).contains("分红公告", "流动性提示");
+        } finally { Files.deleteIfExists(file); }
+    }
     @Test void companyEventPersistsMovesModelAndDecayReturnsItTowardReference() throws Exception {
         var file = Files.createTempFile("blockstock-event-", ".db");
         try (var database = migrated(file)) {

@@ -23,6 +23,7 @@ public final class BluechipMarketMakerService {
     private final AppClock clock;
     private CompletionStage<Void> lifecycle = CompletableFuture.completedFuture(null);
     private boolean closeRequested;
+    private boolean operatorPaused;
 
     public BluechipMarketMakerService(BluechipRepository bluechips, SecondaryMarketService market, Supplier<MarketSession> session, AppClock clock) {
         this.bluechips = Objects.requireNonNull(bluechips, "bluechips"); this.market = Objects.requireNonNull(market, "market");
@@ -30,7 +31,9 @@ public final class BluechipMarketMakerService {
     }
 
     public synchronized CompletionStage<QuoteRefreshResult> refreshQuotes() {
-        if (closeRequested) return CompletableFuture.completedFuture(new QuoteRefreshResult(Set.of(), 0));
+        if (operatorPaused || !session.get().acceptsMatching()) return CompletableFuture.completedFuture(new QuoteRefreshResult(Set.of(), 0));
+        // A close is a session transition, not a permanent operator pause. The first open refresh re-arms quotes.
+        closeRequested = false;
         return enqueue(() -> closeRequested ? CompletableFuture.completedFuture(new QuoteRefreshResult(Set.of(), 0)) : refreshOpenQuotes());
     }
 
@@ -50,7 +53,8 @@ public final class BluechipMarketMakerService {
     }
     /** Operator control affects system quotes only; it never cancels player GTC orders. */
     public synchronized CompletionStage<Integer> setQuotesPaused(boolean paused) {
-        closeRequested = paused;
+        operatorPaused = paused;
+        if (paused) closeRequested = true;
         return paused ? enqueue(this::cancelSystemQuotes) : CompletableFuture.completedFuture(0);
     }
 

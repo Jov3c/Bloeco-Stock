@@ -76,6 +76,21 @@ class BluechipMarketMakerServiceTest {
     }
 
     @Test
+    void nextOpenRefreshResumesQuotesAfterThePriorClose() throws Exception {
+        var file = Files.createTempFile("blockstock-maker-next-open-", ".db");
+        try (var database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate(); var fixture = fixture(database);
+            fixture.maker.refreshQuotes().toCompletableFuture().join();
+            fixture.maker.cancelSystemQuotesAtClose().toCompletableFuture().join();
+
+            fixture.maker.refreshQuotes().toCompletableFuture().join();
+
+            assertThat(systemOrders(database, fixture.bluechip, "BUY")).hasSize(5);
+            assertThat(systemOrders(database, fixture.bluechip, "SELL")).hasSize(5);
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
     void concurrentDegradedRefreshesAppendOnlyOneDegradedAudit() throws Exception {
         var file = Files.createTempFile("blockstock-maker-degraded-race-", ".db");
         try (var database = new Database("jdbc:sqlite:" + file)) {
