@@ -80,6 +80,8 @@ class BluechipMarketMakerServiceTest {
             market.matchQueuedOrders().toCompletableFuture().join();
 
             assertThat(tradeCount(database)).isEqualTo(5);
+            awaitUntil(() -> systemOrders(database, bluechip, "BUY").size() == 5
+                    && systemOrders(database, bluechip, "SELL").size() == 5);
             assertThat(systemOrders(database, bluechip, "BUY")).hasSize(5);
             assertThat(systemOrders(database, bluechip, "SELL")).hasSize(5);
             assertThat(orders.findOrder(preopenBuy.id()).orElseThrow().remainingShares()).isZero();
@@ -249,6 +251,12 @@ class BluechipMarketMakerServiceTest {
         try (var connection = database.dataSource().getConnection(); var statement = connection.prepareStatement("SELECT price_minor FROM stock_trades ORDER BY occurred_at DESC, id DESC LIMIT 1"); var rows = statement.executeQuery()) {
             rows.next(); return rows.getLong(1);
         } catch (Exception exception) { throw new AssertionError(exception); }
+    }
+
+    private static void awaitUntil(java.util.function.BooleanSupplier condition) throws InterruptedException {
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+        while (!condition.getAsBoolean() && System.nanoTime() < deadline) Thread.sleep(10);
+        assertThat(condition.getAsBoolean()).isTrue();
     }
 
     private record Fixture(SqlBluechipRepository repository, SqlSecondaryTradingRepository orders, BluechipRepository.BluechipCompany bluechip,

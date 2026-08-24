@@ -18,9 +18,12 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /** Serial, transactionally committed GTC limit order placement and matching. */
 public final class SecondaryMarketService {
+    private static final Logger LOGGER = Logger.getLogger(SecondaryMarketService.class.getName());
     private final SecondaryTradingRepository orders;
     private final TransactionRunner transactions;
     private final Executor sql;
@@ -55,14 +58,34 @@ public final class SecondaryMarketService {
     private CompletionStage<Integer> matchQueuedOrders(boolean notify) {
         if (!session.get().acceptsMatching()) return CompletableFuture.completedFuture(0);
         return CompletableFuture.supplyAsync(() -> transactions.inTransaction(this::matchQueuedOrders), sql)
-                .thenCompose(matches -> notify && matches > 0
-                        ? afterMatchedOrders.get().get().thenApply(ignored -> matches)
-                        : CompletableFuture.completedFuture(matches));
+                .thenApply(matches -> {
+                    if (notify && matches > 0) scheduleAfterMatchedOrders();
+                    return matches;
+                });
     }
 
     /** The observer runs after commit and must schedule non-blocking work on its own executor. */
     public void setAfterMatchedOrdersListener(Supplier<CompletionStage<Void>> listener) {
         afterMatchedOrders.set(Objects.requireNonNull(listener, "listener"));
+    }
+
+    /** Schedules maker maintenance after settlement without allowing a failed or stalled refill to fail the trade. */
+    private void scheduleAfterMatchedOrders() {
+        Supplier<CompletionStage<Void>> listener = afterMatchedOrders.get();
+        CompletableFuture.runAsync(() -> {
+            try {
+                CompletionStage<Void> maintenance = listener.get();
+                if (maintenance == null) {
+                    LOGGER.warning("Post-trade market-maker maintenance returned no completion stage");
+                    return;
+                }
+                maintenance.whenComplete((ignored, failure) -> {
+                    if (failure != null) LOGGER.log(Level.WARNING, "Post-trade market-maker maintenance failed after settlement", failure);
+                });
+            } catch (RuntimeException failure) {
+                LOGGER.log(Level.WARNING, "Post-trade market-maker maintenance could not be scheduled after settlement", failure);
+            }
+        });
     }
 
     int matchQueuedOrders(java.sql.Connection connection) throws java.sql.SQLException {
@@ -133,9 +156,10 @@ public final class SecondaryMarketService {
             int matches = session.get().acceptsMatching() ? match(connection,taker) : 0;
             taker=orders.findOrder(connection,taker.id()).orElseThrow();
             return new Placement(taker, matches);
-        }), sql).thenCompose(placement -> placement.matches() > 0
-                ? afterMatchedOrders.get().get().thenApply(ignored -> new OrderPlacementResult(placement.order()))
-                : CompletableFuture.completedFuture(new OrderPlacementResult(placement.order())));
+        }), sql).thenApply(placement -> {
+            if (placement.matches() > 0) scheduleAfterMatchedOrders();
+            return new OrderPlacementResult(placement.order());
+        });
     }
 
     private int match(java.sql.Connection connection, LimitOrder taker) throws java.sql.SQLException {

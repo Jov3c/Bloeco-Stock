@@ -15,10 +15,46 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 class SecondaryMarketServiceTest {
+    @Test
+    void committedPlacementReturnsBeforeItsPostCommitMakerRefillCompletes() throws Exception {
+        var file=Files.createTempFile("blockstock-post-commit-detached-", ".db");
+        try(var db=new Database("jdbc:sqlite:"+file)) { db.migrate(); CompanyId company=Fixtures.company(db,100); UUID seller=UUID.randomUUID(),buyer=UUID.randomUUID(); seedListing(db,company);seedHolding(db,company,seller,10);
+            var cash=new SqlSecuritiesCashRepository(db.dataSource());db.inTransaction(c->{cash.creditAvailable(c,buyer,Money.ofMinor(100),Instant.EPOCH);return null;});var repository=new SqlSecondaryTradingRepository(db.dataSource(),cash);var service=new SecondaryMarketService(repository,db,Runnable::run,()->Instant.EPOCH,0);
+            service.placeSell(seller,"BS000001",10,Money.ofMinor(9)).toCompletableFuture().join();
+            var callbackStarted=new CountDownLatch(1);var refill=new CompletableFuture<Void>();
+            service.setAfterMatchedOrdersListener(()->{callbackStarted.countDown();return refill;});
+
+            var result=service.placeBuy(buyer,"BS000001",10,Money.ofMinor(10)).toCompletableFuture().join();
+
+            assertThat(result.order().state()).isEqualTo(LimitOrder.State.FILLED);
+            assertThat(number(db,"SELECT COUNT(*) FROM stock_trades")).isEqualTo(1);
+            assertThat(callbackStarted.await(2,TimeUnit.SECONDS)).isTrue();
+            assertThat(refill).isNotDone();
+            refill.complete(null);
+        }finally{Files.deleteIfExists(file);}
+    }
+
+    @Test
+    void committedQueuedMatchSucceedsWhenPostCommitMakerRefillFails() throws Exception {
+        var file=Files.createTempFile("blockstock-post-commit-failure-", ".db");
+        try(var db=new Database("jdbc:sqlite:"+file)){db.migrate();CompanyId company=Fixtures.company(db,100);UUID seller=UUID.randomUUID(),buyer=UUID.randomUUID();seedListing(db,company);seedHolding(db,company,seller,10);var cash=new SqlSecuritiesCashRepository(db.dataSource());db.inTransaction(c->{cash.creditAvailable(c,buyer,Money.ofMinor(100),Instant.EPOCH);return null;});var repository=new SqlSecondaryTradingRepository(db.dataSource(),cash);
+            var closed=new SecondaryMarketService(repository,db,Runnable::run,()->Instant.EPOCH,0,()->new MarketSession(false));closed.placeSell(seller,"BS000001",10,Money.ofMinor(9)).toCompletableFuture().join();closed.placeBuy(buyer,"BS000001",10,Money.ofMinor(10)).toCompletableFuture().join();
+            var open=new SecondaryMarketService(repository,db,Runnable::run,()->Instant.EPOCH,0,()->new MarketSession(true));var callbackCalls=new AtomicInteger();open.setAfterMatchedOrdersListener(()->{callbackCalls.incrementAndGet();return CompletableFuture.failedFuture(new IllegalStateException("refill unavailable"));});
+
+            assertThat(open.matchQueuedOrders().toCompletableFuture().join()).isEqualTo(1);
+            assertThat(number(db,"SELECT COUNT(*) FROM stock_trades")).isEqualTo(1);
+            long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(2);while(callbackCalls.get()==0&&System.nanoTime()<deadline)Thread.onSpinWait();
+            assertThat(callbackCalls).hasValue(1);
+        }finally{Files.deleteIfExists(file);}
+    }
+
     @Test
     void rejects_stock_listing_row_when_company_is_not_listed_without_reserving_or_inserting() throws Exception {
         var file=Files.createTempFile("blockstock-not-listed-", ".db");
