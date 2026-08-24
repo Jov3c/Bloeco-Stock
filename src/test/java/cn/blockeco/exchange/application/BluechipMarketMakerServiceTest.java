@@ -72,12 +72,12 @@ class BluechipMarketMakerServiceTest {
             market.setAfterMatchedOrdersListener(maker::replenishAfterMatch);
             maker.refreshQuotes().toCompletableFuture().join();
             UUID player = UUID.randomUUID();
-            database.inTransaction(connection -> { cash.creditAvailable(connection, player, Money.ofMinor(10_000_000), NOW); return null; });
+            database.inTransaction(connection -> { cash.creditAvailable(connection, player, Money.ofMinor(100_000_000), NOW); return null; });
 
-            // The player takes the five resting system offers before the market opens.  At opening,
+            // The player takes the five ten-share resting system offers before the market opens.  At opening,
             // a post-commit callback must re-quote once; it must not wait for the minute scheduler.
             session.set(new MarketSession(false));
-            var preopenBuy = market.placeBuy(player, bluechip.listing().stockCode(), 5, Money.ofMinor(1_000_000)).toCompletableFuture().join().order();
+            var preopenBuy = market.placeBuy(player, bluechip.listing().stockCode(), 50, Money.ofMinor(1_000_000)).toCompletableFuture().join().order();
             session.set(new MarketSession(true));
             market.matchQueuedOrdersAfterNotificationDispatch().toCompletableFuture().join();
 
@@ -88,6 +88,43 @@ class BluechipMarketMakerServiceTest {
             assertThat(systemOrders(database, bluechip, "BUY")).hasSize(5);
             assertThat(systemOrders(database, bluechip, "SELL")).hasSize(5);
             assertThat(orders.findOrder(preopenBuy.id()).orElseThrow().remainingShares()).isZero();
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
+    void upperBoundPreopenBuyForTenSharesFillsThenRestoresFiveTenShareLevelsWithinBounds() throws Exception {
+        var file = Files.createTempFile("blockstock-maker-upper-bound-opening-", ".db");
+        try (var database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate();
+            var repository = new SqlBluechipRepository(database.dataSource());
+            new BluechipBootstrapServiceTestSupport(database, repository, NOW).initializeOne();
+            BluechipRepository.BluechipCompany bluechip = repository.all().getFirst();
+            var cash = new SqlSecuritiesCashRepository(database.dataSource());
+            var orders = new SqlSecondaryTradingRepository(database.dataSource(), cash);
+            var session = new AtomicReference<>(new MarketSession(true));
+            var market = new SecondaryMarketService(orders, database, Runnable::run, () -> NOW, 0, session::get);
+            var maker = new BluechipMarketMakerService(repository, market, session::get, () -> NOW);
+            market.setAfterMatchedOrdersListener(maker::replenishAfterMatch);
+            maker.refreshQuotes().toCompletableFuture().join();
+            UUID player = UUID.randomUUID();
+            database.inTransaction(connection -> { cash.creditAvailable(connection, player, Money.ofMinor(100_000_000), NOW); return null; });
+
+            session.set(new MarketSession(false));
+            var preopenBuy = market.placeBuy(player, bluechip.listing().stockCode(), 10, bluechip.upperPrice()).toCompletableFuture().join().order();
+            session.set(new MarketSession(true));
+            market.matchQueuedOrdersAfterNotificationDispatch().toCompletableFuture().join();
+
+            awaitUntil(() -> systemOrders(database, bluechip, "BUY").size() == 5
+                    && systemOrders(database, bluechip, "SELL").size() == 5);
+            assertThat(orders.findOrder(preopenBuy.id()).orElseThrow().state().name()).isEqualTo("FILLED");
+            assertThat(systemOrderDetails(database, bluechip, "BUY")).allSatisfy(order -> {
+                assertThat(order.shares()).isEqualTo(10);
+                assertThat(order.price()).isBetween(bluechip.lowerPrice().minorUnits(), bluechip.upperPrice().minorUnits());
+            });
+            assertThat(systemOrderDetails(database, bluechip, "SELL")).allSatisfy(order -> {
+                assertThat(order.shares()).isEqualTo(10);
+                assertThat(order.price()).isBetween(bluechip.lowerPrice().minorUnits(), bluechip.upperPrice().minorUnits());
+            });
         } finally { Files.deleteIfExists(file); }
     }
 
@@ -104,9 +141,9 @@ class BluechipMarketMakerServiceTest {
             var session = new AtomicReference<>(new MarketSession(false));
             var market = new SecondaryMarketService(orders, database, Runnable::run, () -> NOW, 0, session::get);
             UUID player = UUID.randomUUID();
-            database.inTransaction(connection -> { cash.creditAvailable(connection, player, Money.ofMinor(10_000_000), NOW); return null; });
+            database.inTransaction(connection -> { cash.creditAvailable(connection, player, Money.ofMinor(100_000_000), NOW); return null; });
 
-            market.placeBuy(player, bluechip.listing().stockCode(), 5, Money.ofMinor(1_000_000)).toCompletableFuture().join();
+            market.placeBuy(player, bluechip.listing().stockCode(), 50, Money.ofMinor(1_000_000)).toCompletableFuture().join();
             session.set(new MarketSession(true));
             var makerReference = new AtomicReference<BluechipMarketMakerService>();
             var queuedSweeps = new AtomicInteger();
@@ -155,8 +192,8 @@ class BluechipMarketMakerServiceTest {
             };
             var market = new SecondaryMarketService(orders, database, Runnable::run, () -> NOW, 0, openingSweepSession);
             UUID player = UUID.randomUUID();
-            database.inTransaction(connection -> { cash.creditAvailable(connection, player, Money.ofMinor(10_000_000), NOW); return null; });
-            var queuedBuy = market.placeBuy(player, bluechip.listing().stockCode(), 5, Money.ofMinor(1_000_000)).toCompletableFuture().join().order();
+            database.inTransaction(connection -> { cash.creditAvailable(connection, player, Money.ofMinor(100_000_000), NOW); return null; });
+            var queuedBuy = market.placeBuy(player, bluechip.listing().stockCode(), 50, Money.ofMinor(1_000_000)).toCompletableFuture().join().order();
             openingQuotePass.set(true);
 
             // This is the production constructor path: it owns the queued-opening matcher and receives
@@ -369,6 +406,13 @@ class BluechipMarketMakerServiceTest {
         } catch (Exception exception) { throw new AssertionError(exception); }
     }
 
+    private static java.util.List<SystemOrder> systemOrderDetails(Database database, BluechipRepository.BluechipCompany bluechip, String side) {
+        try (var connection = database.dataSource().getConnection(); var statement = connection.prepareStatement("SELECT remaining_shares, limit_price_minor FROM stock_orders WHERE player_uuid = ? AND stock_code = ? AND side = ? AND state IN ('OPEN', 'PARTIALLY_FILLED')")) {
+            statement.setString(1, bluechip.systemAccountId().toString()); statement.setString(2, bluechip.listing().stockCode()); statement.setString(3, side);
+            try (var rows = statement.executeQuery()) { var result = new java.util.ArrayList<SystemOrder>(); while (rows.next()) result.add(new SystemOrder(rows.getLong(1), rows.getLong(2))); return result; }
+        } catch (Exception exception) { throw new AssertionError(exception); }
+    }
+
     private static void setFundCash(Database database, UUID system, Money amount) {
         database.inTransaction(connection -> { try (var statement = connection.prepareStatement("UPDATE securities_cash_accounts SET available_minor = ?, reserved_minor = 0 WHERE player_uuid = ?")) { statement.setLong(1, amount.minorUnits()); statement.setString(2, system.toString()); statement.executeUpdate(); } return null; });
     }
@@ -406,4 +450,5 @@ class BluechipMarketMakerServiceTest {
 
     private record Fixture(SqlBluechipRepository repository, SqlSecondaryTradingRepository orders, BluechipRepository.BluechipCompany bluechip,
                            SecondaryMarketService market, BluechipMarketMakerService maker) { }
+    private record SystemOrder(long shares, long price) { }
 }

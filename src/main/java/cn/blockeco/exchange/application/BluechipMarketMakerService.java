@@ -18,6 +18,8 @@ import java.util.function.Supplier;
 /** Places finite, owner-scoped bluechip liquidity through the ordinary limit-order book. */
 public final class BluechipMarketMakerService {
     private static final int LEVELS = 5;
+    /** Fixed, finite depth at each displayed price level. */
+    private static final long SHARES_PER_LEVEL = 10;
     private final BluechipRepository bluechips;
     private final SecondaryMarketService market;
     private final Supplier<MarketSession> session;
@@ -150,12 +152,13 @@ public final class BluechipMarketMakerService {
             long bid = bluechip.modelPrice().minorUnits() - Math.multiplyExact(step, level);
             if (boundaries.lowestAsk().isPresent()) bid = Math.min(bid, Math.subtractExact(boundaries.lowestAsk().get().minorUnits(), Math.multiplyExact(step, level)));
             if (bid > bluechip.lowerPrice().minorUnits()) {
-                long cost = Math.addExact(bid, FeePolicy.cumulativeFee(Money.ofMinor(bid), market.buyerFeeBps()).minorUnits());
-                if (cash >= cost) { quotes.add(new Quote(Side.BUY, Money.ofMinor(bid), 1)); cash -= cost; }
+                long notional = Math.multiplyExact(bid, SHARES_PER_LEVEL);
+                long cost = Math.addExact(notional, FeePolicy.cumulativeFee(Money.ofMinor(notional), market.buyerFeeBps()).minorUnits());
+                if (cash >= cost) { quotes.add(new Quote(Side.BUY, Money.ofMinor(bid), SHARES_PER_LEVEL)); cash -= cost; }
             }
             long ask = bluechip.modelPrice().minorUnits() + Math.multiplyExact(step, level);
             if (boundaries.highestBid().isPresent()) ask = Math.max(ask, Math.addExact(boundaries.highestBid().get().minorUnits(), Math.multiplyExact(step, level)));
-            if (ask < bluechip.upperPrice().minorUnits() && shares > 0) { quotes.add(new Quote(Side.SELL, Money.ofMinor(ask), 1)); shares--; }
+            if (ask < bluechip.upperPrice().minorUnits() && shares >= SHARES_PER_LEVEL) { quotes.add(new Quote(Side.SELL, Money.ofMinor(ask), SHARES_PER_LEVEL)); shares -= SHARES_PER_LEVEL; }
         }
         return List.copyOf(quotes);
     }
