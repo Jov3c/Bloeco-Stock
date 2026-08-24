@@ -31,6 +31,9 @@ public interface BluechipRepository {
     List<BluechipCompany> dueCompanyEvents(Instant now);
     boolean marketEventDue(Instant now);
     void scheduleNextCompanyEvent(Connection connection, CompanyId companyId, Instant nextEventAt) throws SQLException;
+    int profitExpectationBps(CompanyId companyId);
+    Optional<MarketSchedule> marketSchedule();
+    void saveMarketSchedule(Connection connection, MarketSchedule schedule) throws SQLException;
 
     record BluechipCompany(CompanyId companyId, StockListing listing, String industry, UUID systemAccountId,
                            Money referencePrice, Money modelPrice, Money lowerPrice, Money upperPrice, int spreadBps, long fundShares, Money fundCash) { }
@@ -41,6 +44,7 @@ public interface BluechipRepository {
 
     record SeedAudit(Money cash, long shares) { }
     record Candle(Money open, Money high, Money low, Money close, long volumeShares) { }
+    record MarketSchedule(Instant nextCompanyEventAt, Instant nextMarketEventAt) { }
 
     record BluechipSeed(CompanyId companyId, StockListing listing, String industry, UUID systemAccountId,
                         Money referencePrice, Money lowerPrice, Money upperPrice, int spreadBps,

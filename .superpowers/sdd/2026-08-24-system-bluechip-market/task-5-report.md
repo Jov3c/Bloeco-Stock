@@ -20,3 +20,23 @@
 
 - Event copy explicitly identifies itself as simulated BlockStock game content; it is not presented as real-world news.
 - The existing schema has no standalone market-event schedule column, so the market/industry cadence is derived from the latest persisted market event.
+
+## Fix round 1
+
+### RED
+
+- Added failing coverage for one global company cadence across restart, 1–3 day market-event duration, persistent player-company industry expectation, and a single 1100 trade with a 1000 model price.
+- The new API/behavior tests failed before implementation because the durable schedule and player expectation representation did not exist.
+
+### GREEN
+
+- Added `V011` durable market schedule and company profit-expectation tables.
+- Company events now share one persisted 6–12 hour due timestamp; market/industry events persist their 1–3 day end/next due timestamp.
+- Industry effects persist `profit_impact_bps` for every matching `company_industry` company, leaving unrelated industries untouched.
+- Trade candles initialize OHLC from the first actual trade; model fallback is now only used when the day has no trades.
+- Added `PublicMarketState` to stock detail output, including model price, degraded liquidity state, and local company/industry event; global `recentNews` remains available.
+
+### Verification
+
+- Focused: `./gradlew.bat test --tests '*MarketEventServiceTest' --tests '*MarketCandleServiceTest' --no-daemon --console=plain`
+- Full: `./gradlew.bat test --no-daemon --console=plain`
