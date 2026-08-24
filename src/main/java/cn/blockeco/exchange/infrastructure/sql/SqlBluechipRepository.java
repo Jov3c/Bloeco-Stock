@@ -43,6 +43,11 @@ public final class SqlBluechipRepository implements BluechipRepository {
             java.util.ArrayList<BluechipCompany> companies = new java.util.ArrayList<>(); while (rows.next()) companies.add(map(rows)); return List.copyOf(companies);
         } catch (SQLException exception) { throw new IllegalStateException("could not read bluechip companies", exception); }
     }
+    @Override public List<CompanyId> bluechipCompanyIds() {
+        try (Connection connection = dataSource.getConnection(); PreparedStatement statement = connection.prepareStatement("SELECT company_id FROM bluechip_companies ORDER BY company_id"); ResultSet rows = statement.executeQuery()) {
+            java.util.ArrayList<CompanyId> ids = new java.util.ArrayList<>(); while (rows.next()) ids.add(new CompanyId(UUID.fromString(rows.getString(1)))); return List.copyOf(ids);
+        } catch (SQLException exception) { throw new IllegalStateException("could not read bluechip company ids", exception); }
+    }
     @Override public List<BluechipMetadata> allMetadata() {
         try (Connection connection = dataSource.getConnection(); PreparedStatement statement = connection.prepareStatement(METADATA_SELECT + " ORDER BY bc.company_id"); ResultSet rows = statement.executeQuery()) {
             java.util.ArrayList<BluechipMetadata> metadata = new java.util.ArrayList<>(); while (rows.next()) metadata.add(mapMetadata(rows)); return List.copyOf(metadata);

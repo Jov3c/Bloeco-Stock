@@ -129,7 +129,7 @@ class BluechipBootstrapServiceTest {
 
             assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> service.initializeMissing().toCompletableFuture().join()))
                     .hasMessageContaining("bluechip metadata does not match configuration");
-            assertThat(repository.allMetadata()).hasSize(11);
+            assertThat(repository.bluechipCompanyIds()).hasSize(11);
         } finally {
             Files.deleteIfExists(file);
         }

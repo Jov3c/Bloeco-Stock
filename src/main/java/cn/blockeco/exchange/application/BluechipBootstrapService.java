@@ -60,11 +60,11 @@ public final class BluechipBootstrapService {
         return true;
     }
     private void validateMetadataSet() {
-        var metadata = bluechips.allMetadata();
-        if (metadata.isEmpty()) return;
+        var persistedIds = bluechips.bluechipCompanyIds();
+        if (persistedIds.isEmpty()) return;
         Set<CompanyId> expected = config.definitions().stream().map(definition -> companyId(definition.code())).collect(java.util.stream.Collectors.toUnmodifiableSet());
-        Set<CompanyId> actual = metadata.stream().map(BluechipRepository.BluechipMetadata::companyId).collect(java.util.stream.Collectors.toUnmodifiableSet());
-        if (metadata.size() != 10 || !actual.equals(expected)) throw new IllegalStateException("bluechip metadata does not match configuration");
+        Set<CompanyId> actual = Set.copyOf(persistedIds);
+        if (persistedIds.size() != 10 || !actual.equals(expected)) throw new IllegalStateException("bluechip metadata does not match configuration");
     }
     private void validateExisting(BluechipRepository.BluechipCompany existing, Company company, BluechipDefinition definition) {
         if (!existing.systemAccountId().equals(systemAccountId) || existing.listing().issuedShares() != definition.totalShares()

@@ -15,6 +15,7 @@ public interface BluechipRepository {
     Optional<BluechipCompany> findByStockCode(String stockCode);
     Optional<BluechipCompany> findByCompanyId(CompanyId companyId);
     List<BluechipCompany> all();
+    List<CompanyId> bluechipCompanyIds();
     List<BluechipMetadata> allMetadata();
     List<SeedAudit> initializedSeeds(CompanyId companyId);
     void insertInitial(Connection connection, BluechipSeed seed) throws SQLException;
