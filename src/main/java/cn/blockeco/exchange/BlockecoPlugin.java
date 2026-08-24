@@ -11,6 +11,7 @@ import cn.blockeco.exchange.application.SecondaryMarketQueryService;
 import cn.blockeco.exchange.application.SecondaryMarketService;
 import cn.blockeco.exchange.application.IpoLifecycleScheduler;
 import cn.blockeco.exchange.application.NativeAssetService;
+import cn.blockeco.exchange.application.BluechipBootstrapService;
 import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.infrastructure.sql.Database;
 import cn.blockeco.exchange.infrastructure.sql.SqlAuditLog;
@@ -23,6 +24,7 @@ import cn.blockeco.exchange.infrastructure.sql.SqlPublicStockRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlSecondaryTradingRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlSecuritiesCashRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlNativeAssetRepository;
+import cn.blockeco.exchange.infrastructure.sql.SqlBluechipRepository;
 import cn.blockeco.exchange.infrastructure.vault.VaultEconomyGateway;
 import cn.blockeco.exchange.infrastructure.vault.VaultSecuritiesCashGateway;
 import cn.blockeco.exchange.infrastructure.vault.VaultTreasuryEscrowGateway;
@@ -44,6 +46,7 @@ import cn.blockeco.exchange.paper.StockGuiController;
 import cn.blockeco.exchange.paper.CompanyGuiController;
 import cn.blockeco.exchange.paper.IpoGuiController;
 import cn.blockeco.exchange.paper.OptionalAssetAdapterLoader;
+import cn.blockeco.exchange.paper.BluechipConfig;
 import cn.blockeco.exchange.ports.AppClock;
 import cn.blockeco.exchange.ports.CompanyAssetAdapterRegistry;
 import cn.blockeco.exchange.infrastructure.CompanyAssetAdapterRegistryImpl;
@@ -110,6 +113,11 @@ public final class BlockecoPlugin extends JavaPlugin {
         var companies = new SqlCompanyRepository(db.dataSource()); var sagas = new SqlRegistrationSagaRepository(db.dataSource(), clock);
         var mainThread = new PaperMainThread(this);
         int scale = getConfig().getInt("currency.scale");
+        var bluechipAccountId = configuredBluechipSystemAccount();
+        if (getServer().getOfflinePlayer(bluechipAccountId).hasPlayedBefore()) throw new IllegalStateException("蓝筹系统账户不能是已知真实玩家");
+        new BluechipBootstrapService(BluechipConfig.load(getConfig(), scale), bluechipAccountId, companies,
+                new cn.blockeco.exchange.infrastructure.sql.SqlStockListingRepository(db.dataSource()), new SqlBluechipRepository(db.dataSource()),
+                db, sqlExecutor, clock).initializeMissing().toCompletableFuture().join();
         var economy = new VaultEconomyGateway(getServer(), scale);
         var finance = new SqlCompanyFinanceRepository(db.dataSource());
         var escrow = new VaultTreasuryEscrowGateway(economy, mainThread, escrowId);
@@ -221,6 +229,8 @@ public final class BlockecoPlugin extends JavaPlugin {
     private void validateConfiguration() {
         int scale = getConfig().getInt("currency.scale", -1); if (scale < 0 || scale > 8) throw new IllegalArgumentException("currency.scale must be between 0 and 8");
         validateMarketConfiguration(configuredMarketFeeBps(), getConfig().getString("market.time-zone", "Asia/Shanghai"));
+        BluechipConfig.load(getConfig(), scale);
+        configuredBluechipSystemAccount();
         positive("company.registration-fee", scale); positive("company.minimum-capital", scale);
         try { if (new java.util.UUID(0, 0).equals(java.util.UUID.fromString(getConfig().getString("company.treasury-escrow-uuid")))) throw new IllegalArgumentException("company.treasury-escrow-uuid must not be zero"); }
         catch (IllegalArgumentException failure) { throw new IllegalArgumentException("company.treasury-escrow-uuid must be a non-zero UUID", failure); }
@@ -240,6 +250,16 @@ public final class BlockecoPlugin extends JavaPlugin {
         if (raw == null) return 10;
         try { return Integer.parseInt(String.valueOf(raw)); }
         catch (NumberFormatException failure) { throw new IllegalArgumentException("market.fee-bps must be an integer", failure); }
+    }
+    private java.util.UUID configuredBluechipSystemAccount() {
+        String raw = getConfig().getString("market.system-account-uuid");
+        try {
+            java.util.UUID value = java.util.UUID.fromString(raw);
+            if (new java.util.UUID(0, 0).equals(value)) throw new IllegalArgumentException("market.system-account-uuid must not be zero");
+            return value;
+        } catch (IllegalArgumentException failure) {
+            throw new IllegalArgumentException("market.system-account-uuid must be a non-zero UUID", failure);
+        }
     }
     static String configurationFailureMessage(Throwable failure) { String detail = failure.getMessage(); return "BlockStock 配置无效" + (detail == null || detail.isBlank() ? "" : "（附加信息：" + detail + "）"); }
     static String missingCompanyCommandMessage() { return "BlockStock 命令注册失败：未在 plugin.yml 中声明 company 命令"; }
