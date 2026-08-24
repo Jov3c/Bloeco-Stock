@@ -28,6 +28,8 @@ public final class BluechipMarketMakerService {
     private boolean operatorPaused;
     /** Guards the post-trade callback while ordinary system order placement is in progress. */
     private boolean systemQuotePassActive;
+    /** Coalesces settlement callbacks that arrive while the opening/system quote batch is active. */
+    private boolean deferredReplenishmentRequested;
 
     public BluechipMarketMakerService(BluechipRepository bluechips, SecondaryMarketService market, Supplier<MarketSession> session, AppClock clock) {
         this(bluechips, market, session, clock, market::matchQueuedOrdersSilently);
@@ -52,7 +54,11 @@ public final class BluechipMarketMakerService {
      * excluded, so the limit-order engine remains the sole matcher and replenishment cannot recurse.
      */
     public synchronized CompletionStage<Void> replenishAfterMatch() {
-        if (systemQuotePassActive || operatorPaused || !session.get().acceptsMatching()) return CompletableFuture.completedFuture(null);
+        if (systemQuotePassActive) {
+            deferredReplenishmentRequested = true;
+            return CompletableFuture.completedFuture(null);
+        }
+        if (operatorPaused || !session.get().acceptsMatching()) return CompletableFuture.completedFuture(null);
         // A real opening trade proves the session is open; re-arm the normal first-open behaviour.
         closeRequested = false;
         return enqueue(() -> closeRequested ? CompletableFuture.completedFuture(new QuoteRefreshResult(Set.of(), 0)) : refreshOpenQuotes(true))
@@ -73,7 +79,21 @@ public final class BluechipMarketMakerService {
             return session.get().acceptsMatching()
                     ? queuedMatcher.get().thenApply(ignored -> result)
                     : CompletableFuture.completedFuture(result);
-        }).whenComplete((ignored, failure) -> { synchronized (this) { systemQuotePassActive = false; } });
+        }).whenComplete((ignored, failure) -> finishSystemQuotePass());
+    }
+
+    private void finishSystemQuotePass() {
+        boolean replenish;
+        synchronized (this) {
+            systemQuotePassActive = false;
+            replenish = deferredReplenishmentRequested;
+            deferredReplenishmentRequested = false;
+        }
+        if (replenish) {
+            // enqueue() puts this behind the completed batch, so this call never waits on its own lifecycle stage.
+            // Its returned stage is deliberately detached from settlement/player work.
+            replenishAfterMatch();
+        }
     }
 
     public synchronized CompletionStage<Integer> cancelSystemQuotesAtClose() {
