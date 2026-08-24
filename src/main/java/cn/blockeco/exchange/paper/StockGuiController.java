@@ -8,11 +8,14 @@ import cn.blockeco.exchange.application.PublicMarketRow;
 import cn.blockeco.exchange.application.MarketNewsItem;
 import cn.blockeco.exchange.application.PublicStockQueryService;
 import cn.blockeco.exchange.application.PublicStockInfo;
+import cn.blockeco.exchange.application.MarketChart;
+import cn.blockeco.exchange.application.MarketChartQueryService;
 import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.domain.trading.LimitOrder;
 import cn.blockeco.exchange.ports.MainThreadExecutor;
 import java.math.BigDecimal;
 import java.util.List;
+import java.time.format.DateTimeFormatter;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -51,6 +54,7 @@ public final class StockGuiController implements Listener, StockGuiOpener {
     private final CompanyGuiOpener companyGui;
     private volatile IpoGuiOpener ipoGui;
     private volatile PublicStockQueryService publicQueries;
+    private volatile MarketChartQueryService chartQueries;
 
     public StockGuiController(JavaPlugin plugin, SecondaryMarketQueryService queries, SecuritiesCashService cash,
                               SecondaryMarketService trading, MainThreadExecutor mainThread, BooleanSupplier accepting,
@@ -79,6 +83,8 @@ public final class StockGuiController implements Listener, StockGuiOpener {
     /** Completes the cyclic GUI wiring after the IPO controller is constructed. */
     public void attachIpoGui(IpoGuiOpener opener) { this.ipoGui = Objects.requireNonNull(opener, "opener"); }
     public void attachPublicQueries(PublicStockQueryService opener) { this.publicQueries = Objects.requireNonNull(opener, "queries"); }
+    /** Connects daily/intraday candle reads after the exchange services are constructed. */
+    public void attachChartQueries(MarketChartQueryService queries) { this.chartQueries = Objects.requireNonNull(queries, "queries"); }
 
     StockGuiSession openSession(UUID player, StockGuiSession.Page page, int pageIndex, String stockCode, StockGuiSession.Draft draft) {
         StockGuiSession prior = sessions.get(player);
@@ -177,12 +183,17 @@ public final class StockGuiController implements Listener, StockGuiOpener {
         queries.book(code, 5).whenComplete((book, error) -> onMain(player, session, () -> {
             if (error != null) { player.sendMessage(messages.stockQueryFailed()); openMarket(player, 0); return; }
             PublicStockQueryService source = publicQueries;
-            if (source == null) { renderDetail(player, session, code, book, null); return; }
-            source.info(code).whenComplete((info, infoError) -> onMain(player, session, () -> renderDetail(player, session, code, book, infoError == null ? info.orElse(null) : null)));
+            if (source == null) { renderDetail(player, session, code, book, null, null); return; }
+            source.info(code).whenComplete((info, infoError) -> onMain(player, session, () -> {
+                PublicStockInfo result = infoError == null ? info.orElse(null) : null;
+                MarketChartQueryService charts = chartQueries;
+                if (charts == null) { renderDetail(player, session, code, book, result, null); return; }
+                charts.chart(code).whenComplete((chart, chartError) -> onMain(player, session, () -> renderDetail(player, session, code, book, result, chartError == null ? chart.orElse(null) : null)));
+            }));
         }));
     }
 
-    private void renderDetail(Player player, StockGuiSession session, String code, SecondaryMarketQueryService.OrderBook book, PublicStockInfo info) {
+    private void renderDetail(Player player, StockGuiSession session, String code, SecondaryMarketQueryService.OrderBook book, PublicStockInfo info, MarketChart chart) {
         Inventory inv = inventory(session, "BlockStock " + code); fill(inv);
         String title = info != null && info.marketState().isPresent() ? "系统蓝筹 · " + code : code;
         String detail = info != null && info.marketState().isPresent()
@@ -190,6 +201,7 @@ public final class StockGuiController implements Listener, StockGuiOpener {
                 : "五档盘口（买卖均为匿名聚合）";
         put(inv, 4, Material.NAME_TAG, "noop", title, detail);
         if (info != null && info.marketState().flatMap(state -> state.currentEvent()).isPresent()) put(inv, 5, Material.PAPER, "noop", "当前事件", info.marketState().get().currentEvent().get().headline());
+        if (chart != null) put(inv, 6, Material.CLOCK, "noop", "分时线 / 日K线", chartLore(chart, currencyScale));
         for (int i = 0; i < book.asks().size(); i++) put(inv, 10 + i, Material.RED_STAINED_GLASS_PANE, "noop", "卖" + (i + 1) + " " + amount(book.asks().get(i).price()), book.asks().get(i).shares() + " 股");
         for (int i = 0; i < book.bids().size(); i++) put(inv, 28 + i, Material.LIME_STAINED_GLASS_PANE, "noop", "买" + (i + 1) + " " + amount(book.bids().get(i).price()), book.bids().get(i).shares() + " 股");
         put(inv, 45, Material.ARROW, "back:market", "返回市场", "返回列表"); put(inv, 48, Material.LIME_WOOL, "detail:buy", "买入", "输入股数和限价后确认"); put(inv, 50, Material.RED_WOOL, "detail:sell", "卖出", "输入股数和限价后确认"); put(inv, 53, Material.BARRIER, "close", "关闭", "关闭交易所"); openInventory(player, inv);
@@ -257,6 +269,18 @@ public final class StockGuiController implements Listener, StockGuiOpener {
     private void put(Inventory inventory, int slot, Material material, String action, String name, String lore) {
         inventory.setItem(slot, items.action(material, action, Component.text(name), List.of(Component.text(lore))));
     }
+    private void put(Inventory inventory, int slot, Material material, String action, String name, List<String> lore) {
+        inventory.setItem(slot, items.action(material, action, Component.text(name), lore.stream().<Component>map(Component::text).toList()));
+    }
+    static List<String> chartLore(MarketChart chart, int scale) {
+        var s=chart.sessionSummary(); var result=new java.util.ArrayList<String>();
+        result.add("分时线 · " + chart.sessionDay());
+        result.add("开 " + display(s.open(),scale) + "  高 " + display(s.high(),scale) + "  低 " + display(s.low(),scale) + "  现 " + display(s.close(),scale));
+        result.add("成交量 " + s.volumeShares() + " 股"); result.add("日K线（最近 " + chart.dailyCandles().size() + " 日）");
+        for (var day:chart.dailyCandles()) result.add(day.day().format(DateTimeFormatter.ofPattern("MM-dd")) + " 开" + display(day.open(),scale) + " 高" + display(day.high(),scale) + " 低" + display(day.low(),scale) + " 收" + display(day.close(),scale) + " 量" + day.volumeShares());
+        return List.copyOf(result);
+    }
+    private static String display(Money value,int scale) { return BigDecimal.valueOf(value.minorUnits(),scale).setScale(scale).toPlainString(); }
 
     private record Holder(StockGuiSession session) implements InventoryHolder {
         @Override public Inventory getInventory() { return null; }

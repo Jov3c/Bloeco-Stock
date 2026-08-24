@@ -3,9 +3,18 @@ package cn.blockeco.exchange.paper;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.UUID;
+import java.time.LocalDate;
+import java.util.List;
+import cn.blockeco.exchange.application.MarketChart;
+import cn.blockeco.exchange.domain.money.Money;
 import org.junit.jupiter.api.Test;
 
 class StockGuiControllerTest {
+    @Test void detailChartLoreShowsSimpleIntradayAndDailyKlineWithoutIndicators() {
+        var chart = new MarketChart(LocalDate.of(2026,8,24), new MarketChart.SessionSummary(Money.ofMinor(1000),Money.ofMinor(1200),Money.ofMinor(900),Money.ofMinor(1100),42), List.of(new MarketChart.DailyCandle(LocalDate.of(2026,8,23),Money.ofMinor(800),Money.ofMinor(1100),Money.ofMinor(700),Money.ofMinor(1000),99)));
+
+        assertThat(StockGuiController.chartLore(chart, 2)).contains("分时线 · 2026-08-24", "开 10.00  高 12.00  低 9.00  现 11.00", "成交量 42 股", "日K线（最近 1 日）", "08-23 开8.00 高11.00 低7.00 收10.00 量99");
+    }
     @Test void marketNewsHasItsOwnVanillaInventorySessionAndCanReturnHome() {
         StockGuiController controller = StockGuiController.forSessionTests();
         UUID player = UUID.randomUUID();

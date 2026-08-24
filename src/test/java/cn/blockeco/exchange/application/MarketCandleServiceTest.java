@@ -11,6 +11,7 @@ import cn.blockeco.exchange.paper.BluechipConfig;
 import java.nio.file.Files;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.UUID;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.Test;
@@ -47,6 +48,30 @@ class MarketCandleServiceTest {
             new MarketCandleService(repository,database,Runnable::run).closeTradingDay(LocalDate.of(2026,8,24)).toCompletableFuture().join();
             var candle=repository.candle(company,LocalDate.of(2026,8,24)).orElseThrow(); assertThat(candle.open().minorUnits()).isEqualTo(1100); assertThat(candle.high().minorUnits()).isEqualTo(1100); assertThat(candle.low().minorUnits()).isEqualTo(1100); assertThat(candle.close().minorUnits()).isEqualTo(1100);
         } finally { Files.deleteIfExists(file); }
+    }
+    @Test void closesUsingTheConfiguredTradingDayInsteadOfUtcMidnight() throws Exception {
+        var file = Files.createTempFile("blockstock-candle-zone-", ".db");
+        try (var database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate(); var repository = new SqlBluechipRepository(database.dataSource());
+            TestBluechipFixture.bootstrap(database, repository, config(), UUID.fromString("00000000-0000-0000-0000-000000000099"), Instant.parse("2026-08-23T16:00:00Z"));
+            var company = repository.all().getFirst();
+            insertTrade(database, company.companyId(), company.listing().stockCode(), 1_100, Instant.parse("2026-08-23T16:30:00Z")); // Aug 24 00:30 Shanghai
+            insertTrade(database, company.companyId(), company.listing().stockCode(), 1_200, Instant.parse("2026-08-24T15:30:00Z")); // Aug 24 23:30 Shanghai
+            insertTrade(database, company.companyId(), company.listing().stockCode(), 1_300, Instant.parse("2026-08-24T16:30:00Z")); // Aug 25 00:30 Shanghai
+
+            new MarketCandleService(repository, database, Runnable::run, ZoneId.of("Asia/Shanghai"))
+                    .closeTradingDay(LocalDate.of(2026, 8, 24)).toCompletableFuture().join();
+
+            var candle = repository.candle(company.companyId(), LocalDate.of(2026, 8, 24)).orElseThrow();
+            assertThat(candle.open().minorUnits()).isEqualTo(1_100);
+            assertThat(candle.high().minorUnits()).isEqualTo(1_200);
+            assertThat(candle.low().minorUnits()).isEqualTo(1_100);
+            assertThat(candle.close().minorUnits()).isEqualTo(1_200);
+            assertThat(candle.volumeShares()).isEqualTo(2);
+        } finally { Files.deleteIfExists(file); }
+    }
+    private static void insertTrade(Database database, CompanyId company, String code, long price, Instant occurredAt) {
+        database.inTransaction(c -> { String buy=UUID.randomUUID().toString(), sell=UUID.randomUUID().toString(); long priority = Math.abs(UUID.randomUUID().getMostSignificantBits()); try (var order=c.prepareStatement("INSERT INTO stock_orders (id,company_id,stock_code,player_uuid,side,limit_price_minor,original_shares,remaining_shares,priority_sequence,reserved_cash_minor,filled_notional_minor,fee_charged_minor,fee_bps,accepted_at,state) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"); var trade=c.prepareStatement("INSERT INTO stock_trades (id,company_id,stock_code,buy_order_id,sell_order_id,shares,price_minor,notional_minor,buyer_fee_minor,occurred_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?, 0, ? )")) { for (int i=0;i<2;i++) { order.setString(1,i==0?buy:sell);order.setString(2,company.value().toString());order.setString(3,code);order.setString(4,UUID.randomUUID().toString());order.setString(5,i==0?"BUY":"SELL");order.setLong(6,price);order.setLong(7,1);order.setLong(8,1);order.setLong(9,priority+i);order.setLong(10,i==0?price:0);order.setLong(11,0);order.setLong(12,0);order.setInt(13,0);order.setString(14,occurredAt.toString());order.setString(15,"OPEN");order.executeUpdate(); } trade.setString(1,UUID.randomUUID().toString());trade.setString(2,company.value().toString());trade.setString(3,code);trade.setString(4,buy);trade.setString(5,sell);trade.setLong(6,price);trade.setLong(7,price);trade.setString(8,occurredAt.toString());trade.executeUpdate(); } return null; });
     }
     private static BluechipConfig config() { var yaml = new YamlConfiguration(); java.util.List<java.util.Map<String,Object>> rows = new java.util.ArrayList<>(); for (int i=0;i<10;i++) { var row = new java.util.LinkedHashMap<String,Object>(); row.put("code", i == 0 ? "RDT" : "BC" + i); row.put("display-name", "System " + i); row.put("industry", "Industry " + i); row.put("reference-price", "10.00"); row.put("lower-bound", "8.00"); row.put("upper-bound", "12.00"); row.put("total-shares", 1_000_000L); row.put("initial-fund-cash", "100000.00"); row.put("initial-fund-shares", 100_000L); row.put("spread-bps",50); row.put("event-sensitivity-bps",100); row.put("dividend-payout-bps",2000); rows.add(row); } yaml.set("bluechips", rows); return BluechipConfig.load(yaml,2); }
 }

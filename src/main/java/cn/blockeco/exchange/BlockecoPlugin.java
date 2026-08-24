@@ -197,7 +197,8 @@ public final class BlockecoPlugin extends JavaPlugin {
         // non-blocking refill and suppresses its own system-order callbacks.
         secondaryMarket.setAfterMatchedOrdersListener(marketMaker::replenishAfterMatch);
         var marketEvents = new MarketEventService(bluechipRepository, db, sqlExecutor, clock, new java.util.Random());
-        var marketCandles = new MarketCandleService(bluechipRepository, db, sqlExecutor);
+        var marketCandles = new MarketCandleService(bluechipRepository, db, sqlExecutor, marketZone);
+        var marketCharts = new cn.blockeco.exchange.application.MarketChartQueryService(bluechipRepository, sqlExecutor, Clock.systemUTC(), marketZone);
         long dividendBase = configuredMoney("market.dividend-base-profit", scale).minorUnits();
         var dividends = new DividendCycleService(bluechipRepository, db, sqlExecutor, clock, dividendBase);
         var secondaryQueries = new SecondaryMarketQueryService(tradingRepository, publicRepository, sqlExecutor, Clock.systemUTC(), marketZone);
@@ -235,6 +236,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         var stockGui = new StockGuiController(this, secondaryQueries, cashService, secondaryMarket, mainThread,
                 runtime::accepting, secondaryTradingGate::mutationsOpen, messages, scale, companyGui);
         stockGui.attachPublicQueries(publicQueries);
+        stockGui.attachChartQueries(marketCharts);
         getServer().getPluginManager().registerEvents(stockGui, this);
         var ipoGui = new IpoGuiController(this, primaryOfferings,
                 new CompanyQueryService(companies, sagas, new SqlCompanyFinanceRepository(db.dataSource()), sqlExecutor),

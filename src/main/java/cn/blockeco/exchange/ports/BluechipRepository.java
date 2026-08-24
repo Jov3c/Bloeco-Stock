@@ -7,6 +7,7 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -26,8 +27,15 @@ public interface BluechipRepository {
     void applyModelImpact(Connection connection, String scope, String companyId, String industry, int impactBps) throws SQLException;
     void decayModels(Connection connection) throws SQLException;
     void closeCandle(Connection connection, CompanyId companyId, LocalDate day) throws SQLException;
+    /** Calculates a trading-day candle using the configured server market zone. */
+    default void closeCandle(Connection connection, CompanyId companyId, LocalDate day, ZoneId zone) throws SQLException {
+        closeCandle(connection, companyId, day);
+    }
     List<cn.blockeco.exchange.domain.bluechip.BluechipEvent> recentEvents(int limit);
     Optional<Candle> candle(CompanyId companyId, LocalDate day);
+    List<DatedCandle> recentCandles(CompanyId companyId, int limit);
+    /** A non-persisted OHLCV view for the open market session. */
+    Candle sessionCandle(CompanyId companyId, Instant start, Instant end);
     List<BluechipCompany> dueCompanyEvents(Instant now);
     boolean marketEventDue(Instant now);
     void scheduleNextCompanyEvent(Connection connection, CompanyId companyId, Instant nextEventAt) throws SQLException;
@@ -49,6 +57,7 @@ public interface BluechipRepository {
 
     record SeedAudit(Money cash, long shares) { }
     record Candle(Money open, Money high, Money low, Money close, long volumeShares) { }
+    record DatedCandle(LocalDate day, Candle candle) { }
     record MarketSchedule(Instant nextCompanyEventAt, Instant nextMarketEventAt) { }
     record DividendSettlement(CompanyId companyId, Money profit, Money distributed, int paymentCount, String idempotencyKey) { }
 

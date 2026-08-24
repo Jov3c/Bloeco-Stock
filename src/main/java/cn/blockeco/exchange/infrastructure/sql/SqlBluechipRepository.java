@@ -132,24 +132,32 @@ public final class SqlBluechipRepository implements BluechipRepository {
         }
     }
     @Override public void applyModelImpact(Connection connection, String scope, String companyId, String industry, int impactBps) throws SQLException {
-        requireTransaction(connection); String predicate = "COMPANY".equals(scope) ? "company_id = ?" : "industry = ?";
+        requireTransaction(connection); String predicate = "COMPANY".equals(scope) ? "company_id = ?" : "INDUSTRY".equals(scope) ? "industry = ?" : "1 = 1";
         try (PreparedStatement select = connection.prepareStatement("SELECT company_id, model_price_minor, lower_price_minor, upper_price_minor, event_sensitivity_bps FROM bluechip_companies WHERE " + predicate); PreparedStatement update = connection.prepareStatement("UPDATE bluechip_companies SET model_price_minor=? WHERE company_id=?")) {
-            select.setString(1, "COMPANY".equals(scope) ? companyId : industry); try (ResultSet rows=select.executeQuery()) { while(rows.next()) { long old=rows.getLong(2); long delta=Math.round(old * (impactBps / 10_000.0d) * (rows.getInt(5) / 10_000.0d)); long next=Math.max(rows.getLong(3)+1,Math.min(rows.getLong(4)-1,Math.addExact(old,delta))); update.setLong(1,next); update.setString(2,rows.getString(1)); update.addBatch(); } update.executeBatch(); }
+            if (!"MARKET".equals(scope)) select.setString(1, "COMPANY".equals(scope) ? companyId : industry); try (ResultSet rows=select.executeQuery()) { while(rows.next()) { long old=rows.getLong(2); long delta=Math.round(old * (impactBps / 10_000.0d) * (rows.getInt(5) / 10_000.0d)); long next=Math.max(rows.getLong(3)+1,Math.min(rows.getLong(4)-1,Math.addExact(old,delta))); update.setLong(1,next); update.setString(2,rows.getString(1)); update.addBatch(); } update.executeBatch(); }
         }
-        if ("INDUSTRY".equals(scope)) try (PreparedStatement s=connection.prepareStatement("INSERT INTO company_market_expectations (company_id,profit_impact_bps) SELECT company_id, ? FROM company_industry WHERE industry=? ON CONFLICT(company_id) DO UPDATE SET profit_impact_bps=excluded.profit_impact_bps")) { s.setInt(1,impactBps/2);s.setString(2,industry);s.executeUpdate(); }
+        if ("INDUSTRY".equals(scope) || "MARKET".equals(scope)) {
+            String expectationTargets = "MARKET".equals(scope) ? "SELECT company_id, ? FROM company_industry" : "SELECT company_id, ? FROM company_industry WHERE industry=?";
+            try (PreparedStatement s=connection.prepareStatement("INSERT INTO company_market_expectations (company_id,profit_impact_bps) " + expectationTargets + " ON CONFLICT(company_id) DO UPDATE SET profit_impact_bps=excluded.profit_impact_bps")) {
+                s.setInt(1,impactBps/2); if ("INDUSTRY".equals(scope)) s.setString(2,industry); s.executeUpdate();
+            }
+        }
     }
     @Override public void decayModels(Connection connection) throws SQLException {
         requireTransaction(connection);
         try (PreparedStatement select=connection.prepareStatement("SELECT bc.company_id,bc.model_price_minor,sl.issue_reference_price_minor,bc.lower_price_minor,bc.upper_price_minor FROM bluechip_companies bc JOIN stock_listings sl ON sl.company_id=bc.company_id"); PreparedStatement update=connection.prepareStatement("UPDATE bluechip_companies SET model_price_minor=? WHERE company_id=?")) { try(ResultSet rows=select.executeQuery()) { while(rows.next()) { long model=rows.getLong(2),reference=rows.getLong(3), step=Math.max(1,Math.abs(model-reference)/4); long next=model==reference?model:(model>reference?Math.max(reference,model-step):Math.min(reference,model+step)); next=Math.max(rows.getLong(4)+1,Math.min(rows.getLong(5)-1,next)); update.setLong(1,next);update.setString(2,rows.getString(1));update.addBatch(); } update.executeBatch(); } }
     }
-    @Override public void closeCandle(Connection connection, CompanyId companyId, LocalDate day) throws SQLException {
+    @Override public void closeCandle(Connection connection, CompanyId companyId, LocalDate day) throws SQLException { closeCandle(connection, companyId, day, java.time.ZoneOffset.UTC); }
+    @Override public void closeCandle(Connection connection, CompanyId companyId, LocalDate day, java.time.ZoneId zone) throws SQLException {
         requireTransaction(connection); long fallback;
         try(PreparedStatement s=connection.prepareStatement("SELECT model_price_minor FROM bluechip_companies WHERE company_id=?")){s.setString(1,companyId.value().toString());try(ResultSet r=s.executeQuery()){if(!r.next())return;fallback=r.getLong(1);}}
-        long open=fallback,high=fallback,low=fallback,close=fallback,volume=0; try(PreparedStatement s=connection.prepareStatement("SELECT price_minor,shares FROM stock_trades WHERE company_id=? AND occurred_at >= ? AND occurred_at < ? ORDER BY occurred_at,id")){s.setString(1,companyId.value().toString());s.setString(2,day.atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toString());s.setString(3,day.plusDays(1).atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toString());try(ResultSet r=s.executeQuery()){boolean any=false;while(r.next()){long price=r.getLong(1);if(!any){open=high=low=close=price;any=true;}else{close=price;high=Math.max(high,price);low=Math.min(low,price);}volume=Math.addExact(volume,r.getLong(2));}}}
+        long open=fallback,high=fallback,low=fallback,close=fallback,volume=0; try(PreparedStatement s=connection.prepareStatement("SELECT price_minor,shares FROM stock_trades WHERE company_id=? AND occurred_at >= ? AND occurred_at < ? ORDER BY occurred_at,id")){s.setString(1,companyId.value().toString());s.setString(2,day.atStartOfDay(zone).toInstant().toString());s.setString(3,day.plusDays(1).atStartOfDay(zone).toInstant().toString());try(ResultSet r=s.executeQuery()){boolean any=false;while(r.next()){long price=r.getLong(1);if(!any){open=high=low=close=price;any=true;}else{close=price;high=Math.max(high,price);low=Math.min(low,price);}volume=Math.addExact(volume,r.getLong(2));}}}
         try(PreparedStatement s=connection.prepareStatement("INSERT INTO market_candles (company_id,trading_day,open_minor,high_minor,low_minor,close_minor,volume_shares) VALUES (?,?,?,?,?,?,?) ON CONFLICT(company_id,trading_day) DO UPDATE SET open_minor=excluded.open_minor,high_minor=excluded.high_minor,low_minor=excluded.low_minor,close_minor=excluded.close_minor,volume_shares=excluded.volume_shares")){s.setString(1,companyId.value().toString());s.setString(2,day.toString());s.setLong(3,open);s.setLong(4,high);s.setLong(5,low);s.setLong(6,close);s.setLong(7,volume);s.executeUpdate();}
     }
     @Override public List<cn.blockeco.exchange.domain.bluechip.BluechipEvent> recentEvents(int requested) { int limit=Math.max(1,Math.min(50,requested)); try(Connection c=dataSource.getConnection();PreparedStatement s=c.prepareStatement("SELECT id,scope,company_id,industry,headline,body,price_impact_bps,profit_impact_bps,starts_at,ends_at,state FROM bluechip_events ORDER BY starts_at DESC,id DESC LIMIT ?")){s.setInt(1,limit);try(ResultSet r=s.executeQuery()){java.util.ArrayList<cn.blockeco.exchange.domain.bluechip.BluechipEvent> result=new java.util.ArrayList<>();while(r.next())result.add(event(r));return List.copyOf(result);}}catch(SQLException e){throw new IllegalStateException("could not read bluechip events",e);} }
     @Override public Optional<Candle> candle(CompanyId companyId,LocalDate day) { try(Connection c=dataSource.getConnection();PreparedStatement s=c.prepareStatement("SELECT open_minor,high_minor,low_minor,close_minor,volume_shares FROM market_candles WHERE company_id=? AND trading_day=?")){s.setString(1,companyId.value().toString());s.setString(2,day.toString());try(ResultSet r=s.executeQuery()){return r.next()?Optional.of(new Candle(Money.ofMinor(r.getLong(1)),Money.ofMinor(r.getLong(2)),Money.ofMinor(r.getLong(3)),Money.ofMinor(r.getLong(4)),r.getLong(5))):Optional.empty();}}catch(SQLException e){throw new IllegalStateException("could not read market candle",e);} }
+    @Override public List<DatedCandle> recentCandles(CompanyId companyId,int requested) { int limit=Math.max(1,Math.min(30,requested));try(Connection c=dataSource.getConnection();PreparedStatement s=c.prepareStatement("SELECT trading_day,open_minor,high_minor,low_minor,close_minor,volume_shares FROM market_candles WHERE company_id=? ORDER BY trading_day DESC LIMIT ?")){s.setString(1,companyId.value().toString());s.setInt(2,limit);try(ResultSet r=s.executeQuery()){var result=new java.util.ArrayList<DatedCandle>();while(r.next())result.add(new DatedCandle(LocalDate.parse(r.getString(1)),new Candle(Money.ofMinor(r.getLong(2)),Money.ofMinor(r.getLong(3)),Money.ofMinor(r.getLong(4)),Money.ofMinor(r.getLong(5)),r.getLong(6))));java.util.Collections.reverse(result);return List.copyOf(result);}}catch(SQLException e){throw new IllegalStateException("could not read market candles",e);} }
+    @Override public Candle sessionCandle(CompanyId companyId,Instant start,Instant end) { try(Connection c=dataSource.getConnection();PreparedStatement fallback=c.prepareStatement("SELECT model_price_minor FROM bluechip_companies WHERE company_id=?");PreparedStatement trades=c.prepareStatement("SELECT price_minor,shares FROM stock_trades WHERE company_id=? AND occurred_at >= ? AND occurred_at < ? ORDER BY occurred_at,id")){fallback.setString(1,companyId.value().toString());try(ResultSet r=fallback.executeQuery()){if(!r.next())throw new IllegalArgumentException("unknown bluechip");long price=r.getLong(1),open=price,high=price,low=price,close=price,volume=0;trades.setString(1,companyId.value().toString());trades.setString(2,start.toString());trades.setString(3,end.toString());try(ResultSet rows=trades.executeQuery()){boolean any=false;while(rows.next()){price=rows.getLong(1);if(!any){open=high=low=close=price;any=true;}else{close=price;high=Math.max(high,price);low=Math.min(low,price);}volume=Math.addExact(volume,rows.getLong(2));}}return new Candle(Money.ofMinor(open),Money.ofMinor(high),Money.ofMinor(low),Money.ofMinor(close),volume);}}catch(SQLException e){throw new IllegalStateException("could not read market session candle",e);} }
     @Override public List<BluechipCompany> dueCompanyEvents(Instant now) { return bluechips(" WHERE next_event_at <= ? ORDER BY next_event_at, company_id", now.toString()); }
     @Override public boolean marketEventDue(Instant now) { try(Connection c=dataSource.getConnection();PreparedStatement s=c.prepareStatement("SELECT starts_at FROM bluechip_events WHERE scope IN ('INDUSTRY','MARKET') ORDER BY starts_at DESC LIMIT 1");ResultSet r=s.executeQuery()){return !r.next() || !Instant.parse(r.getString(1)).plus(24,ChronoUnit.HOURS).isAfter(now);}catch(SQLException e){throw new IllegalStateException("could not inspect market event schedule",e);} }
     @Override public void scheduleNextCompanyEvent(Connection connection,CompanyId companyId,Instant next) throws SQLException { requireTransaction(connection);try(PreparedStatement s=connection.prepareStatement("UPDATE bluechip_companies SET next_event_at=? WHERE company_id=?")){s.setString(1,next.toString());s.setString(2,companyId.value().toString());s.executeUpdate();} }
@@ -181,7 +189,7 @@ public final class SqlBluechipRepository implements BluechipRepository {
                     long source = systemAccount == null ? availableCompanyCash(rows.getLong(8), rows.getLong(9)) : fundCash(connection, companyId);
                     int payoutBps = systemAccount == null ? rows.getInt(2) : rows.getInt(6);
                     long distributable = profit <= 0 ? 0 : Math.min(source, multiplyBps(profit, payoutBps));
-                    Distribution distribution = distributable == 0 ? Distribution.none() : distribute(connection, companyId, systemAccount, distributable);
+                    Distribution distribution = distributable == 0 ? Distribution.none() : distribute(connection, companyId, systemAccount, distributable, now);
                     if (distribution.total() > 0) debitSource(connection, companyId, systemAccount, distribution.total(), cycleAt, now);
                     completeRun(connection, companyId, cycleAt, distribution.total(), now);
                     if (systemAccount != null) scheduleNextDividend(connection, companyId, cycleAt.plus(15, ChronoUnit.DAYS));
@@ -234,7 +242,7 @@ public final class SqlBluechipRepository implements BluechipRepository {
         }
     }
 
-    private static Distribution distribute(Connection connection, CompanyId companyId, String excludedHolder, long distributable) throws SQLException {
+    private static Distribution distribute(Connection connection, CompanyId companyId, String excludedHolder, long distributable, Instant now) throws SQLException {
         List<Holder> holders = new java.util.ArrayList<>(); long shares = 0;
         String sql = "SELECT holder_uuid, available_shares + reserved_shares FROM share_holdings WHERE company_id = ? AND available_shares + reserved_shares > 0" + (excludedHolder == null ? "" : " AND holder_uuid <> ?") + " ORDER BY holder_uuid";
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
@@ -246,15 +254,16 @@ public final class SqlBluechipRepository implements BluechipRepository {
         for (Holder holder : holders) {
             long credit = Math.floorDiv(Math.multiplyExact(distributable, holder.shares()), shares);
             if (credit == 0) continue;
-            creditSecuritiesCash(connection, holder.id(), credit); total = Math.addExact(total, credit); payments++;
+            creditSecuritiesCash(connection, holder.id(), credit, now); total = Math.addExact(total, credit); payments++;
         }
         return new Distribution(total, payments);
     }
 
-    private static void creditSecuritiesCash(Connection connection, UUID holder, long credit) throws SQLException {
+    private static void creditSecuritiesCash(Connection connection, UUID holder, long credit, Instant now) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("INSERT INTO securities_cash_accounts (player_uuid, available_minor, reserved_minor) VALUES (?, ?, 0) ON CONFLICT(player_uuid) DO UPDATE SET available_minor = available_minor + excluded.available_minor")) {
             statement.setString(1, holder.toString()); statement.setLong(2, credit); statement.executeUpdate();
         }
+        appendEscrowLedger(connection, "SECURITIES_CASH", null, holder, credit, now);
     }
     private static void debitSource(Connection connection, CompanyId companyId, String systemAccount, long amount, Instant cycleAt, Instant now) throws SQLException {
         if (systemAccount == null) {
@@ -262,14 +271,23 @@ public final class SqlBluechipRepository implements BluechipRepository {
                 statement.setLong(1, amount); statement.setLong(2, amount); statement.setString(3, companyId.value().toString()); statement.setLong(4, amount); statement.setLong(5, amount);
                 if (statement.executeUpdate() != 1) throw new IllegalStateException("company dividend source is no longer available");
             }
+            appendEscrowLedger(connection, "COMPANY_TREASURY", companyId, null, -amount, now);
             return;
         }
         try (PreparedStatement statement = connection.prepareStatement("UPDATE securities_cash_accounts SET available_minor = available_minor - ? WHERE player_uuid = ? AND available_minor >= ?")) {
             statement.setLong(1, amount); statement.setString(2, systemAccount); statement.setLong(3, amount);
             if (statement.executeUpdate() != 1) throw new IllegalStateException("bluechip fund source is no longer available");
         }
+        appendEscrowLedger(connection, "SECURITIES_CASH", null, UUID.fromString(systemAccount), -amount, now);
         try (PreparedStatement statement = connection.prepareStatement("INSERT INTO bluechip_fund_audit (id, company_id, operation, cash_delta_minor, shares_delta, occurred_at) VALUES (?, ?, 'DIVIDEND_PAID', ?, 0, ?)")) {
             statement.setString(1, UUID.nameUUIDFromBytes(("dividend-fund:" + idempotencyKey(companyId, cycleAt)).getBytes(StandardCharsets.UTF_8)).toString()); statement.setString(2, companyId.value().toString()); statement.setLong(3, -amount); statement.setString(4, now.toString()); statement.executeUpdate();
+        }
+    }
+    private static void appendEscrowLedger(Connection connection, String kind, CompanyId companyId, UUID playerId, long amount, Instant now) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("INSERT INTO escrow_ledger_entries (id, liability_kind, company_id, player_uuid, amount_minor, operation_id, trade_id, occurred_at) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?)")) {
+            statement.setString(1, UUID.randomUUID().toString()); statement.setString(2, kind);
+            statement.setString(3, companyId == null ? null : companyId.value().toString()); statement.setString(4, playerId == null ? null : playerId.toString());
+            statement.setLong(5, amount); statement.setString(6, now.toString()); statement.executeUpdate();
         }
     }
     private static void completeRun(Connection connection, CompanyId companyId, Instant cycleAt, long payout, Instant now) throws SQLException {
