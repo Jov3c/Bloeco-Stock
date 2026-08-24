@@ -52,7 +52,11 @@ public final class BluechipBootstrapService {
             return new BluechipBootstrapResult(config.definitions().size());
         }
         transactions.inTransaction(connection -> {
-            for (BluechipDefinition definition : config.definitions()) listings.reconcileLegacyBluechipTicker(connection, companyId(definition.code()), definition.code());
+            for (BluechipDefinition definition : config.definitions()) {
+                CompanyId id = companyId(definition.code());
+                listings.reconcileLegacyBluechipTicker(connection, id, definition.code());
+                listings.reconcileLegacyBluechipIssuedShares(connection, id, definition.initialFundShares());
+            }
             return null;
         });
         for (BluechipDefinition definition : config.definitions()) validateExisting(bluechips.findByCompanyId(companyId(definition.code())).orElseThrow(), companies.findById(companyId(definition.code())).orElseThrow(), definition);
@@ -70,7 +74,7 @@ public final class BluechipBootstrapService {
             Company seeded = Company.rehydrate(id, definition.displayName(), Company.normalizeName(definition.displayName()), systemAccountId,
                     Money.zero(), definition.totalShares(), DividendRate.FIFTY, CompanyStatus.LISTED, clock.now());
             companies.insert(connection, seeded);
-            var listing = listings.allocateFixed(connection, id, definition.code(), Money.ofMinor(definition.referencePrice()), definition.totalShares(), clock.now());
+            var listing = listings.allocateFixed(connection, id, definition.code(), Money.ofMinor(definition.referencePrice()), definition.initialFundShares(), clock.now());
             bluechips.insertInitial(connection, new BluechipRepository.BluechipSeed(id, listing, definition.industry(), systemAccountId,
                     Money.ofMinor(definition.referencePrice()), Money.ofMinor(definition.lowerBound()), Money.ofMinor(definition.upperBound()),
                     definition.spreadBps(), definition.eventSensitivityBps(), definition.dividendPayoutBps(), definition.initialFundShares(),
@@ -84,7 +88,7 @@ public final class BluechipBootstrapService {
         if (persistedIds.size() != 10 || !actual.equals(expected)) throw new IllegalStateException("bluechip metadata does not match configuration");
     }
     private void validateExisting(BluechipRepository.BluechipCompany existing, Company company, BluechipDefinition definition) {
-        if (!existing.systemAccountId().equals(systemAccountId) || !existing.listing().stockCode().equals(definition.code()) || existing.listing().issuedShares() != definition.totalShares()
+        if (!existing.systemAccountId().equals(systemAccountId) || !existing.listing().stockCode().equals(definition.code()) || existing.listing().issuedShares() != definition.initialFundShares()
                 || existing.referencePrice().minorUnits() != definition.referencePrice() || existing.lowerPrice().minorUnits() != definition.lowerBound()
                 || existing.upperPrice().minorUnits() != definition.upperBound() || !existing.industry().equals(definition.industry())
                 || company.status() != CompanyStatus.LISTED || !company.founderId().equals(systemAccountId)

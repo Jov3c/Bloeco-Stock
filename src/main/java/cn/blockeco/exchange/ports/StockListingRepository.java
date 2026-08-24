@@ -18,4 +18,6 @@ public interface StockListingRepository {
             throws SQLException;
     /** Converts an identifiable, unused legacy bluechip BS code to its configured ticker. */
     void reconcileLegacyBluechipTicker(Connection connection, CompanyId companyId, String configuredTicker) throws SQLException;
+    /** Corrects a pre-release bluechip listing to the actually issued seed inventory. */
+    void reconcileLegacyBluechipIssuedShares(Connection connection, CompanyId companyId, long issuedShares) throws SQLException;
 }

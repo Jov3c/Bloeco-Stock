@@ -48,6 +48,14 @@ class BluechipBootstrapServiceTest {
             assertThat(first.fundCash()).isEqualTo(Money.ofMinor(config.definitions().getFirst().initialFundCash()));
             assertThat(first.systemAccountId()).isEqualTo(SYSTEM_ACCOUNT);
             assertThat(first.listing().stockCode()).isEqualTo(config.definitions().getFirst().code());
+            assertThat(repository.all()).allSatisfy(bluechip -> {
+                var definition = config.definitions().stream()
+                        .filter(candidate -> candidate.code().equals(bluechip.listing().stockCode()))
+                        .findFirst().orElseThrow();
+                assertThat(bluechip.listing().issuedShares()).isEqualTo(definition.initialFundShares());
+                assertThat(sumHeldShares(database, bluechip.companyId())).isEqualTo(bluechip.listing().issuedShares());
+                assertThat(companyTotalShares(database, bluechip.companyId())).isEqualTo(definition.totalShares());
+            });
         } finally {
             Files.deleteIfExists(file);
         }
@@ -89,9 +97,9 @@ class BluechipBootstrapServiceTest {
             service.initializeMissing().toCompletableFuture().join();
             var first = bluechips.all().getFirst();
             database.inTransaction(connection -> {
-                try (PreparedStatement listing = connection.prepareStatement("UPDATE stock_listings SET stock_code='BS000001' WHERE company_id=?");
+                try (PreparedStatement listing = connection.prepareStatement("UPDATE stock_listings SET stock_code='BS000001', issued_shares=? WHERE company_id=?");
                      PreparedStatement audit = connection.prepareStatement("UPDATE audit_events SET payload_json=REPLACE(payload_json, ?, 'BS000001') WHERE company_id=?")) {
-                    listing.setString(1, first.companyId().value().toString()); listing.executeUpdate();
+                    listing.setLong(1, config.definitions().getFirst().totalShares()); listing.setString(2, first.companyId().value().toString()); listing.executeUpdate();
                     audit.setString(1, config.definitions().getFirst().code()); audit.setString(2, first.companyId().value().toString()); audit.executeUpdate();
                 }
                 return null;
@@ -99,6 +107,8 @@ class BluechipBootstrapServiceTest {
 
             assertThat(service.initializeMissing().toCompletableFuture().join().createdCompanies()).isZero();
             assertThat(bluechips.findByCompanyId(first.companyId()).orElseThrow().listing().stockCode()).isEqualTo(config.definitions().getFirst().code());
+            assertThat(bluechips.findByCompanyId(first.companyId()).orElseThrow().listing().issuedShares())
+                    .isEqualTo(config.definitions().getFirst().initialFundShares());
             assertThat(initializationAudit(database, first.companyId())).contains(config.definitions().getFirst().code()).doesNotContain("BS000001");
         } finally {
             Files.deleteIfExists(file);
@@ -115,9 +125,9 @@ class BluechipBootstrapServiceTest {
             service.initializeMissing().toCompletableFuture().join();
             var first = bluechips.all().getFirst();
             database.inTransaction(connection -> {
-                try (PreparedStatement listing = connection.prepareStatement("UPDATE stock_listings SET stock_code='BS000001' WHERE company_id=?");
+                try (PreparedStatement listing = connection.prepareStatement("UPDATE stock_listings SET stock_code='BS000001', issued_shares=? WHERE company_id=?");
                      PreparedStatement order = connection.prepareStatement("INSERT INTO stock_orders (id,company_id,stock_code,player_uuid,side,limit_price_minor,original_shares,remaining_shares,priority_sequence,reserved_cash_minor,filled_notional_minor,fee_charged_minor,fee_bps,accepted_at,state) VALUES (?,?,'BS000001',?,'BUY',100,1,1,1,100,0,0,0,?,'OPEN')")) {
-                    listing.setString(1, first.companyId().value().toString()); listing.executeUpdate();
+                    listing.setLong(1, config.definitions().getFirst().totalShares()); listing.setString(2, first.companyId().value().toString()); listing.executeUpdate();
                     order.setString(1, UUID.randomUUID().toString()); order.setString(2, first.companyId().value().toString()); order.setString(3, UUID.randomUUID().toString()); order.setString(4, NOW.toString()); order.executeUpdate();
                 }
                 return null;
@@ -126,9 +136,58 @@ class BluechipBootstrapServiceTest {
             assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> service.initializeMissing().toCompletableFuture().join()))
                     .hasMessageContaining("manual handling because orders or trades exist");
             assertThat(bluechips.findByCompanyId(first.companyId()).orElseThrow().listing().stockCode()).isEqualTo("BS000001");
+            assertThat(bluechips.findByCompanyId(first.companyId()).orElseThrow().listing().issuedShares())
+                    .isEqualTo(config.definitions().getFirst().totalShares());
         } finally {
             Files.deleteIfExists(file);
         }
+    }
+
+    @Test
+    void reinitializationCorrectsPreReleaseAuthorizedShareListingWhenNoOrdersExist() throws Exception {
+        var file = Files.createTempFile("blockstock-bluechip-legacy-issued-", ".db");
+        try (Database database = migratedDatabase(file)) {
+            BluechipConfig config = config();
+            SqlBluechipRepository bluechips = new SqlBluechipRepository(database.dataSource());
+            BluechipBootstrapService service = service(database, bluechips, config);
+            service.initializeMissing().toCompletableFuture().join();
+            var first = bluechips.all().getFirst();
+            database.inTransaction(connection -> {
+                try (PreparedStatement listing = connection.prepareStatement("UPDATE stock_listings SET issued_shares=? WHERE company_id=?")) {
+                    listing.setLong(1, config.definitions().getFirst().totalShares()); listing.setString(2, first.companyId().value().toString()); listing.executeUpdate();
+                }
+                return null;
+            });
+
+            assertThat(service.initializeMissing().toCompletableFuture().join().createdCompanies()).isZero();
+            assertThat(bluechips.findByCompanyId(first.companyId()).orElseThrow().listing().issuedShares())
+                    .isEqualTo(config.definitions().getFirst().initialFundShares());
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
+    void reinitializationFailsClosedForPreReleaseIssuedShareMismatchAfterOrdersExist() throws Exception {
+        var file = Files.createTempFile("blockstock-bluechip-legacy-issued-order-", ".db");
+        try (Database database = migratedDatabase(file)) {
+            BluechipConfig config = config();
+            SqlBluechipRepository bluechips = new SqlBluechipRepository(database.dataSource());
+            BluechipBootstrapService service = service(database, bluechips, config);
+            service.initializeMissing().toCompletableFuture().join();
+            var first = bluechips.all().getFirst();
+            database.inTransaction(connection -> {
+                try (PreparedStatement listing = connection.prepareStatement("UPDATE stock_listings SET issued_shares=? WHERE company_id=?");
+                     PreparedStatement order = connection.prepareStatement("INSERT INTO stock_orders (id,company_id,stock_code,player_uuid,side,limit_price_minor,original_shares,remaining_shares,priority_sequence,reserved_cash_minor,filled_notional_minor,fee_charged_minor,fee_bps,accepted_at,state) VALUES (?,?,?,?, 'BUY',100,1,1,1,100,0,0,0,?,'OPEN')")) {
+                    listing.setLong(1, config.definitions().getFirst().totalShares()); listing.setString(2, first.companyId().value().toString()); listing.executeUpdate();
+                    order.setString(1, UUID.randomUUID().toString()); order.setString(2, first.companyId().value().toString()); order.setString(3, first.listing().stockCode()); order.setString(4, UUID.randomUUID().toString()); order.setString(5, NOW.toString()); order.executeUpdate();
+                }
+                return null;
+            });
+
+            assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> service.initializeMissing().toCompletableFuture().join()))
+                    .hasMessageContaining("issued-share migration requires manual handling because orders or trades exist");
+            assertThat(bluechips.findByCompanyId(first.companyId()).orElseThrow().listing().issuedShares())
+                    .isEqualTo(config.definitions().getFirst().totalShares());
+        } finally { Files.deleteIfExists(file); }
     }
 
     @Test
@@ -289,6 +348,22 @@ class BluechipBootstrapServiceTest {
         } catch (Exception exception) {
             throw new AssertionError(exception);
         }
+    }
+
+    private static long sumHeldShares(Database database, CompanyId companyId) {
+        try (var connection = database.dataSource().getConnection(); var statement = connection.prepareStatement(
+                "SELECT COALESCE(SUM(available_shares + reserved_shares), 0) FROM share_holdings WHERE company_id = ?")) {
+            statement.setString(1, companyId.value().toString());
+            try (var rows = statement.executeQuery()) { assertThat(rows.next()).isTrue(); return rows.getLong(1); }
+        } catch (Exception exception) { throw new AssertionError(exception); }
+    }
+
+    private static long companyTotalShares(Database database, CompanyId companyId) {
+        try (var connection = database.dataSource().getConnection(); var statement = connection.prepareStatement(
+                "SELECT total_shares FROM companies WHERE id = ?")) {
+            statement.setString(1, companyId.value().toString());
+            try (var rows = statement.executeQuery()) { assertThat(rows.next()).isTrue(); return rows.getLong(1); }
+        } catch (Exception exception) { throw new AssertionError(exception); }
     }
 
     private static String initializationAudit(Database database, CompanyId companyId) {

@@ -95,6 +95,23 @@ public final class SqlStockListingRepository implements StockListingRepository {
         }
     }
 
+    @Override
+    public void reconcileLegacyBluechipIssuedShares(Connection connection, CompanyId companyId, long issuedShares) throws SQLException {
+        if (issuedShares <= 0) throw new IllegalArgumentException("issued shares must be positive");
+        Optional<StockListing> current = find(connection, "SELECT * FROM stock_listings WHERE company_id=?", companyId.value().toString());
+        if (current.isEmpty() || current.get().issuedShares() == issuedShares) return;
+        if (hasDependentTradesOrOrders(connection, companyId)) {
+            throw new IllegalStateException("bluechip issued-share migration requires manual handling because orders or trades exist for " + current.get().stockCode());
+        }
+        if (holdingTotal(connection, companyId) != issuedShares) {
+            throw new IllegalStateException("bluechip issued-share migration requires manual handling because holdings do not match configured liquidity");
+        }
+        try (PreparedStatement update = connection.prepareStatement("UPDATE stock_listings SET issued_shares=? WHERE company_id=? AND issued_shares=?")) {
+            update.setLong(1, issuedShares); update.setString(2, companyId.value().toString()); update.setLong(3, current.get().issuedShares());
+            if (update.executeUpdate() != 1) throw new IllegalStateException("bluechip issued-share migration state conflict");
+        }
+    }
+
     private Optional<StockListing> find(String sql, String value) {
         try (Connection connection = dataSource.getConnection()) {
             return find(connection, sql, value);
@@ -138,6 +155,16 @@ public final class SqlStockListingRepository implements StockListingRepository {
             }
         }
         return false;
+    }
+
+    private static long holdingTotal(Connection connection, CompanyId companyId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT COALESCE(SUM(available_shares + reserved_shares), 0) FROM share_holdings WHERE company_id=?")) {
+            statement.setString(1, companyId.value().toString());
+            try (ResultSet rows = statement.executeQuery()) {
+                if (!rows.next()) throw new IllegalStateException("could not read bluechip share holdings");
+                return rows.getLong(1);
+            }
+        }
     }
 
     private static StockListing listing(ResultSet rows) throws SQLException {
