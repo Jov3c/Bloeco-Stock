@@ -36,6 +36,8 @@ public interface BluechipRepository {
     List<DatedCandle> recentCandles(CompanyId companyId, int limit);
     /** A non-persisted OHLCV view for the open market session. */
     Candle sessionCandle(CompanyId companyId, Instant start, Instant end);
+    /** Immutable executed trades in chronological order for building the vanilla intraday line. */
+    List<IntradayTrade> sessionTrades(CompanyId companyId, Instant start, Instant end);
     List<BluechipCompany> dueCompanyEvents(Instant now);
     boolean marketEventDue(Instant now);
     void scheduleNextCompanyEvent(Connection connection, CompanyId companyId, Instant nextEventAt) throws SQLException;
@@ -57,6 +59,7 @@ public interface BluechipRepository {
 
     record SeedAudit(Money cash, long shares) { }
     record Candle(Money open, Money high, Money low, Money close, long volumeShares) { }
+    record IntradayTrade(Instant occurredAt, Money price, long shares) { }
     record DatedCandle(LocalDate day, Candle candle) { }
     record MarketSchedule(Instant nextCompanyEventAt, Instant nextMarketEventAt) { }
     record DividendSettlement(CompanyId companyId, Money profit, Money distributed, int paymentCount, String idempotencyKey) { }

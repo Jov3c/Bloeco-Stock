@@ -15,6 +15,12 @@ class StockGuiControllerTest {
 
         assertThat(StockGuiController.chartLore(chart, 2)).contains("分时线 · 2026-08-24", "开 10.00  高 12.00  低 9.00  现 11.00", "成交量 42 股", "日K线（最近 1 日）", "08-23 开8.00 高11.00 低7.00 收10.00 量99");
     }
+    @Test void detailChartLoreRendersAnOrderedIntradaySparklineAndTimestampedPoints() {
+        var chart = new MarketChart(LocalDate.of(2026,8,24), new MarketChart.SessionSummary(Money.ofMinor(1000),Money.ofMinor(1200),Money.ofMinor(900),Money.ofMinor(1100),42), List.of(), List.of(
+                new MarketChart.IntradayPoint("08:00", Money.ofMinor(1000), 3), new MarketChart.IntradayPoint("08:30", Money.ofMinor(1200), 5), new MarketChart.IntradayPoint("09:00", Money.ofMinor(1100), 7)));
+
+        assertThat(StockGuiController.chartLore(chart, 2)).contains("走势 ▁█▅", "08:00 10.00 · 3股", "08:30 12.00 · 5股", "09:00 11.00 · 7股");
+    }
     @Test void marketNewsHasItsOwnVanillaInventorySessionAndCanReturnHome() {
         StockGuiController controller = StockGuiController.forSessionTests();
         UUID player = UUID.randomUUID();

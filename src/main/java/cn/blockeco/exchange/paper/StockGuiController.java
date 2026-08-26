@@ -275,11 +275,14 @@ public final class StockGuiController implements Listener, StockGuiOpener {
     static List<String> chartLore(MarketChart chart, int scale) {
         var s=chart.sessionSummary(); var result=new java.util.ArrayList<String>();
         result.add("分时线 · " + chart.sessionDay());
+        if (chart.intradayPoints().isEmpty()) result.add("走势 暂无成交");
+        else { result.add("走势 " + sparkline(chart.intradayPoints())); for (var point : chart.intradayPoints()) result.add(point.label() + " " + display(point.close(), scale) + " · " + point.volumeShares() + "股"); }
         result.add("开 " + display(s.open(),scale) + "  高 " + display(s.high(),scale) + "  低 " + display(s.low(),scale) + "  现 " + display(s.close(),scale));
         result.add("成交量 " + s.volumeShares() + " 股"); result.add("日K线（最近 " + chart.dailyCandles().size() + " 日）");
         for (var day:chart.dailyCandles()) result.add(day.day().format(DateTimeFormatter.ofPattern("MM-dd")) + " 开" + display(day.open(),scale) + " 高" + display(day.high(),scale) + " 低" + display(day.low(),scale) + " 收" + display(day.close(),scale) + " 量" + day.volumeShares());
         return List.copyOf(result);
     }
+    private static String sparkline(List<MarketChart.IntradayPoint> points) { long low=points.stream().mapToLong(point -> point.close().minorUnits()).min().orElse(0); long high=points.stream().mapToLong(point -> point.close().minorUnits()).max().orElse(low); String levels="▁▂▃▄▅▆▇█"; StringBuilder line=new StringBuilder(); for(var point:points){int level=high==low?0:(int)Math.round((point.close().minorUnits()-low)*7.0/(high-low));line.append(levels.charAt(Math.max(0,Math.min(7,level))));}return line.toString(); }
     private static String display(Money value,int scale) { return BigDecimal.valueOf(value.minorUnits(),scale).setScale(scale).toPlainString(); }
 
     private record Holder(StockGuiSession session) implements InventoryHolder {
