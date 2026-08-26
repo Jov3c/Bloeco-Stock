@@ -102,6 +102,23 @@ public final class StockGuiController implements Listener, StockGuiOpener {
         return current == null ? null : current.page();
     }
 
+    StockGuiSession.ChartMode currentChartMode(UUID player) {
+        StockGuiSession current = sessions.get(player);
+        return current == null ? null : current.chartMode();
+    }
+
+    boolean applyChartControl(UUID player, UUID detailSessionId, String action) {
+        StockGuiSession current = sessions.get(player);
+        if (current == null || !current.belongsTo(player) || !current.id().equals(detailSessionId)
+                || current.page() != StockGuiSession.Page.DETAIL) return false;
+        StockGuiSession.ChartMode mode = switch (action) {
+            case "chart:intraday" -> StockGuiSession.ChartMode.INTRADAY;
+            case "chart:daily" -> StockGuiSession.ChartMode.DAILY;
+            default -> null;
+        };
+        return mode != null && sessions.replace(player, current, current.withChartMode(mode));
+    }
+
     boolean beginSubmission(UUID player, UUID confirmationId) {
         StockGuiSession confirmation = sessions.get(player);
         if (confirmation == null || !confirmation.belongsTo(player) || !confirmation.id().equals(confirmationId)
@@ -153,8 +170,11 @@ public final class StockGuiController implements Listener, StockGuiOpener {
             case "back:market" -> openMarket(player, 0);
             case "market:next" -> openMarket(player, holder.session().pageIndex() + 1);
             case "market:prev" -> openMarket(player, Math.max(0, holder.session().pageIndex() - 1));
-            case "chart:intraday" -> openDetail(player, holder.session().stockCode(), StockGuiSession.ChartMode.INTRADAY);
-            case "chart:daily" -> openDetail(player, holder.session().stockCode(), StockGuiSession.ChartMode.DAILY);
+            case "chart:intraday", "chart:daily" -> {
+                if (applyChartControl(player.getUniqueId(), holder.session().id(), action)) {
+                    refreshDetail(player, sessions.get(player.getUniqueId()));
+                }
+            }
             case "detail:buy" -> openInput(player, new StockGuiSession.InputDraft(StockGuiSession.InputKind.ORDER_SHARES, false, holder.session().stockCode(), LimitOrder.Side.BUY, 0));
             case "detail:sell" -> openInput(player, new StockGuiSession.InputDraft(StockGuiSession.InputKind.ORDER_SHARES, false, holder.session().stockCode(), LimitOrder.Side.SELL, 0));
             case "confirm" -> confirm(player, holder.session());
@@ -199,11 +219,15 @@ public final class StockGuiController implements Listener, StockGuiOpener {
         if (!ready(player)) return;
         StockGuiSession session = openSession(player.getUniqueId(), StockGuiSession.Page.DETAIL, 0, code, null).withChartMode(chartMode);
         sessions.put(player.getUniqueId(), session);
-        loading(player, session, "正在加载 " + code + "…");
-        queries.book(code, 5).whenComplete((book, error) -> onMain(player, session, () -> {
+        refreshDetail(player, session);
+    }
+
+    private void refreshDetail(Player player, StockGuiSession session) {
+        loading(player, session, "正在加载 " + session.stockCode() + "…");
+        queries.book(session.stockCode(), 5).whenComplete((book, error) -> onMain(player, session, () -> {
             if (error != null) { player.sendMessage(messages.stockQueryFailed()); openMarket(player, 0); return; }
-            queries.market().thenCombine(queries.portfolio(player.getUniqueId()), (rows, portfolio) -> detailStats(rows, portfolio, code))
-                    .whenComplete((stats, statsError) -> onMain(player, session, () -> loadDetailInfo(player, session, code, book,
+            queries.market().thenCombine(queries.portfolio(player.getUniqueId()), (rows, portfolio) -> detailStats(rows, portfolio, session.stockCode()))
+                    .whenComplete((stats, statsError) -> onMain(player, session, () -> loadDetailInfo(player, session, session.stockCode(), book,
                             statsError == null ? stats : DetailStats.empty())));
         }));
     }
@@ -232,13 +256,16 @@ public final class StockGuiController implements Listener, StockGuiOpener {
         put(inv, 12, stats.change().minorUnits() >= 0 ? Material.LIME_DYE : Material.RED_DYE, "noop", cards.get(1), "相对开盘价");
         put(inv, 13, Material.CHEST, "noop", cards.get(2), "可用与冻结持仓合计");
         put(inv, 14, Material.EMERALD, "noop", cards.get(3), "今日成交额");
-        put(inv, 15, Material.CLOCK, "noop", session.chartMode() == StockGuiSession.ChartMode.INTRADAY ? "分时线" : "日K线", "点击图表切换视图");
-        put(inv, 16, Material.PAPER, "noop", "市场状态", info != null && info.marketState().isPresent() ? "流动性" + (info.marketState().get().liquidityDegraded() ? "受限" : "正常") : "公开市场");
-        for (int i = 0; i < 5; i++) if (i < book.asks().size()) put(inv, 19 + i, Material.RED_STAINED_GLASS_PANE, "noop", orderBookLabels(book, currencyScale).get(i), book.asks().get(i).shares() + " 股");
-        for (int i = 0; i < 5; i++) if (i < book.bids().size()) put(inv, 24 + i, Material.LIME_STAINED_GLASS_PANE, "noop", orderBookLabels(book, currencyScale).get(5 + i), book.bids().get(i).shares() + " 股");
+        for (DetailSlot control : detailControls(session.chartMode())) {
+            put(inv, control.slot(), control.material(), control.action(), control.name(), control.lore());
+        }
+        List<String> bookLabels = orderBookLabels(book, currencyScale);
+        for (int i = 0; i < 3; i++) if (i < book.asks().size()) put(inv, 19 + i, Material.RED_STAINED_GLASS_PANE, "noop", bookLabels.get(i), book.asks().get(i).shares() + " 股");
+        for (int i = 0; i < 3; i++) if (i < book.bids().size()) put(inv, 22 + i, Material.LIME_STAINED_GLASS_PANE, "noop", bookLabels.get(5 + i), book.bids().get(i).shares() + " 股");
+        put(inv, 25, Material.WRITABLE_BOOK, "noop", "五档深度", List.of(bookLabels.get(3), bookLabels.get(4), bookLabels.get(8), bookLabels.get(9)));
         List<String> lore = chart == null ? List.of("暂无图表数据") : chartLore(chart, currencyScale, session.chartMode());
         List<Material> raster = chart == null ? List.of(Material.GRAY_STAINED_GLASS_PANE, Material.GRAY_STAINED_GLASS_PANE, Material.GRAY_STAINED_GLASS_PANE, Material.GRAY_STAINED_GLASS_PANE, Material.GRAY_STAINED_GLASS_PANE, Material.GRAY_STAINED_GLASS_PANE, Material.GRAY_STAINED_GLASS_PANE) : chartRaster(chart, session.chartMode());
-        for (int i = 0; i < raster.size(); i++) put(inv, 29 + i, raster.get(i), i == 0 ? (session.chartMode() == StockGuiSession.ChartMode.INTRADAY ? "chart:daily" : "chart:intraday") : "noop", i == 0 ? (session.chartMode() == StockGuiSession.ChartMode.INTRADAY ? "切换日K线" : "切换分时线") : "图表", lore);
+        for (int i = 0; i < raster.size(); i++) put(inv, 28 + i, raster.get(i), "noop", "图表", lore);
         put(inv, 37, Material.PAPER, "noop", "今日成交量", chart == null ? "暂无" : chart.sessionSummary().volumeShares() + " 股"); put(inv, 38, Material.GOLD_INGOT, "noop", "补偿基金", "异常交易请联系管理员申请补偿");
         put(inv, 40, Material.LIME_WOOL, "detail:buy", "买入", "输入股数和限价后确认"); put(inv, 41, Material.RED_WOOL, "detail:sell", "卖出", "输入股数和限价后确认");
         put(inv, 42, Material.BOOK, "help", "交易帮助", "查看交易规则与补偿说明"); put(inv, 43, Material.ARROW, "back:market", "返回市场", "返回列表"); openInventory(player, inv);
@@ -325,6 +352,12 @@ public final class StockGuiController implements Listener, StockGuiOpener {
         return List.of("最新 " + display(latest, 2), "涨跌 " + display(change, 2), "我的持仓 " + holding + " 股", "今日成交额 " + display(turnover, 2));
     }
     static List<String> detailActions() { return List.of("chart:intraday", "chart:daily", "detail:buy", "detail:sell", "help", "back:market"); }
+    static List<DetailSlot> detailControls(StockGuiSession.ChartMode mode) {
+        Objects.requireNonNull(mode, "mode");
+        return List.of(
+                new DetailSlot(15, Material.CLOCK, "chart:intraday", "分时线", mode == StockGuiSession.ChartMode.INTRADAY ? "当前视图 · 点击刷新" : "点击切换至分时线"),
+                new DetailSlot(16, Material.ENCHANTED_BOOK, "chart:daily", "日K线", mode == StockGuiSession.ChartMode.DAILY ? "当前视图 · 点击刷新" : "点击切换至日K线"));
+    }
     static List<String> orderBookLabels(SecondaryMarketQueryService.OrderBook book, int scale) {
         var labels = new java.util.ArrayList<String>();
         for (int i = 0; i < 5; i++) labels.add(i < book.asks().size() ? "卖" + (i + 1) + " " + display(book.asks().get(i).price(), scale) : "卖" + (i + 1) + " 暂无");
@@ -381,6 +414,15 @@ public final class StockGuiController implements Listener, StockGuiOpener {
 
     private record DetailStats(Money latestPrice, Money change, Money turnover, long holdingShares) {
         private static DetailStats empty() { return new DetailStats(Money.zero(), Money.zero(), Money.zero(), 0); }
+    }
+
+    record DetailSlot(int slot, Material material, String action, String name, String lore) {
+        DetailSlot {
+            Objects.requireNonNull(material, "material");
+            Objects.requireNonNull(action, "action");
+            Objects.requireNonNull(name, "name");
+            Objects.requireNonNull(lore, "lore");
+        }
     }
 
     private record Holder(StockGuiSession session) implements InventoryHolder {

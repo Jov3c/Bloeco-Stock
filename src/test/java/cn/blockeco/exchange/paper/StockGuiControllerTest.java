@@ -12,6 +12,23 @@ import cn.blockeco.exchange.domain.money.Money;
 import org.junit.jupiter.api.Test;
 
 class StockGuiControllerTest {
+    @Test void detail_renderer_places_clickable_clock_and_book_controls_in_top_cards() {
+        assertThat(StockGuiController.detailControls(StockGuiSession.ChartMode.INTRADAY))
+                .extracting(StockGuiController.DetailSlot::slot, StockGuiController.DetailSlot::material, StockGuiController.DetailSlot::action)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(15, org.bukkit.Material.CLOCK, "chart:intraday"),
+                        org.assertj.core.groups.Tuple.tuple(16, org.bukkit.Material.ENCHANTED_BOOK, "chart:daily"));
+    }
+
+    @Test void chart_control_action_changes_the_current_detail_session_mode() {
+        StockGuiController controller = StockGuiController.forSessionTests();
+        UUID player = UUID.randomUUID();
+        StockGuiSession detail = controller.openSession(player, StockGuiSession.Page.DETAIL, 0, "NOVA", null);
+
+        assertThat(controller.applyChartControl(player, detail.id(), "chart:daily")).isTrue();
+        assertThat(controller.currentChartMode(player)).isEqualTo(StockGuiSession.ChartMode.DAILY);
+        assertThat(controller.applyChartControl(player, detail.id(), "chart:intraday")).isFalse();
+    }
     @Test void detail_layout_exposes_localized_identity_live_quote_holding_and_actions() {
         assertThat(StockGuiController.detailTitle("星铸工业", "NOVA")).isEqualTo("星铸工业 · NOVA");
         assertThat(StockGuiController.detailCardLabels(Money.ofMinor(1234), Money.ofMinor(-56), 80, Money.ofMinor(98765)))
