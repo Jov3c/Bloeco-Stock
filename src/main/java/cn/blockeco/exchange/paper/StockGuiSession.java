@@ -6,20 +6,29 @@ import java.util.Objects;
 import java.util.UUID;
 
 /** Immutable, owner-bound GUI state. A fresh ID invalidates delayed callbacks from prior pages. */
-public record StockGuiSession(UUID id, UUID owner, Page page, int pageIndex, String stockCode, Draft draft) {
+public record StockGuiSession(UUID id, UUID owner, Page page, int pageIndex, String stockCode, Draft draft, ChartMode chartMode) {
     public StockGuiSession {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(owner, "owner");
         Objects.requireNonNull(page, "page");
+        Objects.requireNonNull(chartMode, "chartMode");
         if (pageIndex < 0) throw new IllegalArgumentException("pageIndex must not be negative");
     }
 
+    public StockGuiSession(UUID id, UUID owner, Page page, int pageIndex, String stockCode, Draft draft) {
+        this(id, owner, page, pageIndex, stockCode, draft, ChartMode.INTRADAY);
+    }
+
     public static StockGuiSession open(UUID owner) {
-        return new StockGuiSession(UUID.randomUUID(), Objects.requireNonNull(owner, "owner"), Page.HOME, 0, null, null);
+        return new StockGuiSession(UUID.randomUUID(), Objects.requireNonNull(owner, "owner"), Page.HOME, 0, null, null, ChartMode.INTRADAY);
     }
 
     public StockGuiSession next(Page nextPage, int nextPageIndex, String nextStockCode, Draft nextDraft) {
-        return new StockGuiSession(UUID.randomUUID(), owner, nextPage, nextPageIndex, nextStockCode, nextDraft);
+        return new StockGuiSession(UUID.randomUUID(), owner, nextPage, nextPageIndex, nextStockCode, nextDraft, chartMode);
+    }
+
+    public StockGuiSession withChartMode(ChartMode nextChartMode) {
+        return new StockGuiSession(UUID.randomUUID(), owner, page, pageIndex, stockCode, draft, nextChartMode);
     }
 
     public boolean belongsTo(UUID playerId) {
@@ -27,6 +36,7 @@ public record StockGuiSession(UUID id, UUID owner, Page page, int pageIndex, Str
     }
 
     public enum Page { HOME, MARKET, DETAIL, NEWS, CASH, PORTFOLIO, ORDERS, TRADES, INPUT, CONFIRM, SUBMITTING, RESULT }
+    public enum ChartMode { INTRADAY, DAILY }
 
     public sealed interface Draft permits CashTransfer, LimitOrderDraft, CancelOrder, InputDraft {
     }

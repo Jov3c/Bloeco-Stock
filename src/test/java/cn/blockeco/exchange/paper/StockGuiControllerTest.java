@@ -10,6 +10,12 @@ import cn.blockeco.exchange.domain.money.Money;
 import org.junit.jupiter.api.Test;
 
 class StockGuiControllerTest {
+    @Test void daily_and_intraday_modes_render_different_chart_content() {
+        MarketChart chart = chartWithFiveCandlesAndThreePoints();
+
+        assertThat(StockGuiController.chartLore(chart, 2, StockGuiSession.ChartMode.DAILY)).contains("日K线", "量99");
+        assertThat(StockGuiController.chartLore(chart, 2, StockGuiSession.ChartMode.INTRADAY)).contains("分时线", "08:00", "走势");
+    }
     @Test void detailChartLoreShowsSimpleIntradayAndDailyKlineWithoutIndicators() {
         var chart = new MarketChart(LocalDate.of(2026,8,24), new MarketChart.SessionSummary(Money.ofMinor(1000),Money.ofMinor(1200),Money.ofMinor(900),Money.ofMinor(1100),42), List.of(new MarketChart.DailyCandle(LocalDate.of(2026,8,23),Money.ofMinor(800),Money.ofMinor(1100),Money.ofMinor(700),Money.ofMinor(1000),99)));
 
@@ -62,5 +68,17 @@ class StockGuiControllerTest {
         assertThat(gui.beginSubmission(player, confirm.id())).isTrue();
         assertThat(gui.beginSubmission(player, confirm.id())).isFalse();
         assertThat(gui.currentPage(player)).isEqualTo(StockGuiSession.Page.SUBMITTING);
+    }
+
+    private static MarketChart chartWithFiveCandlesAndThreePoints() {
+        return new MarketChart(LocalDate.of(2026, 8, 24),
+                new MarketChart.SessionSummary(Money.ofMinor(1000), Money.ofMinor(1200), Money.ofMinor(900), Money.ofMinor(1100), 42),
+                List.of(
+                        new MarketChart.DailyCandle(LocalDate.of(2026, 8, 20), Money.ofMinor(800), Money.ofMinor(1100), Money.ofMinor(700), Money.ofMinor(1000), 99),
+                        new MarketChart.DailyCandle(LocalDate.of(2026, 8, 21), Money.ofMinor(900), Money.ofMinor(1200), Money.ofMinor(800), Money.ofMinor(1100), 88),
+                        new MarketChart.DailyCandle(LocalDate.of(2026, 8, 22), Money.ofMinor(1000), Money.ofMinor(1300), Money.ofMinor(900), Money.ofMinor(1200), 77),
+                        new MarketChart.DailyCandle(LocalDate.of(2026, 8, 23), Money.ofMinor(1100), Money.ofMinor(1400), Money.ofMinor(1000), Money.ofMinor(1300), 66),
+                        new MarketChart.DailyCandle(LocalDate.of(2026, 8, 24), Money.ofMinor(1200), Money.ofMinor(1500), Money.ofMinor(1100), Money.ofMinor(1400), 55)),
+                List.of(new MarketChart.IntradayPoint("08:00", Money.ofMinor(1000), 3), new MarketChart.IntradayPoint("08:30", Money.ofMinor(1200), 5), new MarketChart.IntradayPoint("09:00", Money.ofMinor(1100), 7)));
     }
 }

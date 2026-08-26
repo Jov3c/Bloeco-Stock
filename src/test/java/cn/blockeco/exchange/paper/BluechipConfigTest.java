@@ -2,7 +2,11 @@ package cn.blockeco.exchange.paper;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.groups.Tuple.tuple;
 
+import cn.blockeco.exchange.domain.bluechip.BluechipDefinition;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -12,6 +16,13 @@ import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.Test;
 
 class BluechipConfigTest {
+    @Test
+    void default_bluechips_keep_codes_but_use_chinese_names() {
+        BluechipConfig config = configFromResource();
+
+        assertThat(config.definitions()).extracting(BluechipDefinition::code, BluechipDefinition::displayName)
+                .contains(tuple("NOVA", "星铸工业"), tuple("AURORA", "极光电网"));
+    }
     @Test
     void loadsExactlyTenFictionalBluechipsInMinorCurrencyUnits() {
         BluechipConfig loaded = BluechipConfig.load(configWithEntries(10), 2);
@@ -86,5 +97,13 @@ class BluechipConfigTest {
         customizer.accept(entries);
         configuration.set("bluechips", entries);
         return configuration;
+    }
+
+    private BluechipConfig configFromResource() {
+        try (var input = getClass().getClassLoader().getResourceAsStream("config.yml")) {
+            return BluechipConfig.load(YamlConfiguration.loadConfiguration(new InputStreamReader(input, StandardCharsets.UTF_8)), 2);
+        } catch (java.io.IOException exception) {
+            throw new AssertionError(exception);
+        }
     }
 }

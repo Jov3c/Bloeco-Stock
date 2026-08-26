@@ -11,7 +11,7 @@ market:
   dividend-base-profit: '1000.00'
 bluechips:
   - code: 'NOVA'
-    display-name: 'Nova Forge'
+    display-name: '星铸工业'
     industry: 'Manufacturing'
     reference-price: '10.00'
     lower-bound: '8.00'
@@ -23,7 +23,7 @@ bluechips:
     event-sensitivity-bps: 100
     dividend-payout-bps: 2000
   - code: 'AURORA'
-    display-name: 'Aurora Grid'
+    display-name: '极光电网'
     industry: 'Energy'
     reference-price: '12.00'
     lower-bound: '9.60'
@@ -35,7 +35,7 @@ bluechips:
     event-sensitivity-bps: 100
     dividend-payout-bps: 2000
   - code: 'TERRAN'
-    display-name: 'Terran Harvest'
+    display-name: '泰拉丰收'
     industry: 'Agriculture'
     reference-price: '8.00'
     lower-bound: '6.40'
@@ -47,7 +47,7 @@ bluechips:
     event-sensitivity-bps: 100
     dividend-payout-bps: 2000
   - code: 'SKYLINE'
-    display-name: 'Skyline Transit'
+    display-name: '天际物流'
     industry: 'Logistics'
     reference-price: '15.00'
     lower-bound: '12.00'
@@ -59,7 +59,7 @@ bluechips:
     event-sensitivity-bps: 100
     dividend-payout-bps: 2000
   - code: 'IRONWOOD'
-    display-name: 'Ironwood Works'
+    display-name: '铁林制造'
     industry: 'Construction'
     reference-price: '9.00'
     lower-bound: '7.20'
@@ -71,7 +71,7 @@ bluechips:
     event-sensitivity-bps: 100
     dividend-payout-bps: 2000
   - code: 'LUMEN'
-    display-name: 'Lumen Health'
+    display-name: '流明医疗'
     industry: 'Healthcare'
     reference-price: '11.00'
     lower-bound: '8.80'
@@ -83,7 +83,7 @@ bluechips:
     event-sensitivity-bps: 100
     dividend-payout-bps: 2000
   - code: 'RIVERMINT'
-    display-name: 'Rivermint Bank'
+    display-name: '河湾金融'
     industry: 'Finance'
     reference-price: '13.00'
     lower-bound: '10.40'
@@ -95,7 +95,7 @@ bluechips:
     event-sensitivity-bps: 100
     dividend-payout-bps: 2000
   - code: 'ORBITAL'
-    display-name: 'Orbital Systems'
+    display-name: '轨道系统'
     industry: 'Technology'
     reference-price: '16.00'
     lower-bound: '12.80'
@@ -107,7 +107,7 @@ bluechips:
     event-sensitivity-bps: 100
     dividend-payout-bps: 2000
   - code: 'CINDER'
-    display-name: 'Cinder Materials'
+    display-name: '余烬材料'
     industry: 'Materials'
     reference-price: '7.00'
     lower-bound: '5.60'
@@ -119,7 +119,7 @@ bluechips:
     event-sensitivity-bps: 100
     dividend-payout-bps: 2000
   - code: 'VERDANT'
-    display-name: 'Verdant Homes'
+    display-name: '青翠置业'
     industry: 'Real Estate'
     reference-price: '14.00'
     lower-bound: '11.20'
