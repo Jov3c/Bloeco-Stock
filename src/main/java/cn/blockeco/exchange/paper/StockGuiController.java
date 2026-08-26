@@ -250,25 +250,10 @@ public final class StockGuiController implements Listener, StockGuiOpener {
                 ? "行业 " + info.industry().orElse("未分类") + " · 流动性" + (info.marketState().get().liquidityDegraded() ? "受限" : "正常")
                 : "五档盘口（买卖均为匿名聚合）";
         put(inv, 4, Material.NETHER_STAR, "noop", title, "BlockStock 原生交易终端 · " + detail);
-        put(inv, 10, Material.NAME_TAG, "noop", title, detail);
-        List<String> cards = detailCardLabels(stats.latestPrice(), stats.change(), stats.holdingShares(), stats.turnover());
-        put(inv, 11, Material.GOLD_INGOT, "noop", cards.get(0), "今日最新成交价");
-        put(inv, 12, stats.change().minorUnits() >= 0 ? Material.LIME_DYE : Material.RED_DYE, "noop", cards.get(1), "相对开盘价");
-        put(inv, 13, Material.CHEST, "noop", cards.get(2), "可用与冻结持仓合计");
-        put(inv, 14, Material.EMERALD, "noop", cards.get(3), "今日成交额");
-        for (DetailSlot control : detailControls(session.chartMode())) {
-            put(inv, control.slot(), control.material(), control.action(), control.name(), control.lore());
+        for (DetailSlot slot : detailSlots(book, stats.latestPrice(), stats.change(), stats.holdingShares(), stats.turnover(), chart, session.chartMode(), currencyScale)) {
+            put(inv, slot.slot(), slot.material(), slot.action(), slot.name(), slot.lore());
         }
-        List<String> bookLabels = orderBookLabels(book, currencyScale);
-        for (int i = 0; i < 3; i++) if (i < book.asks().size()) put(inv, 19 + i, Material.RED_STAINED_GLASS_PANE, "noop", bookLabels.get(i), book.asks().get(i).shares() + " 股");
-        for (int i = 0; i < 3; i++) if (i < book.bids().size()) put(inv, 22 + i, Material.LIME_STAINED_GLASS_PANE, "noop", bookLabels.get(5 + i), book.bids().get(i).shares() + " 股");
-        put(inv, 25, Material.WRITABLE_BOOK, "noop", "五档深度", List.of(bookLabels.get(3), bookLabels.get(4), bookLabels.get(8), bookLabels.get(9)));
-        List<String> lore = chart == null ? List.of("暂无图表数据") : chartLore(chart, currencyScale, session.chartMode());
-        List<Material> raster = chart == null ? List.of(Material.GRAY_STAINED_GLASS_PANE, Material.GRAY_STAINED_GLASS_PANE, Material.GRAY_STAINED_GLASS_PANE, Material.GRAY_STAINED_GLASS_PANE, Material.GRAY_STAINED_GLASS_PANE, Material.GRAY_STAINED_GLASS_PANE, Material.GRAY_STAINED_GLASS_PANE) : chartRaster(chart, session.chartMode());
-        for (int i = 0; i < raster.size(); i++) put(inv, 28 + i, raster.get(i), "noop", "图表", lore);
-        put(inv, 37, Material.PAPER, "noop", "今日成交量", chart == null ? "暂无" : chart.sessionSummary().volumeShares() + " 股"); put(inv, 38, Material.GOLD_INGOT, "noop", "补偿基金", "异常交易请联系管理员申请补偿");
-        put(inv, 40, Material.LIME_WOOL, "detail:buy", "买入", "输入股数和限价后确认"); put(inv, 41, Material.RED_WOOL, "detail:sell", "卖出", "输入股数和限价后确认");
-        put(inv, 42, Material.BOOK, "help", "交易帮助", "查看交易规则与补偿说明"); put(inv, 43, Material.ARROW, "back:market", "返回市场", "返回列表"); openInventory(player, inv);
+        openInventory(player, inv);
     }
 
     private void detailFrame(Inventory inventory) {
@@ -357,6 +342,50 @@ public final class StockGuiController implements Listener, StockGuiOpener {
         return List.of(
                 new DetailSlot(15, Material.CLOCK, "chart:intraday", "分时线", mode == StockGuiSession.ChartMode.INTRADAY ? "当前视图 · 点击刷新" : "点击切换至分时线"),
                 new DetailSlot(16, Material.ENCHANTED_BOOK, "chart:daily", "日K线", mode == StockGuiSession.ChartMode.DAILY ? "当前视图 · 点击刷新" : "点击切换至日K线"));
+    }
+    /** Canonical, one-item-per-slot detail specification shared by the renderer and regression tests. */
+    static List<DetailSlot> detailSlots(SecondaryMarketQueryService.OrderBook book, Money latest, Money change, long holding,
+                                        Money turnover, MarketChart chart, StockGuiSession.ChartMode mode) {
+        return detailSlots(book, latest, change, holding, turnover, chart, mode, 2);
+    }
+    static List<DetailSlot> detailSlots(SecondaryMarketQueryService.OrderBook book, Money latest, Money change, long holding,
+                                        Money turnover, MarketChart chart, StockGuiSession.ChartMode mode, int scale) {
+        Objects.requireNonNull(book, "book"); Objects.requireNonNull(latest, "latest"); Objects.requireNonNull(change, "change");
+        Objects.requireNonNull(turnover, "turnover"); Objects.requireNonNull(mode, "mode");
+        var slots = new java.util.ArrayList<DetailSlot>();
+        List<String> cards = detailCardLabels(latest, change, holding, turnover);
+        slots.add(new DetailSlot(10, Material.NAME_TAG, "noop", "行情摘要", "五档盘口与图表数据"));
+        slots.add(new DetailSlot(11, Material.GOLD_INGOT, "noop", cards.get(0), "今日最新成交价"));
+        slots.add(new DetailSlot(12, Material.ARROW, "noop", cards.get(1), change.minorUnits() >= 0 ? "↑ 相对开盘价" : "↓ 相对开盘价"));
+        slots.add(new DetailSlot(13, Material.CHEST, "noop", cards.get(2), "可用与冻结持仓合计"));
+        slots.add(new DetailSlot(14, Material.EMERALD, "noop", cards.get(3), "今日成交额"));
+        slots.addAll(detailControls(mode));
+
+        List<String> labels = orderBookLabels(book, scale);
+        for (int i = 0; i < 5; i++) {
+            long shares = i < book.asks().size() ? book.asks().get(i).shares() : 0;
+            slots.add(new DetailSlot(17 + i, Material.RED_STAINED_GLASS_PANE, "noop", labels.get(i), shares + " 股"));
+        }
+        slots.add(new DetailSlot(22, Material.GOLD_INGOT, "noop", "成交价 " + display(latest, scale), "五档横向扩展至 17–27 格，以完整显示卖五至买五"));
+        for (int i = 0; i < 5; i++) {
+            long shares = i < book.bids().size() ? book.bids().get(i).shares() : 0;
+            slots.add(new DetailSlot(23 + i, Material.LIME_STAINED_GLASS_PANE, "noop", labels.get(5 + i), shares + " 股"));
+        }
+
+        List<String> lore = chart == null ? List.of("行情暂不可用") : chartLore(chart, scale, mode);
+        List<Material> raster = chart == null ? java.util.Collections.nCopies(7, Material.GRAY_STAINED_GLASS_PANE) : chartRaster(chart, mode);
+        for (int i = 0; i < 7; i++) slots.add(new DetailSlot(28 + i, raster.get(i), "noop", "图表", String.join(" · ", lore)));
+        long volume = chart == null ? 0 : chart.sessionSummary().volumeShares();
+        slots.add(new DetailSlot(37, Material.PAPER, "noop", "今日成交量", volume + " 股"));
+        slots.add(new DetailSlot(38, Material.GOLD_INGOT, "noop", "今日成交额 " + display(turnover, scale), "成交额与成交量均来自真实成交"));
+        slots.add(new DetailSlot(39, Material.BOOK, "noop", "补偿基金", "异常交易请联系管理员申请补偿"));
+        slots.add(new DetailSlot(40, Material.LIME_WOOL, "detail:buy", "买入", "输入股数和限价后确认"));
+        slots.add(new DetailSlot(41, Material.RED_WOOL, "detail:sell", "卖出", "输入股数和限价后确认"));
+        slots.add(new DetailSlot(42, Material.BOOK, "help", "交易帮助", "查看交易规则、补偿说明和五档扩展布局"));
+        slots.add(new DetailSlot(43, Material.ARROW, "back:market", "返回市场", "返回列表"));
+        long distinctSlots = slots.stream().map(DetailSlot::slot).distinct().count();
+        if (distinctSlots != slots.size()) throw new IllegalStateException("detail slots must not overlap");
+        return List.copyOf(slots);
     }
     static List<String> orderBookLabels(SecondaryMarketQueryService.OrderBook book, int scale) {
         var labels = new java.util.ArrayList<String>();

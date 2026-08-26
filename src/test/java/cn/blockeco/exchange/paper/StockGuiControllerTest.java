@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.util.UUID;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import cn.blockeco.exchange.application.MarketChart;
 import cn.blockeco.exchange.application.OrderBookLevel;
 import cn.blockeco.exchange.application.SecondaryMarketQueryService;
@@ -12,6 +13,33 @@ import cn.blockeco.exchange.domain.money.Money;
 import org.junit.jupiter.api.Test;
 
 class StockGuiControllerTest {
+    @Test void canonical_detail_slots_keep_every_depth_chart_and_control_slot_unique() {
+        var book = new SecondaryMarketQueryService.OrderBook(
+                List.of(new OrderBookLevel(Money.ofMinor(1050), 5), new OrderBookLevel(Money.ofMinor(1040), 4), new OrderBookLevel(Money.ofMinor(1030), 3), new OrderBookLevel(Money.ofMinor(1020), 2), new OrderBookLevel(Money.ofMinor(1010), 1)),
+                List.of(new OrderBookLevel(Money.ofMinor(990), 1), new OrderBookLevel(Money.ofMinor(980), 2), new OrderBookLevel(Money.ofMinor(970), 3), new OrderBookLevel(Money.ofMinor(960), 4), new OrderBookLevel(Money.ofMinor(950), 5)));
+
+        List<StockGuiController.DetailSlot> slots = StockGuiController.detailSlots(book, Money.ofMinor(1000), Money.ofMinor(25), 7, Money.ofMinor(9999), chartWithFiveCandlesAndThreePoints(), StockGuiSession.ChartMode.DAILY);
+        Map<Integer, StockGuiController.DetailSlot> bySlot = slots.stream().collect(java.util.stream.Collectors.toMap(StockGuiController.DetailSlot::slot, slot -> slot));
+
+        assertThat(bySlot).hasSize(slots.size());
+        assertThat(bySlot).containsKeys(17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 37, 38, 39, 40, 41, 42, 43);
+        assertThat(bySlot.get(15)).extracting(StockGuiController.DetailSlot::material, StockGuiController.DetailSlot::action)
+                .containsExactly(org.bukkit.Material.CLOCK, "chart:intraday");
+        assertThat(bySlot.get(16)).extracting(StockGuiController.DetailSlot::material, StockGuiController.DetailSlot::action)
+                .containsExactly(org.bukkit.Material.ENCHANTED_BOOK, "chart:daily");
+        for (int slot = 17; slot <= 21; slot++) assertThat(bySlot.get(slot)).extracting(StockGuiController.DetailSlot::material, StockGuiController.DetailSlot::action).containsExactly(org.bukkit.Material.RED_STAINED_GLASS_PANE, "noop");
+        assertThat(bySlot.get(22)).extracting(StockGuiController.DetailSlot::material, StockGuiController.DetailSlot::action).containsExactly(org.bukkit.Material.GOLD_INGOT, "noop");
+        for (int slot = 23; slot <= 27; slot++) assertThat(bySlot.get(slot)).extracting(StockGuiController.DetailSlot::material, StockGuiController.DetailSlot::action).containsExactly(org.bukkit.Material.LIME_STAINED_GLASS_PANE, "noop");
+        for (int slot = 28; slot <= 34; slot++) assertThat(bySlot.get(slot).action()).isEqualTo("noop");
+        assertThat(bySlot.get(37)).extracting(StockGuiController.DetailSlot::material, StockGuiController.DetailSlot::action).containsExactly(org.bukkit.Material.PAPER, "noop");
+        assertThat(bySlot.get(38)).extracting(StockGuiController.DetailSlot::material, StockGuiController.DetailSlot::action).containsExactly(org.bukkit.Material.GOLD_INGOT, "noop");
+        assertThat(bySlot.get(39)).extracting(StockGuiController.DetailSlot::material, StockGuiController.DetailSlot::action).containsExactly(org.bukkit.Material.BOOK, "noop");
+        assertThat(bySlot.get(40)).extracting(StockGuiController.DetailSlot::material, StockGuiController.DetailSlot::action).containsExactly(org.bukkit.Material.LIME_WOOL, "detail:buy");
+        assertThat(bySlot.get(41)).extracting(StockGuiController.DetailSlot::material, StockGuiController.DetailSlot::action).containsExactly(org.bukkit.Material.RED_WOOL, "detail:sell");
+        assertThat(bySlot.get(42)).extracting(StockGuiController.DetailSlot::material, StockGuiController.DetailSlot::action).containsExactly(org.bukkit.Material.BOOK, "help");
+        assertThat(bySlot.get(43)).extracting(StockGuiController.DetailSlot::material, StockGuiController.DetailSlot::action).containsExactly(org.bukkit.Material.ARROW, "back:market");
+    }
+
     @Test void detail_renderer_places_clickable_clock_and_book_controls_in_top_cards() {
         assertThat(StockGuiController.detailControls(StockGuiSession.ChartMode.INTRADAY))
                 .extracting(StockGuiController.DetailSlot::slot, StockGuiController.DetailSlot::material, StockGuiController.DetailSlot::action)
@@ -27,6 +55,7 @@ class StockGuiControllerTest {
 
         assertThat(controller.applyChartControl(player, detail.id(), "chart:daily")).isTrue();
         assertThat(controller.currentChartMode(player)).isEqualTo(StockGuiSession.ChartMode.DAILY);
+        assertThat(controller.matches(player, detail.id())).isFalse();
         assertThat(controller.applyChartControl(player, detail.id(), "chart:intraday")).isFalse();
     }
     @Test void detail_layout_exposes_localized_identity_live_quote_holding_and_actions() {
