@@ -124,6 +124,9 @@ async function buyOnce(bot, playerId) {
 function participantTradeCount(db) {
   return one(db, `SELECT COUNT(*) FROM stock_trades t JOIN stock_orders b ON b.id=t.buy_order_id JOIN stock_orders s ON s.id=t.sell_order_id WHERE (b.player_uuid=? AND s.player_uuid=?) OR (s.player_uuid=? AND b.player_uuid=?)`, participantId, makerId, participantId, makerId)
 }
+function participantResidualOrderCount(db) { return one(db, "SELECT COUNT(*) FROM stock_orders WHERE player_uuid=? AND state IN ('OPEN','PARTIALLY_FILLED')", participantId) }
+function makerResidualOrderCount(db) { return one(db, "SELECT COUNT(*) FROM stock_orders WHERE player_uuid=? AND state IN ('OPEN','PARTIALLY_FILLED')", makerId) }
+function participantCancelledOrderCount(db) { return one(db, "SELECT COUNT(*) FROM stock_orders WHERE player_uuid=? AND state='CANCELLED'", participantId) }
 async function assertParticipantTrade() {
   assert.notEqual(participantId, makerId, 'participant UUID must differ from the bluechip maker UUID')
   const observed = await waitForDb('open-session participant trade against the maker', db => participantTradeCount(db) > 0, participantWaitMs)
@@ -136,7 +139,20 @@ async function assertParticipantTrade() {
   assert.ok(stats.volume > 0, 'public market participant trade volume must be positive')
   assert.equal(stats.quoteFirst, stats.participantTrades, 'observable participant fills must use maker quotes created before their participant order')
 }
-function assertNoParticipantResidualOrders() { assert.equal(snapshot(db => one(db, "SELECT COUNT(*) FROM stock_orders WHERE player_uuid=? AND state IN ('OPEN','PARTIALLY_FILLED')", participantId)), 0, 'session close must cancel residual participant orders') }
+async function seedParticipantCloseCancellation() {
+  // This QA-only control cancels maker quotes but intentionally leaves the participant scheduler
+  // running. Its next ordinary bounded order therefore rests in this same isolated database.
+  await rcon('stockadmin bluechip pause')
+  await waitForDb('QA close seed maker-quote cancellation', db => makerResidualOrderCount(db) === 0)
+  const residual = await waitForDb('open-session QA participant residual order', db => participantResidualOrderCount(db) > 0, participantWaitMs)
+  assert.ok(residual > 0, 'QA must establish an OPEN/PARTIALLY_FILLED participant order before the close transition')
+  console.log(`BLUECHIP_QA_CLOSE_SEED|participant_residual_orders=${residual}`)
+}
+function assertParticipantCloseCancellation() {
+  const stats = snapshot(db => ({ residual: participantResidualOrderCount(db), cancelled: participantCancelledOrderCount(db) }))
+  assert.equal(stats.residual, 0, 'session close must cancel the participant residual order seeded while open')
+  assert.ok(stats.cancelled > 0, 'the participant order seeded before close must become terminal/CANCELLED after the close transition')
+}
 
 async function gui() {
   await rcon(`op ${player}`); await rcon(`eco give ${player} 1000000`)
@@ -156,11 +172,12 @@ async function gui() {
       await assertParticipantTrade()
       await rcon('stockadmin bluechip event market 100'); await home(bot); const news = await clickAndWait(bot, 33, '市场快讯')
       assert.ok(screenText(news).includes('大盘') || screenText(news).includes('市场'), 'admin event must be visible in GUI news')
-      console.log('BLUECHIP_GUI_PASS|OPEN|localized|depth|chart-toggle|one-shot|participant-trade|positive-volume|news')
+      await seedParticipantCloseCancellation()
+      console.log('BLUECHIP_GUI_PASS|OPEN|localized|depth|chart-toggle|one-shot|participant-trade|positive-volume|news|participant-close-seeded')
     } else {
       assert.equal(snapshot(db => one(db, "SELECT COUNT(*) FROM stock_orders WHERE player_uuid=? AND stock_code='NOVA' AND state IN ('OPEN','PARTIALLY_FILLED')", playerId)), 1, `${phase} order must remain queued outside matching hours`)
       assert.equal(snapshot(db => one(db, "SELECT COUNT(*) FROM stock_trades WHERE stock_code='NOVA'")), tradesBefore, `${phase} cannot match`)
-      if (phase === 'POSTCLOSE') assertNoParticipantResidualOrders()
+      if (phase === 'POSTCLOSE') assertParticipantCloseCancellation()
       console.log(`BLUECHIP_GUI_PASS|${phase}|queued${phase === 'POSTCLOSE' ? '|participant-close-cancelled' : ''}`)
     }
   } finally { bot.quit('isolated QA complete') }
@@ -178,7 +195,8 @@ function ledger() {
     assert.equal(one(db, 'SELECT COUNT(*) FROM (SELECT sl.company_id FROM stock_listings sl JOIN bluechip_companies bc ON bc.company_id=sl.company_id LEFT JOIN share_holdings h ON h.company_id=sl.company_id GROUP BY sl.company_id,sl.issued_shares HAVING COALESCE(SUM(h.available_shares+h.reserved_shares),0)<>sl.issued_shares)'), 0, 'issued shares reconcile to holdings')
     assert.equal(one(db, "SELECT COUNT(*) FROM (SELECT company_id,trading_day,COUNT(*) n FROM market_candles GROUP BY company_id,trading_day HAVING n>1)"), 0, 'candle idempotency')
     assert.equal(one(db, "SELECT COUNT(*) FROM (SELECT company_id,dividend_at,COUNT(*) n FROM dividend_runs GROUP BY company_id,dividend_at HAVING n>1)"), 0, 'dividend idempotency')
-    assert.equal(one(db, "SELECT COUNT(*) FROM stock_orders WHERE player_uuid=? AND state IN ('OPEN','PARTIALLY_FILLED')", participantId), 0, 'participant residual orders must remain cancelled after close')
+    assert.equal(participantResidualOrderCount(db), 0, 'participant residual orders must remain cancelled after close')
+    assert.ok(participantCancelledOrderCount(db) > 0, 'the participant order seeded before close must remain terminal/CANCELLED')
     assert.ok(participantTradeCount(db) > 0, 'participant must own persisted trade rows')
     assert.ok(one(db, `SELECT COALESCE(SUM(t.shares),0) FROM stock_trades t JOIN stock_orders b ON b.id=t.buy_order_id JOIN stock_orders s ON s.id=t.sell_order_id WHERE (b.player_uuid=? AND s.player_uuid=?) OR (s.player_uuid=? AND b.player_uuid=?)`, participantId, makerId, participantId, makerId) > 0, 'participant persisted volume must be positive')
     const company = one(db, 'SELECT COALESCE(SUM(cash_minor),0) FROM company_cash_accounts'), cash = one(db, 'SELECT COALESCE(SUM(available_minor+reserved_minor),0) FROM securities_cash_accounts'), fund = one(db, 'SELECT balance_minor FROM compensation_fund WHERE singleton=1'), liabilities = one(db, 'SELECT COALESCE(SUM(amount_minor),0) FROM escrow_ledger_entries'), actualEscrow = Number(process.env.QA_ESCROW_MINOR)
