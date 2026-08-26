@@ -6,10 +6,33 @@ import java.util.UUID;
 import java.time.LocalDate;
 import java.util.List;
 import cn.blockeco.exchange.application.MarketChart;
+import cn.blockeco.exchange.application.OrderBookLevel;
+import cn.blockeco.exchange.application.SecondaryMarketQueryService;
 import cn.blockeco.exchange.domain.money.Money;
 import org.junit.jupiter.api.Test;
 
 class StockGuiControllerTest {
+    @Test void detail_layout_exposes_localized_identity_live_quote_holding_and_actions() {
+        assertThat(StockGuiController.detailTitle("星铸工业", "NOVA")).isEqualTo("星铸工业 · NOVA");
+        assertThat(StockGuiController.detailCardLabels(Money.ofMinor(1234), Money.ofMinor(-56), 80, Money.ofMinor(98765)))
+                .containsExactly("最新 12.34", "涨跌 -0.56", "我的持仓 80 股", "今日成交额 987.65");
+        assertThat(StockGuiController.detailActions()).contains("detail:buy", "detail:sell", "back:market", "help", "chart:daily", "chart:intraday");
+    }
+
+    @Test void detail_layout_keeps_five_independent_sell_and_buy_prices() {
+        var book = new SecondaryMarketQueryService.OrderBook(
+                List.of(new OrderBookLevel(Money.ofMinor(990), 10), new OrderBookLevel(Money.ofMinor(980), 9), new OrderBookLevel(Money.ofMinor(970), 8), new OrderBookLevel(Money.ofMinor(960), 7), new OrderBookLevel(Money.ofMinor(950), 6)),
+                List.of(new OrderBookLevel(Money.ofMinor(1010), 10), new OrderBookLevel(Money.ofMinor(1020), 9), new OrderBookLevel(Money.ofMinor(1030), 8), new OrderBookLevel(Money.ofMinor(1040), 7), new OrderBookLevel(Money.ofMinor(1050), 6)));
+
+        assertThat(StockGuiController.orderBookLabels(book, 2)).contains("卖1 10.10", "卖5 10.50", "买1 9.90", "买5 9.50");
+    }
+
+    @Test void chart_raster_uses_candles_for_daily_and_a_line_for_intraday() {
+        MarketChart chart = chartWithFiveCandlesAndThreePoints();
+
+        assertThat(StockGuiController.chartRaster(chart, StockGuiSession.ChartMode.DAILY))
+                .isNotEqualTo(StockGuiController.chartRaster(chart, StockGuiSession.ChartMode.INTRADAY));
+    }
     @Test void daily_and_intraday_modes_render_different_chart_content() {
         MarketChart chart = chartWithFiveCandlesAndThreePoints();
 
