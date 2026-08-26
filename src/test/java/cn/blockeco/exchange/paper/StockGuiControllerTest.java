@@ -53,4 +53,14 @@ class StockGuiControllerTest {
 
         assertThat(controller.shouldClearOnClose(player, session.id())).isTrue();
     }
+
+    @Test void confirmation_is_consumed_before_its_async_operation_completes() {
+        var gui = StockGuiController.forSessionTests(); UUID player = UUID.randomUUID();
+        StockGuiSession confirm = gui.openSession(player, StockGuiSession.Page.CONFIRM, 0, null,
+                new StockGuiSession.CashTransfer(true, Money.ofMinor(100)));
+
+        assertThat(gui.beginSubmission(player, confirm.id())).isTrue();
+        assertThat(gui.beginSubmission(player, confirm.id())).isFalse();
+        assertThat(gui.currentPage(player)).isEqualTo(StockGuiSession.Page.SUBMITTING);
+    }
 }

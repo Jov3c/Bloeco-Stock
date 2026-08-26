@@ -97,6 +97,19 @@ public final class StockGuiController implements Listener, StockGuiOpener {
         return current != null && current.belongsTo(player) && current.id().equals(session);
     }
 
+    StockGuiSession.Page currentPage(UUID player) {
+        StockGuiSession current = sessions.get(player);
+        return current == null ? null : current.page();
+    }
+
+    boolean beginSubmission(UUID player, UUID confirmationId) {
+        StockGuiSession confirmation = sessions.get(player);
+        if (confirmation == null || !confirmation.belongsTo(player) || !confirmation.id().equals(confirmationId)
+                || confirmation.page() != StockGuiSession.Page.CONFIRM) return false;
+        StockGuiSession submitting = confirmation.next(StockGuiSession.Page.SUBMITTING, 0, confirmation.stockCode(), confirmation.draft());
+        return sessions.replace(player, confirmation, submitting);
+    }
+
     void beginInventoryReplacement(UUID player) { inventoryReplacements.add(player); }
     void endInventoryReplacement(UUID player) { inventoryReplacements.remove(player); }
     boolean shouldClearOnClose(UUID player, UUID session) { return !inventoryReplacements.contains(player) && matches(player, session); }
@@ -144,6 +157,7 @@ public final class StockGuiController implements Listener, StockGuiOpener {
             case "detail:sell" -> openInput(player, new StockGuiSession.InputDraft(StockGuiSession.InputKind.ORDER_SHARES, false, holder.session().stockCode(), LimitOrder.Side.SELL, 0));
             case "confirm" -> confirm(player, holder.session());
             case "cancel" -> openHome(player);
+            case "result:detail" -> { if (holder.session().stockCode() == null) openHome(player); else openDetail(player, holder.session().stockCode()); }
             default -> routeDynamic(player, action);
         }
     }
@@ -254,18 +268,23 @@ public final class StockGuiController implements Listener, StockGuiOpener {
         }catch(ArithmeticException|NumberFormatException ex){player.sendMessage(draft.kind()==StockGuiSession.InputKind.ORDER_SHARES?messages.invalidShares():messages.invalidStockMoney());}
     }
 
-    private void showConfirmation(Player player, StockGuiSession.Draft draft) { StockGuiSession session=openSession(player.getUniqueId(),StockGuiSession.Page.CONFIRM,0,null,draft);Inventory inv=inventory(session,"确认执行");fill(inv);put(inv,22,Material.BOOK,"noop","请确认",describe(draft));put(inv,29,Material.LIME_WOOL,"confirm","确认执行","执行后将提交给交易账本");put(inv,33,Material.RED_WOOL,"cancel","取消","不执行任何操作");openInventory(player, inv); }
+    private void showConfirmation(Player player, StockGuiSession.Draft draft) { String stockCode=draft instanceof StockGuiSession.LimitOrderDraft order?order.stockCode():null;StockGuiSession session=openSession(player.getUniqueId(),StockGuiSession.Page.CONFIRM,0,stockCode,draft);Inventory inv=inventory(session,"确认执行");fill(inv);put(inv,22,Material.BOOK,"noop","请确认",describe(draft));put(inv,29,Material.LIME_WOOL,"confirm","确认执行","执行后将提交给交易账本");put(inv,33,Material.RED_WOOL,"cancel","取消","不执行任何操作");openInventory(player, inv); }
     private String describe(StockGuiSession.Draft draft) { return switch(draft){case StockGuiSession.CashTransfer c->(c.deposit()?"转入 ":"转出 ")+amount(c.amount());case StockGuiSession.LimitOrderDraft o->(o.side()==LimitOrder.Side.BUY?"买入 ":"卖出 ")+o.stockCode()+" "+o.shares()+" 股 @ "+amount(o.limitPrice());case StockGuiSession.CancelOrder c->"撤销你的委托";default->"";}; }
     private void confirm(Player player, StockGuiSession confirmation) {
         StockGuiSession.Draft draft=confirmation.draft(); if(draft==null)return;
         if(!mutationsOpen.getAsBoolean()){player.sendMessage(messages.marketUnavailable());return;}
         if(!mutationsInFlight.add(player.getUniqueId())) { player.sendMessage(Component.text("交易正在处理中，请勿重复提交。")); return; }
-        if(draft instanceof StockGuiSession.CashTransfer c){(c.deposit()?cash.deposit(player.getUniqueId(),c.amount()):cash.withdraw(player.getUniqueId(),c.amount())).whenComplete((r,e)->completeMutation(player,confirmation,e==null?messages.cashResult(r):messages.stockQueryFailed()));return;}
-        if(draft instanceof StockGuiSession.LimitOrderDraft o){(o.side()==LimitOrder.Side.BUY?trading.placeBuy(player.getUniqueId(),o.stockCode(),o.shares(),o.limitPrice()):trading.placeSell(player.getUniqueId(),o.stockCode(),o.shares(),o.limitPrice())).whenComplete((r,e)->completeMutation(player,confirmation,e==null?messages.orderResult(r):messages.stockQueryFailed()));return;}
-        if(draft instanceof StockGuiSession.CancelOrder c){trading.cancel(player.getUniqueId(),c.orderId()).whenComplete((r,e)->completeMutation(player,confirmation,e==null?messages.orderResult(r):messages.stockQueryFailed()));return;}
+        if(!beginSubmission(player.getUniqueId(),confirmation.id())) { mutationsInFlight.remove(player.getUniqueId()); return; }
+        StockGuiSession submitting=sessions.get(player.getUniqueId());
+        if(submitting==null) { mutationsInFlight.remove(player.getUniqueId()); return; }
+        loading(player,submitting,"正在提交，请勿重复操作");
+        if(draft instanceof StockGuiSession.CashTransfer c){(c.deposit()?cash.deposit(player.getUniqueId(),c.amount()):cash.withdraw(player.getUniqueId(),c.amount())).whenComplete((r,e)->completeMutation(player,submitting,e==null?messages.cashResult(r):messages.stockQueryFailed()));return;}
+        if(draft instanceof StockGuiSession.LimitOrderDraft o){(o.side()==LimitOrder.Side.BUY?trading.placeBuy(player.getUniqueId(),o.stockCode(),o.shares(),o.limitPrice()):trading.placeSell(player.getUniqueId(),o.stockCode(),o.shares(),o.limitPrice())).whenComplete((r,e)->completeMutation(player,submitting,e==null?messages.orderResult(r):messages.stockQueryFailed()));return;}
+        if(draft instanceof StockGuiSession.CancelOrder c){trading.cancel(player.getUniqueId(),c.orderId()).whenComplete((r,e)->completeMutation(player,submitting,e==null?messages.orderResult(r):messages.stockQueryFailed()));return;}
         mutationsInFlight.remove(player.getUniqueId());
     }
-    private void completeMutation(Player player, StockGuiSession session, Component outcome) { mutationsInFlight.remove(player.getUniqueId()); onMain(player,session,()->player.sendMessage(outcome)); }
+    private void completeMutation(Player player, StockGuiSession session, Component outcome) { mutationsInFlight.remove(player.getUniqueId()); onMain(player,session,()->showResult(player,session,outcome)); }
+    private void showResult(Player player, StockGuiSession submitting, Component outcome) { StockGuiSession result=submitting.next(StockGuiSession.Page.RESULT,0,submitting.stockCode(),null);if(!sessions.replace(player.getUniqueId(),submitting,result))return;Inventory inv=inventory(result,"提交结果");fill(inv);inv.setItem(22,items.action(Material.PAPER,"noop",outcome,List.of()));put(inv,29,Material.ARROW,"result:detail","返回详情","查看相关详情");put(inv,33,Material.COMPASS,"back:market","返回市场","查看市场行情");openInventory(player,inv); }
     private void put(Inventory inventory, int slot, Material material, String action, String name, String lore) {
         inventory.setItem(slot, items.action(material, action, Component.text(name), List.of(Component.text(lore))));
     }
