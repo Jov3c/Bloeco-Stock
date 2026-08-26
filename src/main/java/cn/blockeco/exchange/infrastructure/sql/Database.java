@@ -18,7 +18,7 @@ import java.util.Objects;
 
 public final class Database implements AutoCloseable, TransactionRunner {
 
-    private static final String[] MIGRATIONS = {"V001", "V002", "V003", "V004", "V005", "V006", "V007", "V008", "V009", "V010", "V011", "V012", "V013"};
+    private static final String[] MIGRATIONS = {"V001", "V002", "V003", "V004", "V005", "V006", "V007", "V008", "V009", "V010", "V011", "V012", "V013", "V014"};
     private final HikariDataSource dataSource;
     private final MigrationPrecondition precondition;
 

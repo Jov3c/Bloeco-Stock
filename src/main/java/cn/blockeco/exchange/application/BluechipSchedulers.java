@@ -5,7 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-/** Owns the server jobs which advance the persisted bluechip market. */
+/** Owns the server jobs which advance the persisted bluechip market.  The quote job may chain a bounded participant tick after refresh. */
 public final class BluechipSchedulers {
     private final Repeater repeater; private final Runnable session; private final Runnable quotes; private final Runnable events; private final Runnable candles; private final Runnable dividends;
     private final List<Cancellation> jobs = new ArrayList<>();

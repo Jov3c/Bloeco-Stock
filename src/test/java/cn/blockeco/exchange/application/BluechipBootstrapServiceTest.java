@@ -10,6 +10,7 @@ import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.infrastructure.sql.Database;
 import cn.blockeco.exchange.infrastructure.sql.SqlBluechipRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlBluechipBootstrapFundingRepository;
+import cn.blockeco.exchange.infrastructure.sql.SqlBluechipParticipantRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlCompanyFinanceRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlCompanyRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlSecuritiesCashRepository;
@@ -30,6 +31,7 @@ import org.junit.jupiter.api.Test;
 class BluechipBootstrapServiceTest {
     private static final Instant NOW = Instant.parse("2026-08-24T00:00:00Z");
     private static final UUID SYSTEM_ACCOUNT = UUID.fromString("00000000-0000-0000-0000-000000000099");
+    private static final UUID PARTICIPANT_ACCOUNT = UUID.fromString("00000000-0000-0000-0000-000000000077");
 
     @Test
     void initializesExactlyTenListingsWithFiniteFundCashAndInventory() throws Exception {
@@ -256,6 +258,35 @@ class BluechipBootstrapServiceTest {
     }
 
     @Test
+    void participantBootstrapTransferIsIdempotentAndConservesCashAndShares() throws Exception {
+        var file = Files.createTempFile("blockstock-bluechip-participant-bootstrap-", ".db");
+        try (Database database = migratedDatabase(file)) {
+            SqlBluechipRepository repository = new SqlBluechipRepository(database.dataSource());
+            BluechipConfig config = config();
+            BluechipBootstrapService service = participantService(database, repository, config);
+
+            service.initializeMissing().toCompletableFuture().join();
+            long cashAfterFirst = totalSecuritiesCash(database);
+            long participantCashAfterFirst = securitiesCash(database, PARTICIPANT_ACCOUNT);
+            var sharesAfterFirst = repository.all().stream().mapToLong(company -> heldShares(database, company.companyId(), PARTICIPANT_ACCOUNT)).sum();
+
+            assertThat(cashAfterFirst).isEqualTo(config.definitions().stream().mapToLong(definition -> definition.initialFundCash()).sum());
+            assertThat(count(database, "SELECT COUNT(*) FROM escrow_ledger_entries WHERE liability_kind = 'SECURITIES_CASH'"))
+                    .isEqualTo(1);
+            assertThat(repository.all()).allSatisfy(company -> assertThat(sumHeldShares(database, company.companyId()))
+                    .isEqualTo(company.listing().issuedShares()));
+
+            service.initializeMissing().toCompletableFuture().join();
+
+            assertThat(totalSecuritiesCash(database)).isEqualTo(cashAfterFirst);
+            assertThat(securitiesCash(database, PARTICIPANT_ACCOUNT)).isEqualTo(participantCashAfterFirst);
+            assertThat(repository.all()).allSatisfy(company -> assertThat(heldShares(database, company.companyId(), PARTICIPANT_ACCOUNT)).isEqualTo(20));
+            assertThat(repository.all().stream().mapToLong(company -> heldShares(database, company.companyId(), PARTICIPANT_ACCOUNT)).sum()).isEqualTo(sharesAfterFirst);
+            assertThat(count(database, "SELECT COUNT(*) FROM bluechip_system_participant_allocations")).isEqualTo(1);
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
     void reinitializationAcceptsTradedFundBalancesAndDoesNotMintCashAgain() throws Exception {
         var file = Files.createTempFile("blockstock-bluechip-live-fund-", ".db");
         try (Database database = migratedDatabase(file)) {
@@ -318,15 +349,36 @@ class BluechipBootstrapServiceTest {
     }
 
     private BluechipBootstrapService service(Database database, SqlBluechipRepository repository, BluechipConfig config) {
+        return service(database, repository, config, null);
+    }
+    private BluechipBootstrapService participantService(Database database, SqlBluechipRepository repository, BluechipConfig config) {
+        return service(database, repository, config, PARTICIPANT_ACCOUNT);
+    }
+    private BluechipBootstrapService service(Database database, SqlBluechipRepository repository, BluechipConfig config, UUID participant) {
         var fundingRecords = new SqlBluechipBootstrapFundingRepository(database.dataSource());
         var funding = new BluechipBootstrapFundingService(SYSTEM_ACCOUNT, fundingRecords, database, new BluechipBootstrapFundingService.EscrowEconomy() {
             @Override public cn.blockeco.exchange.ports.EconomyGateway.Result withdraw(UUID player, Money amount) { return cn.blockeco.exchange.ports.EconomyGateway.Result.success("withdrawn"); }
             @Override public cn.blockeco.exchange.ports.EconomyGateway.Result deposit(UUID player, Money amount) { return cn.blockeco.exchange.ports.EconomyGateway.Result.success("deposited"); }
             @Override public cn.blockeco.exchange.ports.EconomyGateway.Result depositEscrow(Money amount) { return cn.blockeco.exchange.ports.EconomyGateway.Result.success("escrow deposited"); }
         }, new cn.blockeco.exchange.ports.MainThreadExecutor() { @Override public <T> java.util.concurrent.CompletionStage<T> submit(java.util.function.Supplier<T> work) { return java.util.concurrent.CompletableFuture.completedFuture(work.get()); } }, () -> NOW);
-        return new BluechipBootstrapService(config, SYSTEM_ACCOUNT, new SqlCompanyRepository(database.dataSource()),
+        return participant == null ? new BluechipBootstrapService(config, SYSTEM_ACCOUNT, new SqlCompanyRepository(database.dataSource()),
                 new SqlStockListingRepository(database.dataSource()), repository, new SqlSecuritiesCashRepository(database.dataSource()), funding, fundingRecords,
-                database, Runnable::run, () -> NOW);
+                database, Runnable::run, () -> NOW) : new BluechipBootstrapService(config, SYSTEM_ACCOUNT, new SqlCompanyRepository(database.dataSource()),
+                new SqlStockListingRepository(database.dataSource()), repository, new SqlSecuritiesCashRepository(database.dataSource()), funding, fundingRecords,
+                database, Runnable::run, () -> NOW, participant, new SqlBluechipParticipantRepository());
+    }
+
+    private static long totalSecuritiesCash(Database database) { return count(database, "SELECT COALESCE(SUM(available_minor + reserved_minor), 0) FROM securities_cash_accounts"); }
+    private static long securitiesCash(Database database, UUID account) {
+        try (var connection = database.dataSource().getConnection(); var statement = connection.prepareStatement("SELECT available_minor + reserved_minor FROM securities_cash_accounts WHERE player_uuid = ?")) {
+            statement.setString(1, account.toString()); try (var rows = statement.executeQuery()) { assertThat(rows.next()).isTrue(); return rows.getLong(1); }
+        } catch (Exception exception) { throw new AssertionError(exception); }
+    }
+    private static long heldShares(Database database, CompanyId companyId, UUID holder) {
+        try (var connection = database.dataSource().getConnection(); var statement = connection.prepareStatement("SELECT available_shares + reserved_shares FROM share_holdings WHERE company_id = ? AND holder_uuid = ?")) {
+            statement.setString(1, companyId.value().toString()); statement.setString(2, holder.toString());
+            try (var rows = statement.executeQuery()) { return rows.next() ? rows.getLong(1) : 0; }
+        } catch (Exception exception) { throw new AssertionError(exception); }
     }
 
     private static Database migratedDatabase(java.nio.file.Path file) throws Exception {

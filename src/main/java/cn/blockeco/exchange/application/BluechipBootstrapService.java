@@ -10,6 +10,7 @@ import cn.blockeco.exchange.paper.BluechipConfig;
 import cn.blockeco.exchange.ports.AppClock;
 import cn.blockeco.exchange.ports.BluechipRepository;
 import cn.blockeco.exchange.ports.BluechipBootstrapFundingRepository;
+import cn.blockeco.exchange.ports.BluechipParticipantRepository;
 import cn.blockeco.exchange.ports.CompanyRepository;
 import cn.blockeco.exchange.ports.SecuritiesCashRepository;
 import cn.blockeco.exchange.ports.StockListingRepository;
@@ -28,13 +29,26 @@ public final class BluechipBootstrapService {
     private final StockListingRepository listings; private final BluechipRepository bluechips; private final SecuritiesCashRepository cash;
     private final BluechipBootstrapFundingService funding; private final BluechipBootstrapFundingRepository fundingRecords; private final TransactionRunner transactions;
     private final Executor executor; private final AppClock clock;
+    private final UUID participantAccountId; private final BluechipParticipantRepository participantAllocations;
+    private static final Money PARTICIPANT_INITIAL_CASH = Money.ofMinor(10_000);
+    private static final long PARTICIPANT_INITIAL_SHARES_PER_COMPANY = 20;
 
     public BluechipBootstrapService(BluechipConfig config, UUID systemAccountId, CompanyRepository companies, StockListingRepository listings,
             BluechipRepository bluechips, SecuritiesCashRepository cash, BluechipBootstrapFundingService funding,
             BluechipBootstrapFundingRepository fundingRecords, TransactionRunner transactions, Executor executor, AppClock clock) {
+        this(config, systemAccountId, companies, listings, bluechips, cash, funding, fundingRecords, transactions, executor, clock, null, null);
+    }
+    public BluechipBootstrapService(BluechipConfig config, UUID systemAccountId, CompanyRepository companies, StockListingRepository listings,
+            BluechipRepository bluechips, SecuritiesCashRepository cash, BluechipBootstrapFundingService funding,
+            BluechipBootstrapFundingRepository fundingRecords, TransactionRunner transactions, Executor executor, AppClock clock,
+            UUID participantAccountId, BluechipParticipantRepository participantAllocations) {
         this.config = Objects.requireNonNull(config); this.systemAccountId = requireSystemAccount(systemAccountId); this.companies = Objects.requireNonNull(companies);
         this.listings = Objects.requireNonNull(listings); this.bluechips = Objects.requireNonNull(bluechips); this.cash=Objects.requireNonNull(cash); this.funding=Objects.requireNonNull(funding); this.fundingRecords=Objects.requireNonNull(fundingRecords); this.transactions = Objects.requireNonNull(transactions);
         this.executor = Objects.requireNonNull(executor); this.clock = Objects.requireNonNull(clock);
+        if ((participantAccountId == null) != (participantAllocations == null)) throw new IllegalArgumentException("participant account and allocation repository must be configured together");
+        this.participantAccountId = participantAccountId;
+        this.participantAllocations = participantAllocations;
+        if (participantAccountId != null && participantAccountId.equals(this.systemAccountId)) throw new IllegalArgumentException("participant account must differ from bluechip maker");
     }
     public CompletionStage<BluechipBootstrapResult> initializeMissing() { return CompletableFuture.supplyAsync(this::initialize, executor); }
     private BluechipBootstrapResult initialize() {
@@ -49,6 +63,7 @@ public final class BluechipBootstrapService {
                 fundingRecords.complete(connection, funded.id(), clock.now());
                 return null;
             });
+            allocateParticipant();
             return new BluechipBootstrapResult(config.definitions().size());
         }
         transactions.inTransaction(connection -> {
@@ -65,7 +80,17 @@ public final class BluechipBootstrapService {
             fundingRecords.complete(connection, funded.id(), clock.now());
             return null;
         });
+        allocateParticipant();
         return new BluechipBootstrapResult(0);
+    }
+    private void allocateParticipant() {
+        if (participantAllocations == null) return;
+        var positions = bluechips.all();
+        transactions.inTransaction(connection -> {
+            participantAllocations.allocateOnce(connection, systemAccountId, participantAccountId, PARTICIPANT_INITIAL_CASH,
+                    PARTICIPANT_INITIAL_SHARES_PER_COMPANY, positions);
+            return null;
+        });
     }
     private void seed(java.sql.Connection connection, BluechipDefinition definition) throws java.sql.SQLException {
         CompanyId id = companyId(definition.code());

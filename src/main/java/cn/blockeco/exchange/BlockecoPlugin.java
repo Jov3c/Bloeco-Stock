@@ -127,7 +127,9 @@ public final class BlockecoPlugin extends JavaPlugin {
         var mainThread = new PaperMainThread(this);
         int scale = getConfig().getInt("currency.scale");
         var bluechipAccountId = configuredBluechipSystemAccount();
+        var bluechipParticipantId = configuredBluechipParticipantAccount();
         if (getServer().getOfflinePlayer(bluechipAccountId).hasPlayedBefore()) throw new IllegalStateException("蓝筹系统账户不能是已知真实玩家");
+        if (getServer().getOfflinePlayer(bluechipParticipantId).hasPlayedBefore()) throw new IllegalStateException("蓝筹系统参与者账户不能是已知真实玩家");
         var bluechipConfig = BluechipConfig.load(getConfig(), scale);
         var economy = new VaultEconomyGateway(getServer(), scale);
         var cashRepository = new SqlSecuritiesCashRepository(db.dataSource());
@@ -140,7 +142,8 @@ public final class BlockecoPlugin extends JavaPlugin {
                 }, mainThread, clock);
         var bluechipBootstrap = new BluechipBootstrapService(bluechipConfig, bluechipAccountId, companies,
                 new cn.blockeco.exchange.infrastructure.sql.SqlStockListingRepository(db.dataSource()), new SqlBluechipRepository(db.dataSource()),
-                cashRepository, bluechipFunding, new SqlBluechipBootstrapFundingRepository(db.dataSource()), db, sqlExecutor, clock);
+                cashRepository, bluechipFunding, new SqlBluechipBootstrapFundingRepository(db.dataSource()), db, sqlExecutor, clock,
+                bluechipParticipantId, new cn.blockeco.exchange.infrastructure.sql.SqlBluechipParticipantRepository());
         if (!bluechipBootstrapReady) {
             if (!bluechipBootstrapStarted) {
                 bluechipBootstrapStarted = true;
@@ -193,6 +196,8 @@ public final class BlockecoPlugin extends JavaPlugin {
         var secondaryMarket = new SecondaryMarketService(tradingRepository, db, sqlExecutor, clock, feeBps, marketSession);
         var marketSessions = new MarketSessionService(secondaryMarket, tradingRepository, db, sqlExecutor, clock, marketZone, marketSession);
         var marketMaker = new BluechipMarketMakerService(bluechipRepository, secondaryMarket, marketSession, clock);
+        var systemParticipant = new cn.blockeco.exchange.application.BluechipSystemParticipantService(bluechipRepository, tradingRepository,
+                secondaryMarket, marketSession, clock, bluechipParticipantId);
         // The callback runs only after an order transaction commits; the maker queues a bounded,
         // non-blocking refill and suppresses its own system-order callbacks.
         secondaryMarket.setAfterMatchedOrdersListener(marketMaker::replenishAfterMatch);
@@ -272,8 +277,12 @@ public final class BlockecoPlugin extends JavaPlugin {
                         long delay = Math.max(1L, initial.toSeconds() * 20L); long ticks = Math.max(20L, period.toSeconds() * 20L);
                         var scheduled = getServer().getScheduler().runTaskTimerAsynchronously(this, task, delay, ticks); return scheduled::cancel;
                     },
-                            () -> marketSessions.onSessionTransition().thenCompose(ignored -> marketSession.get().acceptsMatching() ? java.util.concurrent.CompletableFuture.completedFuture(0) : marketMaker.cancelSystemQuotesAtClose()).exceptionally(failure -> { getLogger().warning("蓝筹时段调度失败: " + failure.getMessage()); return 0; }),
-                            () -> marketMaker.refreshQuotes().exceptionally(failure -> { getLogger().warning("蓝筹报价调度失败: " + failure.getMessage()); return null; }),
+                            () -> marketSessions.onSessionTransition().thenCompose(ignored -> marketSession.get().acceptsMatching()
+                                    ? java.util.concurrent.CompletableFuture.completedFuture(0)
+                                    : marketMaker.cancelSystemQuotesAtClose().thenCompose(cancelled -> systemParticipant.close()))
+                                    .exceptionally(failure -> { getLogger().warning("蓝筹时段调度失败: " + failure.getMessage()); return 0; }),
+                            () -> marketMaker.refreshQuotes().thenCompose(ignored -> systemParticipant.tick())
+                                    .exceptionally(failure -> { getLogger().warning("蓝筹报价/参与者调度失败: " + failure.getMessage()); return null; }),
                             () -> marketEvents.triggerDueEvents().thenCompose(ignored -> marketEvents.applyDecay()).exceptionally(failure -> { getLogger().warning("蓝筹事件调度失败: " + failure.getMessage()); return null; }),
                             () -> { var now = clock.now().atZone(marketZone); if (now.getHour() >= 20) marketCandles.closeTradingDay(now.toLocalDate()).exceptionally(failure -> { getLogger().warning("蓝筹K线调度失败: " + failure.getMessage()); return null; }); },
                             () -> dividends.settleDueRuns().exceptionally(failure -> { getLogger().warning("蓝筹分红调度失败: " + failure.getMessage()); return null; }));
@@ -309,7 +318,12 @@ public final class BlockecoPlugin extends JavaPlugin {
         int scale = getConfig().getInt("currency.scale", -1); if (scale < 0 || scale > 8) throw new IllegalArgumentException("currency.scale must be between 0 and 8");
         validateMarketConfiguration(configuredMarketFeeBps(), getConfig().getString("market.time-zone", "Asia/Shanghai"));
         BluechipConfig.load(getConfig(), scale);
-        configuredBluechipSystemAccount();
+        java.util.UUID maker = configuredBluechipSystemAccount();
+        java.util.UUID participant = configuredBluechipParticipantAccount();
+        java.util.UUID treasury;
+        try { treasury = java.util.UUID.fromString(getConfig().getString("company.treasury-escrow-uuid")); }
+        catch (IllegalArgumentException failure) { throw new IllegalArgumentException("company.treasury-escrow-uuid must be a non-zero UUID", failure); }
+        if (maker.equals(participant) || maker.equals(treasury) || participant.equals(treasury)) throw new IllegalArgumentException("market participant, maker, and treasury UUIDs must be distinct");
         positive("company.registration-fee", scale); positive("company.minimum-capital", scale);
         try { if (new java.util.UUID(0, 0).equals(java.util.UUID.fromString(getConfig().getString("company.treasury-escrow-uuid")))) throw new IllegalArgumentException("company.treasury-escrow-uuid must not be zero"); }
         catch (IllegalArgumentException failure) { throw new IllegalArgumentException("company.treasury-escrow-uuid must be a non-zero UUID", failure); }
@@ -338,6 +352,16 @@ public final class BlockecoPlugin extends JavaPlugin {
             return value;
         } catch (IllegalArgumentException failure) {
             throw new IllegalArgumentException("market.system-account-uuid must be a non-zero UUID", failure);
+        }
+    }
+    private java.util.UUID configuredBluechipParticipantAccount() {
+        String raw = getConfig().getString("market.participant-account-uuid");
+        try {
+            java.util.UUID value = java.util.UUID.fromString(raw);
+            if (new java.util.UUID(0, 0).equals(value)) throw new IllegalArgumentException("market.participant-account-uuid must not be zero");
+            return value;
+        } catch (IllegalArgumentException failure) {
+            throw new IllegalArgumentException("market.participant-account-uuid must be a non-zero UUID", failure);
         }
     }
     static String configurationFailureMessage(Throwable failure) { String detail = failure.getMessage(); return "BlockStock 配置无效" + (detail == null || detail.isBlank() ? "" : "（附加信息：" + detail + "）"); }
