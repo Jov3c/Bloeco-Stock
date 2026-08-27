@@ -22,7 +22,9 @@ class MarketEventServiceTest {
     @Test void marketEventIsShownAsTheCurrentEventForEveryBluechipDetail() throws Exception {
         var file = Files.createTempFile("blockstock-market-detail-", ".db");
         try (var database = migrated(file)) {
-            var clock = new MutableClock(Instant.parse("2026-08-24T00:00:00Z")); var repository = seeded(database, clock);
+            // SqlPublicStockRepository filters active events against the real current instant.
+            // Keep this fixture's event window anchored to that same observable clock.
+            var clock = new MutableClock(Instant.now()); var repository = seeded(database, clock);
             new MarketEventService(repository, database, Runnable::run, clock::now, new Random(7)).triggerTestMarketEvent(500).toCompletableFuture().join();
 
             var info = new SqlPublicStockRepository(database.dataSource()).findInfo(repository.all().getFirst().listing().stockCode()).orElseThrow();

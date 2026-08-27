@@ -40,9 +40,30 @@ function rcon(command) {
     socket.on('error', reject)
   })
 }
-function openDb() { return new DatabaseSync(dbPath, { readOnly: true }) }
+function openDb() {
+  const db = new DatabaseSync(dbPath, { readOnly: true })
+  // Paper owns this database while GUI acceptance is running.  A short busy
+  // timeout lets a read wait for its in-flight transaction instead of turning
+  // a valid settlement race into a false-negative acceptance failure.
+  db.exec('PRAGMA busy_timeout = 5000')
+  return db
+}
 function one(db, sql, ...values) { const row = db.prepare(sql).get(...values); return row && Object.values(row)[0] }
-function snapshot(read) { const db = openDb(); try { return read(db) } finally { db.close() } }
+const blockingSleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+function snapshot(read) {
+  const deadline = Date.now() + 15_000
+  let lastError
+  do {
+    let db
+    try { db = openDb(); return read(db) }
+    catch (error) {
+      if (!/database is locked|database is busy/i.test(error.message) || Date.now() >= deadline) throw error
+      lastError = error
+    } finally { db?.close() }
+    blockingSleep(100)
+  } while (Date.now() < deadline)
+  throw lastError
+}
 async function waitForDb(label, check, limitMs = 15_000) {
   const deadline = Date.now() + limitMs; let last
   while (Date.now() < deadline) {
@@ -132,7 +153,7 @@ function makerResidualOrderCount(db) { return one(db, "SELECT COUNT(*) FROM stoc
 function participantResidualOrder(db) { return db.prepare("SELECT id, priority_sequence FROM stock_orders WHERE player_uuid=? AND state IN ('OPEN','PARTIALLY_FILLED') ORDER BY priority_sequence DESC, id DESC LIMIT 1").get(participantId) }
 function clearParticipantCloseMarker() { if (existsSync(participantCloseMarkerPath)) unlinkSync(participantCloseMarkerPath) }
 function persistParticipantCloseMarker(order) {
-  assert.ok(Number.isSafeInteger(order?.id) && order.id > 0, 'QA close seed must identify one persisted participant order by immutable id')
+  assert.ok(typeof order?.id === 'string' && /^[0-9a-f-]{36}$/i.test(order.id), 'QA close seed must identify one persisted participant order by immutable UUID')
   assert.ok(Number.isSafeInteger(order.priority_sequence) && order.priority_sequence > 0, 'QA close seed must record the participant order priority sequence')
   writeFileSync(participantCloseMarkerPath, JSON.stringify({ orderId: order.id, prioritySequence: order.priority_sequence }), { encoding: 'utf8', flag: 'wx' })
   return order.id
@@ -140,7 +161,7 @@ function persistParticipantCloseMarker(order) {
 function readParticipantCloseMarker() {
   assert.ok(existsSync(participantCloseMarkerPath), 'POSTCLOSE must receive the OPEN participant-order marker')
   const marker = JSON.parse(readFileSync(participantCloseMarkerPath, 'utf8'))
-  assert.ok(Number.isSafeInteger(marker?.orderId) && marker.orderId > 0, 'participant-order marker must contain an immutable positive order id')
+  assert.ok(typeof marker?.orderId === 'string' && /^[0-9a-f-]{36}$/i.test(marker.orderId), 'participant-order marker must contain an immutable order UUID')
   assert.ok(Number.isSafeInteger(marker.prioritySequence) && marker.prioritySequence > 0, 'participant-order marker must contain its priority sequence')
   return marker
 }
