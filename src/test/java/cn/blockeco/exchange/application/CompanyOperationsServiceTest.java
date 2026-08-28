@@ -17,6 +17,8 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class CompanyOperationsServiceTest {
@@ -24,6 +26,7 @@ class CompanyOperationsServiceTest {
 
     @Test void acceptsOnlyEventsFromTheBindingAdapterAndDoesNotRepeatAnExternalKey() throws Exception {
         try (Fixture fixture = Fixture.create()) {
+            fixture.binding("shop", NOW.minusSeconds(1));
             CompanyOperatingEventSource shop = source("shop", List.of(
                     event("shop", "sale-1", 40, NOW.minusSeconds(10)),
                     event("other", "ignored", 20, NOW.minusSeconds(5))));
@@ -67,6 +70,24 @@ class CompanyOperationsServiceTest {
                     .isEqualTo(new CompanyOperationsService.IngestionResult(0, 0, 2, 0));
             assertThat(fixture.snapshot()).isEqualTo(new cn.blockeco.exchange.ports.CompanyOperationsRepository.FinancialSnapshot(
                     fixture.company, 100, 0, 0, 0, 0));
+        }
+    }
+
+    @Test void readsProviderOnMainThreadButPersistsOnSqlExecutor() throws Exception {
+        try (Fixture fixture = Fixture.create()) {
+            fixture.binding("shop", NOW.minusSeconds(1));
+            AtomicReference<String> readThread = new AtomicReference<>();
+            AtomicReference<String> persistenceThread = new AtomicReference<>();
+            CompanyOperatingEventSource source = new CompanyOperatingEventSource() {
+                public String adapterId() { return "shop"; }
+                public List<VerifiedOperatingEvent> readSince(AssetBinding binding, Instant after, Instant through) { readThread.set(Thread.currentThread().getName()); return List.of(event("shop", "thread-sale", 1, NOW)); }
+            };
+            var main = new cn.blockeco.exchange.ports.MainThreadExecutor() { public <T> java.util.concurrent.CompletionStage<T> submit(java.util.function.Supplier<T> work) { return java.util.concurrent.CompletableFuture.completedFuture(work.get()); } };
+            Executor sql = task -> { Thread thread = new Thread(() -> { persistenceThread.set(Thread.currentThread().getName()); task.run(); }, "sql-thread"); thread.start(); try { thread.join(); } catch (InterruptedException e) { throw new RuntimeException(e); } };
+            var service = new CompanyOperationsService(new SqlAssetBindingRepository(fixture.database.dataSource()), new SqlCompanyOperationsRepository(fixture.database.dataSource()), fixture.database, () -> List.of(source), () -> NOW, main, sql);
+            assertThat(service.ingestDueEvents().toCompletableFuture().join().accepted()).isEqualTo(1);
+            assertThat(readThread.get()).isNotEqualTo("sql-thread");
+            assertThat(persistenceThread.get()).isEqualTo("sql-thread");
         }
     }
 

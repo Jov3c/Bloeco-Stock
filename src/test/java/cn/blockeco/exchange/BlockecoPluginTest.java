@@ -31,10 +31,11 @@ class BlockecoPluginTest {
     @Test
     void pluginRegistersOperationsAndMonthlyReportSchedulersAfterStartup() {
         java.util.List<java.time.Duration> periods = new java.util.ArrayList<>();
+        java.util.concurrent.atomic.AtomicInteger cancellations = new java.util.concurrent.atomic.AtomicInteger();
         java.util.concurrent.atomic.AtomicInteger operations = new java.util.concurrent.atomic.AtomicInteger();
         java.util.concurrent.atomic.AtomicInteger reports = new java.util.concurrent.atomic.AtomicInteger();
         var schedulers = new CompanyFinanceSchedulers((task, initial, period) -> {
-            periods.add(period); task.run(); return () -> { };
+            periods.add(period); task.run(); return cancellations::incrementAndGet;
         }, operations::incrementAndGet, reports::incrementAndGet);
 
         schedulers.start();
@@ -43,6 +44,9 @@ class BlockecoPluginTest {
         assertThat(operations).hasValue(1);
         assertThat(reports).hasValue(1);
         assertThat(schedulers.started()).isTrue();
+        schedulers.stop();
+        assertThat(cancellations).hasValue(2);
+        assertThat(schedulers.started()).isFalse();
     }
 
     @Test

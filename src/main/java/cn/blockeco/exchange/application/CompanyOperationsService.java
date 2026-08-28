@@ -10,11 +10,12 @@ import java.util.function.Supplier;
 
 public final class CompanyOperationsService {
     private final AssetBindingRepository bindings; private final CompanyOperationsRepository operations; private final TransactionRunner transactions;
-    private final Supplier<? extends Collection<CompanyOperatingEventSource>> sources; private final AppClock clock; private final MainThreadExecutor mainThread;
+    private final Supplier<? extends Collection<CompanyOperatingEventSource>> sources; private final AppClock clock; private final MainThreadExecutor mainThread; private final Executor sqlExecutor;
 
     public CompanyOperationsService(AssetBindingRepository bindings, CompanyOperationsRepository operations, TransactionRunner transactions, Collection<CompanyOperatingEventSource> sources, AppClock clock) { this(bindings, operations, transactions, () -> sources, clock, null); }
-    public CompanyOperationsService(AssetBindingRepository bindings, CompanyOperationsRepository operations, TransactionRunner transactions, Supplier<? extends Collection<CompanyOperatingEventSource>> sources, AppClock clock, MainThreadExecutor mainThread) {
-        this.bindings=Objects.requireNonNull(bindings); this.operations=Objects.requireNonNull(operations); this.transactions=Objects.requireNonNull(transactions); this.sources=Objects.requireNonNull(sources); this.clock=Objects.requireNonNull(clock); this.mainThread=mainThread;
+    public CompanyOperationsService(AssetBindingRepository bindings, CompanyOperationsRepository operations, TransactionRunner transactions, Supplier<? extends Collection<CompanyOperatingEventSource>> sources, AppClock clock, MainThreadExecutor mainThread) { this(bindings,operations,transactions,sources,clock,mainThread,ForkJoinPool.commonPool()); }
+    public CompanyOperationsService(AssetBindingRepository bindings, CompanyOperationsRepository operations, TransactionRunner transactions, Supplier<? extends Collection<CompanyOperatingEventSource>> sources, AppClock clock, MainThreadExecutor mainThread, Executor sqlExecutor) {
+        this.bindings=Objects.requireNonNull(bindings); this.operations=Objects.requireNonNull(operations); this.transactions=Objects.requireNonNull(transactions); this.sources=Objects.requireNonNull(sources); this.clock=Objects.requireNonNull(clock); this.mainThread=mainThread; this.sqlExecutor=Objects.requireNonNull(sqlExecutor);
     }
 
     public CompletionStage<IngestionResult> ingestDueEvents() {
@@ -36,7 +37,7 @@ public final class CompanyOperationsService {
         CompletionStage<List<VerifiedOperatingEvent>> events = mainThread == null ? CompletableFuture.supplyAsync(read) : mainThread.submit(read);
         return events.handle((readEvents, failure) -> {
             if (failure != null) { result.sourceFailures++; return result; }
-            for (VerifiedOperatingEvent event : readEvents) record(binding, source, event, through, result);
+            CompletableFuture.runAsync(() -> { for (VerifiedOperatingEvent event : readEvents) record(binding, source, event, through, result); }, sqlExecutor).join();
             return result;
         });
     }

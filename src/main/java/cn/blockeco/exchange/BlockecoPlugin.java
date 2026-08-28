@@ -218,7 +218,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         var operationsRepository = new SqlCompanyOperationsRepository(db.dataSource());
         var operations = new CompanyOperationsService(assetBindingRepository, operationsRepository, db,
                 () -> assetAdapterRegistry.snapshot().stream().filter(CompanyOperatingEventSource.class::isInstance)
-                        .map(CompanyOperatingEventSource.class::cast).toList(), clock, mainThread);
+                        .map(CompanyOperatingEventSource.class::cast).toList(), clock, mainThread, sqlExecutor);
         var reports = new CompanyFinancialReportService(operationsRepository, db, sqlExecutor, clock, marketZone);
         var secondaryQueries = new SecondaryMarketQueryService(tradingRepository, publicRepository, sqlExecutor, Clock.systemUTC(), marketZone);
         var secondaryRecovery = new SecondaryMarketRecoveryService(cashRepository, () -> {
