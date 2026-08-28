@@ -24,8 +24,26 @@ import cn.blockeco.exchange.paper.CommandAcceptanceGate;
 import cn.blockeco.exchange.paper.PublicStockSymbolCache;
 import cn.blockeco.exchange.application.PublicStockQueryService;
 import cn.blockeco.exchange.ports.MainThreadExecutor;
+import cn.blockeco.exchange.application.CompanyFinanceSchedulers;
 
 class BlockecoPluginTest {
+
+    @Test
+    void pluginRegistersOperationsAndMonthlyReportSchedulersAfterStartup() {
+        java.util.List<java.time.Duration> periods = new java.util.ArrayList<>();
+        java.util.concurrent.atomic.AtomicInteger operations = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger reports = new java.util.concurrent.atomic.AtomicInteger();
+        var schedulers = new CompanyFinanceSchedulers((task, initial, period) -> {
+            periods.add(period); task.run(); return () -> { };
+        }, operations::incrementAndGet, reports::incrementAndGet);
+
+        schedulers.start();
+
+        assertThat(periods).containsExactly(java.time.Duration.ofMinutes(5), java.time.Duration.ofHours(1));
+        assertThat(operations).hasValue(1);
+        assertThat(reports).hasValue(1);
+        assertThat(schedulers.started()).isTrue();
+    }
 
     @Test
     void second_bluechip_bootstrap_wiring_exception_is_reported_while_runtime_is_live() throws Exception {

@@ -18,6 +18,9 @@ import cn.blockeco.exchange.application.BluechipSchedulers;
 import cn.blockeco.exchange.application.MarketEventService;
 import cn.blockeco.exchange.application.MarketCandleService;
 import cn.blockeco.exchange.application.DividendCycleService;
+import cn.blockeco.exchange.application.CompanyOperationsService;
+import cn.blockeco.exchange.application.CompanyFinancialReportService;
+import cn.blockeco.exchange.application.CompanyFinanceSchedulers;
 import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.infrastructure.sql.Database;
 import cn.blockeco.exchange.infrastructure.sql.SqlAuditLog;
@@ -32,6 +35,7 @@ import cn.blockeco.exchange.infrastructure.sql.SqlSecuritiesCashRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlNativeAssetRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlBluechipRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlBluechipBootstrapFundingRepository;
+import cn.blockeco.exchange.infrastructure.sql.SqlCompanyOperationsRepository;
 import cn.blockeco.exchange.infrastructure.vault.VaultEconomyGateway;
 import cn.blockeco.exchange.infrastructure.vault.VaultSecuritiesCashGateway;
 import cn.blockeco.exchange.infrastructure.vault.VaultTreasuryEscrowGateway;
@@ -52,11 +56,13 @@ import cn.blockeco.exchange.paper.SecondaryTradingGate;
 import cn.blockeco.exchange.paper.StockGuiController;
 import cn.blockeco.exchange.paper.CompanyGuiController;
 import cn.blockeco.exchange.paper.IpoGuiController;
+import cn.blockeco.exchange.paper.CompanyFinanceGui;
 import cn.blockeco.exchange.paper.OptionalAssetAdapterLoader;
 import cn.blockeco.exchange.paper.BluechipConfig;
 import cn.blockeco.exchange.paper.BluechipAdminCommand;
 import cn.blockeco.exchange.ports.AppClock;
 import cn.blockeco.exchange.ports.CompanyAssetAdapterRegistry;
+import cn.blockeco.exchange.ports.CompanyOperatingEventSource;
 import cn.blockeco.exchange.infrastructure.CompanyAssetAdapterRegistryImpl;
 import java.math.BigDecimal;
 import java.nio.file.Path;
@@ -86,6 +92,7 @@ public final class BlockecoPlugin extends JavaPlugin {
     private org.bukkit.scheduler.BukkitTask marketSessionTransitions;
     private SecondaryTradingGate secondaryTradingGate;
     private BluechipSchedulers bluechipSchedulers;
+    private CompanyFinanceSchedulers companyFinanceSchedulers;
     /** Bluechip escrow/bootstrap is deliberately completed off the primary thread before wiring player-facing services. */
     private volatile boolean bluechipBootstrapReady;
     private volatile boolean bluechipBootstrapStarted;
@@ -169,14 +176,16 @@ public final class BlockecoPlugin extends JavaPlugin {
         assetAdapterRegistry.register(nativeAssets);
         new OptionalAssetAdapterLoader(getServer().getPluginManager(), assetAdapterRegistry,
                 message -> getLogger().warning(message)).load();
-        var assetBindings = new AssetBindingService(new SqlAssetBindingRepository(db.dataSource()), db, () -> {
+        var assetBindingRepository = new SqlAssetBindingRepository(db.dataSource());
+        var assetBindings = new AssetBindingService(assetBindingRepository, db, () -> {
             CompanyAssetAdapterRegistry registry = getServer().getServicesManager().load(CompanyAssetAdapterRegistry.class);
             return registry == null ? java.util.List.of() : registry.snapshot();
         }, clock, mainThread);
         var ipoRepository = new SqlPrimaryOfferingRepository(db.dataSource());
         var primaryOfferings = new PrimaryOfferingService(ipoRepository, db, escrow, sqlExecutor, clock);
         var messages = new Messages(getConfig());
-        command = new CompanyCommand(registration, new CompanyQueryService(companies, sagas, new SqlCompanyFinanceRepository(db.dataSource()), sqlExecutor), messages, mainThread, creationRules::current, assetBindings, primaryOfferings);
+        var companyQueries = new CompanyQueryService(companies, sagas, new SqlCompanyFinanceRepository(db.dataSource()), sqlExecutor);
+        command = new CompanyCommand(registration, companyQueries, messages, mainThread, creationRules::current, assetBindings, primaryOfferings);
         var companyCommand = getCommand("company");
         if (companyCommand == null) throw new IllegalStateException(missingCompanyCommandMessage());
         companyCommand.setExecutor(command);
@@ -206,6 +215,11 @@ public final class BlockecoPlugin extends JavaPlugin {
         var marketCharts = new cn.blockeco.exchange.application.MarketChartQueryService(bluechipRepository, sqlExecutor, Clock.systemUTC(), marketZone);
         long dividendBase = configuredMoney("market.dividend-base-profit", scale).minorUnits();
         var dividends = new DividendCycleService(bluechipRepository, db, sqlExecutor, clock, dividendBase);
+        var operationsRepository = new SqlCompanyOperationsRepository(db.dataSource());
+        var operations = new CompanyOperationsService(assetBindingRepository, operationsRepository, db,
+                () -> assetAdapterRegistry.snapshot().stream().filter(CompanyOperatingEventSource.class::isInstance)
+                        .map(CompanyOperatingEventSource.class::cast).toList(), clock, mainThread);
+        var reports = new CompanyFinancialReportService(operationsRepository, db, sqlExecutor, clock, marketZone);
         var secondaryQueries = new SecondaryMarketQueryService(tradingRepository, publicRepository, sqlExecutor, Clock.systemUTC(), marketZone);
         var secondaryRecovery = new SecondaryMarketRecoveryService(cashRepository, () -> {
             var legacy = new java.util.ArrayList<SecondaryMarketRecoveryService.LegacyRecoveryIssue>();
@@ -234,17 +248,20 @@ public final class BlockecoPlugin extends JavaPlugin {
                 ? bluechipAdmin.onTabComplete(sender, registered, label, args) : adminConfig.onTabComplete(sender, registered, label, args));
         var symbols = new PublicStockSymbolCache();
         var companyGui = new CompanyGuiController(this,
-                new CompanyQueryService(companies, sagas, new SqlCompanyFinanceRepository(db.dataSource()), sqlExecutor),
+                companyQueries,
                 registration, nativeAssets, assetBindings, creationRules::current, assetAdapterRegistry::catalogSnapshot, sqlExecutor, mainThread,
                 runtime::accepting, messages);
         getServer().getPluginManager().registerEvents(companyGui, this);
+        var companyFinanceGui = new CompanyFinanceGui(this, companyGui, companyQueries, operationsRepository, clock, marketZone, sqlExecutor);
+        companyGui.attachFinanceGui(companyFinanceGui);
+        getServer().getPluginManager().registerEvents(companyFinanceGui, this);
         var stockGui = new StockGuiController(this, secondaryQueries, cashService, secondaryMarket, mainThread,
                 runtime::accepting, secondaryTradingGate::mutationsOpen, messages, scale, companyGui);
         stockGui.attachPublicQueries(publicQueries);
         stockGui.attachChartQueries(marketCharts);
         getServer().getPluginManager().registerEvents(stockGui, this);
         var ipoGui = new IpoGuiController(this, primaryOfferings,
-                new CompanyQueryService(companies, sagas, new SqlCompanyFinanceRepository(db.dataSource()), sqlExecutor),
+                companyQueries,
                 mainThread, runtime::accepting, messages, scale, companyGui, stockGui);
         stockGui.attachIpoGui(ipoGui);
         companyGui.attachIpoGui(ipoGui);
@@ -287,6 +304,14 @@ public final class BlockecoPlugin extends JavaPlugin {
                             () -> { var now = clock.now().atZone(marketZone); if (now.getHour() >= 20) marketCandles.closeTradingDay(now.toLocalDate()).exceptionally(failure -> { getLogger().warning("蓝筹K线调度失败: " + failure.getMessage()); return null; }); },
                             () -> dividends.settleDueRuns().exceptionally(failure -> { getLogger().warning("蓝筹分红调度失败: " + failure.getMessage()); return null; }));
                     bluechipSchedulers.start();
+                    companyFinanceSchedulers = new CompanyFinanceSchedulers((task, initial, period) -> {
+                        long delay = Math.max(1L, initial.toSeconds() * 20L); long ticks = Math.max(20L, period.toSeconds() * 20L);
+                        var scheduled = getServer().getScheduler().runTaskTimerAsynchronously(this, task, delay, ticks); return scheduled::cancel;
+                    },
+                            () -> operations.ingestDueEvents().exceptionally(failure -> { getLogger().warning("公司经营流水采集失败，将在下个周期重试: " + failure.getMessage()); return null; }),
+                            () -> reports.closePreviousMonth().exceptionally(failure -> { getLogger().warning("公司月报生成失败，将在下个周期重试: " + failure.getMessage()); return null; }),
+                            Duration.ofMinutes(configuredOperationsIngestionMinutes()));
+                    companyFinanceSchedulers.start();
                 }));
         return true;
     }
@@ -307,6 +332,7 @@ public final class BlockecoPlugin extends JavaPlugin {
     }
 
     @Override public void onDisable() {
+        if (companyFinanceSchedulers != null) companyFinanceSchedulers.stop();
         if (bluechipSchedulers != null) bluechipSchedulers.stop();
         if (ipoLifecycle != null) ipoLifecycle.stop();
         if (marketSessionTransitions != null) marketSessionTransitions.cancel();
@@ -325,11 +351,17 @@ public final class BlockecoPlugin extends JavaPlugin {
         catch (IllegalArgumentException failure) { throw new IllegalArgumentException("company.treasury-escrow-uuid must be a non-zero UUID", failure); }
         if (maker.equals(participant) || maker.equals(treasury) || participant.equals(treasury)) throw new IllegalArgumentException("market participant, maker, and treasury UUIDs must be distinct");
         positive("company.registration-fee", scale); positive("company.minimum-capital", scale);
+        configuredOperationsIngestionMinutes();
         try { if (new java.util.UUID(0, 0).equals(java.util.UUID.fromString(getConfig().getString("company.treasury-escrow-uuid")))) throw new IllegalArgumentException("company.treasury-escrow-uuid must not be zero"); }
         catch (IllegalArgumentException failure) { throw new IllegalArgumentException("company.treasury-escrow-uuid must be a non-zero UUID", failure); }
         creationRules = new MutableCompanyCreationRules(new CompanyCreationRules(configuredMoney("company.registration-fee", scale), configuredMoney("company.minimum-capital", scale), scale, getConfig().getInt("company.initial-shares"), getConfig().getIntegerList("company.allowed-dividend-percent")));
     }
     private void positive(String path, int scale) { if (configuredMoney(path, scale).minorUnits() <= 0) throw new IllegalArgumentException(path + " must be positive"); }
+    private int configuredOperationsIngestionMinutes() {
+        int minutes = getConfig().getInt("company.finance.operations-ingestion-minutes", 5);
+        if (minutes < 1 || minutes > 60) throw new IllegalArgumentException("company.finance.operations-ingestion-minutes must be between 1 and 60");
+        return minutes;
+    }
     private Money configuredMoney(String path, int scale) { return Money.fromMajor(new BigDecimal(getConfig().getString(path)), scale); }
     static String startupFailureMessage(Throwable failure) { String detail = failure.getMessage(); return "BlockStock 启动失败：" + (detail == null || detail.isBlank() ? "启动过程中发生未知异常（" + failure.getClass().getSimpleName() + "）" : detail); }
     static ZoneId validateMarketConfiguration(int feeBps, String zoneId) {

@@ -15,6 +15,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -110,6 +111,23 @@ class SqlCompanyOperationsRepositoryTest {
             assertThat(fixture.count("company_operating_events")).isEqualTo(1);
             assertThat(fixture.count("audit_events")).isEqualTo(1);
             assertThat(fixture.countCompanyTreasuryEntries()).isEqualTo(2);
+        }
+    }
+
+    @Test
+    void financeDashboardRollsAnOverdueDividendBoundaryForward() throws Exception {
+        try (Fixture fixture = Fixture.create(100)) {
+            fixture.database.inTransaction(connection -> {
+                try (PreparedStatement listing = connection.prepareStatement("INSERT INTO stock_listings (company_id, stock_code, issue_reference_price_minor, issued_shares, listed_at) VALUES (?, 'FS000001', 100, 1000, ?)")) {
+                    listing.setString(1, fixture.companyId.value().toString()); listing.setString(2, Instant.parse("2026-08-01T00:00:00Z").toString()); listing.executeUpdate();
+                }
+                return null;
+            });
+
+            var dashboard = new SqlCompanyOperationsRepository(fixture.database.dataSource()).financeDashboard(fixture.companyId,
+                    Instant.parse("2026-09-24T12:00:00Z"), ZoneId.of("UTC"));
+
+            assertThat(dashboard.nextDividendAt()).isEqualTo(Instant.parse("2026-09-30T00:00:00Z"));
         }
     }
 

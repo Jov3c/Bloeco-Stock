@@ -5,7 +5,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import cn.blockeco.exchange.infrastructure.sql.Database;
 import cn.blockeco.exchange.infrastructure.sql.SqlBluechipRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlSecuritiesCashRepository;
+import cn.blockeco.exchange.infrastructure.sql.SqlAssetBindingRepository;
+import cn.blockeco.exchange.infrastructure.sql.SqlCompanyOperationsRepository;
 import cn.blockeco.exchange.domain.company.CompanyId;
+import cn.blockeco.exchange.domain.finance.AssetBinding;
+import cn.blockeco.exchange.domain.finance.AssetBindingState;
+import cn.blockeco.exchange.domain.finance.OperatingEventKind;
+import cn.blockeco.exchange.domain.finance.VerifiedOperatingEvent;
 import cn.blockeco.exchange.domain.money.Money;
 import java.nio.file.Files;
 import java.time.Duration;
@@ -104,6 +110,38 @@ class DividendCycleServiceTest {
             new DividendCycleService(repository, database, Runnable::run, () -> START.plus(Duration.ofDays(15)), 0)
                     .settleDueRuns().toCompletableFuture().join();
 
+            assertThat(new SqlSecuritiesCashRepository(database.dataSource()).reconcile(Money.ofMinor(40_000)).finalLiabilities())
+                    .isEqualTo(Money.ofMinor(40_000));
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
+    void profitableOperatingIncomeFeedsExistingFifteenDayPlayerDividendOnce() throws Exception {
+        var file = Files.createTempFile("blockstock-dividend-operating-income-", ".db");
+        try (Database database = TestBluechipFixture.migratedDatabase(file)) {
+            var holder = java.util.UUID.randomUUID();
+            CompanyId company = TestBluechipFixture.createListedPlayerCompany(database, START, holder, 0);
+            var binding = new AssetBinding(java.util.UUID.randomUUID(), company, "compatible-test-source", "sale-terminal",
+                    holder, AssetBindingState.ACTIVE, START);
+            database.inTransaction(connection -> { new SqlAssetBindingRepository(database.dataSource()).insertActive(connection, binding); return null; });
+            var source = new cn.blockeco.exchange.ports.CompanyOperatingEventSource() {
+                @Override public String adapterId() { return "compatible-test-source"; }
+                @Override public java.util.List<VerifiedOperatingEvent> readSince(AssetBinding ignored, Instant after, Instant through) {
+                    return java.util.List.of(new VerifiedOperatingEvent(adapterId(), "completed-sale-1", OperatingEventKind.INCOME,
+                            40_000, START.plusSeconds(1), "verified completed sale"));
+                }
+            };
+            new CompanyOperationsService(new SqlAssetBindingRepository(database.dataSource()),
+                    new SqlCompanyOperationsRepository(database.dataSource()), database, java.util.List.of(source), () -> START.plusSeconds(2))
+                    .ingestDueEvents().toCompletableFuture().join();
+            AtomicReference<Instant> now = new AtomicReference<>(START.plus(Duration.ofDays(15)));
+            var dividends = new DividendCycleService(new SqlBluechipRepository(database.dataSource()), database, Runnable::run, now::get, 0);
+
+            dividends.settleDueRuns().toCompletableFuture().join();
+            dividends.settleDueRuns().toCompletableFuture().join();
+
+            assertThat(TestBluechipFixture.securitiesCash(database, holder)).isEqualTo(20_000);
+            assertThat(TestBluechipFixture.count(database, "SELECT COUNT(*) FROM dividend_runs WHERE company_id = '" + company.value() + "'")).isEqualTo(1);
             assertThat(new SqlSecuritiesCashRepository(database.dataSource()).reconcile(Money.ofMinor(40_000)).finalLiabilities())
                     .isEqualTo(Money.ofMinor(40_000));
         } finally { Files.deleteIfExists(file); }
