@@ -54,6 +54,7 @@ public final class CompanyGuiController implements CompanyGuiOpener, Listener {
     private final BooleanSupplier accepting;
     private final Messages messages;
     private volatile IpoGuiOpener ipoGui;
+    private volatile CompanyGuiOpener financeGui;
     private final ConcurrentHashMap<UUID, CompanyGuiSession> sessions = new ConcurrentHashMap<>();
     private final java.util.Set<UUID> inventoryReplacements = ConcurrentHashMap.newKeySet();
     private final java.util.Set<UUID> mutationsInFlight = ConcurrentHashMap.newKeySet();
@@ -80,6 +81,8 @@ public final class CompanyGuiController implements CompanyGuiOpener, Listener {
 
     /** Completes the cyclic company/IPO GUI wiring after both controllers are constructed. */
     public void attachIpoGui(IpoGuiOpener opener) { this.ipoGui = Objects.requireNonNull(opener, "opener"); }
+    /** Optional finance page wiring; keeping it optional preserves the existing company centre during startup. */
+    public void attachFinanceGui(CompanyGuiOpener opener) { this.financeGui = Objects.requireNonNull(opener, "opener"); }
 
     private void openHome(Player player) {
         if (!ready(player)) return;
@@ -96,7 +99,7 @@ public final class CompanyGuiController implements CompanyGuiOpener, Listener {
                 put(inventory, 13, Material.NAME_TAG, "noop", value.displayName(), "状态：" + displayCompanyState(value));
                 put(inventory, 29, Material.CHEST, "assets", "资产管理", "创建原生资产并确认绑定");
                 put(inventory, 31, Material.PAPER, "ipo:founder", "IPO 管理", "发布、查看和认购 IPO");
-                put(inventory, 33, Material.BOOK, "noop", "公告与财报", "公司披露将在此显示");
+                put(inventory, 33, Material.BOOK, "finance", "财务与分红", "查看公司账户、财报与分红信息");
             }
             put(inventory, 49, Material.BARRIER, "close", "关闭", "关闭公司中心"); openInventory(player, inventory);
         }));
@@ -112,6 +115,7 @@ public final class CompanyGuiController implements CompanyGuiOpener, Listener {
             case "close" -> player.closeInventory(); case "back:home" -> openHome(player); case "create:start" -> beginCompanyName(player);
             case "assets" -> openAssets(player); case "asset:create-native" -> beginNativeAssetName(player);
             case "ipo:founder" -> openFounderIpo(player);
+            case "finance" -> openFinance(player);
             case "input" -> handleInput(player, holder, event.getCurrentItem()); case "confirm:create" -> confirmCompany(player, holder.session());
             case "confirm:create-native" -> confirmNativeAsset(player, holder.session()); case "confirm:bind" -> confirmBinding(player, holder.session());
             case "cancel" -> openHome(player); default -> routeDynamic(player, action, holder.session());
@@ -150,6 +154,7 @@ public final class CompanyGuiController implements CompanyGuiOpener, Listener {
     }
 
     private void beginCompanyName(Player player) { if (permission(player, "blockeco.company.create")) openInput(player, CompanyGuiSession.Page.CREATE_NAME, null, "输入公司名称", "请改名为 2–24 个字符的公司名"); }
+    private void openFinance(Player player) { CompanyGuiOpener opener = financeGui; if (opener != null) opener.open(player); else player.sendMessage(Component.text("财务页面正在初始化，请稍后再试。")); }
     private void beginNativeAssetName(Player player) { if (permission(player, "blockeco.company.asset.bind")) openInput(player, CompanyGuiSession.Page.CREATE_NATIVE_ASSET, null, "输入资产名称", "请改名为 1–32 个字符的资产名"); }
     private void openFounderIpo(Player player) { IpoGuiOpener opener = ipoGui; if (opener == null) player.sendMessage(messages.marketUnavailable()); else opener.openFounder(player); }
 
