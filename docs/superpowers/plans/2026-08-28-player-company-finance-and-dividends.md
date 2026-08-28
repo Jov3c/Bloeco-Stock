@@ -181,6 +181,9 @@ git commit -m "feat: publish player company finance reports"
 
 **Files:**
 - Modify: `src/main/java/cn/blockeco/exchange/BlockecoPlugin.java`
+- Modify: `src/main/java/cn/blockeco/exchange/ports/CompanyOperationsRepository.java` (selectively stage the already-implemented Task 3 report/dashboard contract)
+- Modify: `src/main/java/cn/blockeco/exchange/infrastructure/sql/SqlCompanyOperationsRepository.java` (selectively stage Task 3 report/dashboard implementation and make overdue next-dividend dates roll forward by 15-day intervals)
+- Modify: `src/main/java/cn/blockeco/exchange/paper/CompanyGuiController.java` (selectively stage only Task 3 finance field/action/opening hunks; retain unrelated dirty input/navigation work)
 - Modify: `docs/operations/blockstock-requirements-traceability.md`
 - Modify: `docs/operations/blockstock-formal-release-test-matrix.md`
 - Test: `src/test/java/cn/blockeco/exchange/application/DividendCycleServiceTest.java`
@@ -207,7 +210,7 @@ Expected: failure because the services are not wired/scheduled.
 
 - [ ] **Step 3: Wire only the new services**
 
-Create the SQL repository once in `BlockecoPlugin.finishEnable`, construct the operations service with the asset adapter registry's compatible sources, schedule ingestion every five minutes and report checks hourly on the existing executor/lifecycle mechanism. Add no provider event source until its external plugin compatibility test exists. Update traceability to state GV-01 is implemented only for installed compatible event-source adapters; keep unimplemented governance requirements open.
+Create the SQL repository once in `BlockecoPlugin.finishEnable`, construct the operations service with the asset adapter registry's compatible sources, schedule ingestion every five minutes and report checks hourly on the existing executor/lifecycle mechanism. Construct `CompanyFinanceGui` with the real company query service, operations repository, clock, market zone and SQL executor; attach it to `CompanyGuiController` and register it as a Bukkit listener. Ensure a company whose last completed dividend is more than 15 days old displays the first future 15-day dividend boundary, never a past time. Add no provider event source until its external plugin compatibility test exists. Update traceability to state GV-01 is implemented only for installed compatible event-source adapters; keep unimplemented governance requirements open.
 
 - [ ] **Step 4: Run focused then full verification**
 
