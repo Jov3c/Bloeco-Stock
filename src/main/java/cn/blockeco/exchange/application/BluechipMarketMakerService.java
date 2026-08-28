@@ -108,8 +108,14 @@ public final class BluechipMarketMakerService {
     /** Operator control affects system quotes only; it never cancels player GTC orders. */
     public synchronized CompletionStage<Integer> setQuotesPaused(boolean paused) {
         operatorPaused = paused;
-        if (paused) closeRequested = true;
-        return paused ? enqueue(this::cancelSystemQuotes) : CompletableFuture.completedFuture(0);
+        if (paused) {
+            closeRequested = true;
+            return enqueue(this::cancelSystemQuotes);
+        }
+        // "恢复" must make the book usable now, not merely clear a flag and wait
+        // for the next scheduled refresh.  The refresh remains serialized behind
+        // any preceding cancellation through lifecycle.
+        return refreshQuotes().thenApply(QuoteRefreshResult::placedOrders);
     }
 
     private CompletionStage<Integer> cancelSystemQuotes() {

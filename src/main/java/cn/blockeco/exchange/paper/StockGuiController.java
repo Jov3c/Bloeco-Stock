@@ -136,15 +136,21 @@ public final class StockGuiController implements Listener, StockGuiOpener {
         StockGuiSession session = openSession(player.getUniqueId(), StockGuiSession.Page.HOME, 0, null, null);
         Inventory inventory = Bukkit.createInventory(new Holder(session), 54, Component.text("BlockStock 交易所"));
         fill(inventory);
-        put(inventory, 11, Material.COMPASS, "market", "市场行情", "查看所有已上市公司和五档盘口");
-        put(inventory, 13, Material.GOLD_INGOT, "cash", "证券账户", "查看可用与冻结资金，转入或转出");
-        put(inventory, 15, Material.CHEST, "portfolio", "我的持仓", "查看你持有的股票");
-        put(inventory, 20, Material.NETHER_STAR, "company", "公司中心", "创建、资产绑定、IPO 与公告");
-        put(inventory, 29, Material.WRITABLE_BOOK, "orders", "我的委托", "查看和撤销自己的委托");
-        put(inventory, 31, Material.EMERALD, "trades", "成交记录", "查看自己的最近成交");
-        put(inventory, 33, Material.PAPER, "news", "市场快讯", "查看最近五条蓝筹市场公告");
-        put(inventory, 49, Material.BARRIER, "close", "关闭", "关闭交易所");
+        for (HomeSlot slot : homeSlots()) put(inventory, slot.slot(), slot.material(), slot.action(), slot.name(), slot.lore());
         openInventory(player, inventory);
+    }
+
+    static List<HomeSlot> homeSlots() {
+        return List.of(
+                new HomeSlot(11, Material.COMPASS, "market", "市场行情", "查看所有已上市公司和五档盘口"),
+                new HomeSlot(13, Material.GOLD_INGOT, "cash", "证券账户", "查看可用与冻结资金，转入或转出"),
+                new HomeSlot(15, Material.CHEST, "portfolio", "我的持仓", "查看你持有的股票"),
+                new HomeSlot(20, Material.NETHER_STAR, "company", "公司中心", "创建、资产绑定、IPO 与公告"),
+                new HomeSlot(22, Material.BOOK, "ipo", "公开 IPO", "查看所有公司发行并认购股票"),
+                new HomeSlot(29, Material.WRITABLE_BOOK, "orders", "我的委托", "查看和撤销自己的委托"),
+                new HomeSlot(31, Material.EMERALD, "trades", "成交记录", "查看自己的最近成交"),
+                new HomeSlot(33, Material.PAPER, "news", "市场快讯", "查看最近五条蓝筹市场公告"),
+                new HomeSlot(49, Material.BARRIER, "close", "关闭", "关闭交易所"));
     }
 
     @EventHandler public void onInventoryClick(InventoryClickEvent event) {
@@ -444,6 +450,8 @@ public final class StockGuiController implements Listener, StockGuiOpener {
     private record DetailStats(Money latestPrice, Money change, Money turnover, long holdingShares) {
         private static DetailStats empty() { return new DetailStats(Money.zero(), Money.zero(), Money.zero(), 0); }
     }
+
+    record HomeSlot(int slot, Material material, String action, String name, String lore) { }
 
     record DetailSlot(int slot, Material material, String action, String name, String lore) {
         DetailSlot {

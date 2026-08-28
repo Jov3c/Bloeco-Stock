@@ -387,6 +387,26 @@ class BluechipMarketMakerServiceTest {
         } finally { Files.deleteIfExists(file); }
     }
 
+    @Test
+    void operatorResumeImmediatelyRestoresTheFiniteQuoteBook() throws Exception {
+        var file = Files.createTempFile("blockstock-maker-resume-", ".db");
+        try (var database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate();
+            var fixture = fixture(database);
+            fixture.maker.refreshQuotes().toCompletableFuture().join();
+            assertThat(systemOrders(database, fixture.bluechip, "BUY")).hasSize(5);
+            assertThat(systemOrders(database, fixture.bluechip, "SELL")).hasSize(5);
+
+            fixture.maker.setQuotesPaused(true).toCompletableFuture().join();
+            assertThat(systemOrders(database, fixture.bluechip, "BUY")).isEmpty();
+            assertThat(systemOrders(database, fixture.bluechip, "SELL")).isEmpty();
+
+            fixture.maker.setQuotesPaused(false).toCompletableFuture().join();
+            assertThat(systemOrders(database, fixture.bluechip, "BUY")).hasSize(5);
+            assertThat(systemOrders(database, fixture.bluechip, "SELL")).hasSize(5);
+        } finally { Files.deleteIfExists(file); }
+    }
+
     private static Fixture fixture(Database database) {
         var repository = new SqlBluechipRepository(database.dataSource());
         var bootstrap = new BluechipBootstrapServiceTestSupport(database, repository, NOW);

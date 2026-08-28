@@ -13,6 +13,12 @@ import cn.blockeco.exchange.domain.money.Money;
 import org.junit.jupiter.api.Test;
 
 class StockGuiControllerTest {
+    @Test void home_menu_exposes_a_public_ipo_entry_for_investors_without_a_company() {
+        assertThat(StockGuiController.homeSlots())
+                .extracting(StockGuiController.HomeSlot::slot, StockGuiController.HomeSlot::action, StockGuiController.HomeSlot::name)
+                .contains(org.assertj.core.groups.Tuple.tuple(22, "ipo", "公开 IPO"));
+    }
+
     @Test void canonical_detail_slots_keep_every_depth_chart_and_control_slot_unique() {
         var book = new SecondaryMarketQueryService.OrderBook(
                 List.of(new OrderBookLevel(Money.ofMinor(1050), 5), new OrderBookLevel(Money.ofMinor(1040), 4), new OrderBookLevel(Money.ofMinor(1030), 3), new OrderBookLevel(Money.ofMinor(1020), 2), new OrderBookLevel(Money.ofMinor(1010), 1)),
