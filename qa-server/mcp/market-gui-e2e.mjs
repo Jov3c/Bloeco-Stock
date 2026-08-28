@@ -6,7 +6,8 @@ import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import mineflayer from 'mineflayer'
 
-const HOST = '127.0.0.1', GAME_PORT = 25566, RCON_PORT = 25567, INVESTOR = 'NativeMarketInvestor', timeoutMs = 25_000
+// Minecraft's login protocol limits player names to 16 characters.
+const HOST = '127.0.0.1', GAME_PORT = 25566, RCON_PORT = 25567, INVESTOR = 'MarketInvestor', timeoutMs = 25_000
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), dbPath = '../plugins/BlockStock/blockeco.db'
 function packet(id, type, body) { const payload = Buffer.from(body); const out = Buffer.alloc(14 + payload.length); out.writeInt32LE(10 + payload.length); out.writeInt32LE(id, 4); out.writeInt32LE(type, 8); payload.copy(out, 12); return out }
 function rcon(command) { const password = /^rcon.password=(.*)$/m.exec(readFileSync('../server.properties', 'utf8'))?.[1]; assert.ok(password, 'isolated QA RCON password missing'); return new Promise((resolve, reject) => { const socket = net.createConnection({ host: HOST, port: RCON_PORT }); let auth = false, buffer = Buffer.alloc(0); socket.setTimeout(timeoutMs, () => reject(new Error(`RCON timeout: ${command}`))); socket.on('connect', () => socket.write(packet(1, 3, password))); socket.on('data', data => { buffer = Buffer.concat([buffer, data]); if (buffer.length < 4 || buffer.length < buffer.readInt32LE(0) + 4) return; const id = buffer.readInt32LE(4); if (!auth) { if (id === -1) return reject(new Error('RCON auth failed')); auth = true; socket.write(packet(2, 2, command)); return } socket.end(); resolve() }); socket.on('error', reject) }) }
@@ -26,8 +27,10 @@ async function doubleConfirm(bot) { try { await bot.clickWindow(29, 0, 0) } catc
 async function home(bot) { bot.chat('/stock'); return window(bot, 'BlockStock', -1) }
 
 async function main() {
-  await rcon(`op ${INVESTOR}`); await rcon(`eco give ${INVESTOR} 1000000`)
+  // Essentials creates an offline-mode account on first login.  Funding before
+  // that login is silently discarded, so connect before issuing the QA grant.
   const bot = await connect(), playerId = offlineUuid(INVESTOR); bot.windowSequence = 0; bot.on('windowOpen', () => { bot.windowSequence += 1 })
+  await rcon(`op ${INVESTOR}`); await rcon(`eco give ${INVESTOR} 1000000`); await sleep(300)
   try {
     const initial = readDb(db => ({ operations: one(db, 'SELECT COUNT(*) FROM securities_cash_operations WHERE player_uuid=?', playerId), cash: one(db, 'SELECT COALESCE(available_minor+reserved_minor,0) FROM securities_cash_accounts WHERE player_uuid=?', playerId) ?? 0 }))
     await home(bot); await click(bot, 13, '证券账户'); await click(bot, 29, '输入金额'); await input(bot, '10000', '确认执行'); await doubleConfirm(bot)
