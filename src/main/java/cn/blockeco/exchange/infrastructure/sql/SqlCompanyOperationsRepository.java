@@ -9,6 +9,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Savepoint;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
@@ -22,29 +23,43 @@ public final class SqlCompanyOperationsRepository implements CompanyOperationsRe
     @Override
     public RecordResult record(Connection connection, AssetBinding binding, VerifiedOperatingEvent event, Instant recordedAt) throws SQLException {
         requireTransaction(connection);
-        if (!binding.adapterId().equals(event.adapterId())) throw new IllegalArgumentException("event adapter does not match binding");
-        if (!isActiveBinding(connection, binding)) throw new IllegalArgumentException("binding is not active for its company");
-        if (!claimEvent(connection, binding, event, recordedAt)) return RecordResult.DUPLICATE;
+        Savepoint savepoint = connection.setSavepoint();
+        try {
+            if (!binding.adapterId().equals(event.adapterId())) throw new IllegalArgumentException("event adapter does not match binding");
+            if (!isActiveBinding(connection, binding)) throw new IllegalArgumentException("binding is not active for its company");
+            if (!claimEvent(connection, binding, event, recordedAt)) {
+                connection.releaseSavepoint(savepoint);
+                return RecordResult.DUPLICATE;
+            }
 
-        Balance balance = balance(connection, binding.companyId());
-        long cash = event.kind() == OperatingEventKind.INCOME
-                ? Math.addExact(balance.cash(), event.amount())
-                : subtractUnreservedCash(balance, event.amount());
-        long retained = balance.retainedEarnings();
-        long loss = balance.accumulatedLoss();
-        if (event.kind() == OperatingEventKind.INCOME) {
-            long lossOffset = Math.min(loss, event.amount());
-            loss -= lossOffset;
-            retained = Math.addExact(retained, event.amount() - lossOffset);
-        } else {
-            long retainedUsed = Math.min(retained, event.amount());
-            retained -= retainedUsed;
-            loss = Math.addExact(loss, event.amount() - retainedUsed);
+            Balance balance = balance(connection, binding.companyId());
+            long cash = event.kind() == OperatingEventKind.INCOME
+                    ? Math.addExact(balance.cash(), event.amount())
+                    : subtractUnreservedCash(balance, event.amount());
+            long retained = balance.retainedEarnings();
+            long loss = balance.accumulatedLoss();
+            if (event.kind() == OperatingEventKind.INCOME) {
+                long lossOffset = Math.min(loss, event.amount());
+                loss -= lossOffset;
+                retained = Math.addExact(retained, event.amount() - lossOffset);
+            } else {
+                long retainedUsed = Math.min(retained, event.amount());
+                retained -= retainedUsed;
+                loss = Math.addExact(loss, event.amount() - retainedUsed);
+            }
+            updateBalance(connection, binding.companyId(), cash, retained, loss);
+            appendAudit(connection, binding.companyId(), event, recordedAt);
+            appendTreasuryLedger(connection, binding.companyId(), event.kind() == OperatingEventKind.INCOME ? event.amount() : -event.amount(), recordedAt);
+            connection.releaseSavepoint(savepoint);
+            return RecordResult.RECORDED;
+        } catch (SQLException | RuntimeException exception) {
+            try {
+                connection.rollback(savepoint);
+            } catch (SQLException rollbackFailure) {
+                exception.addSuppressed(rollbackFailure);
+            }
+            throw exception;
         }
-        updateBalance(connection, binding.companyId(), cash, retained, loss);
-        appendAudit(connection, binding.companyId(), event, recordedAt);
-        appendTreasuryLedger(connection, binding.companyId(), event.kind() == OperatingEventKind.INCOME ? event.amount() : -event.amount(), recordedAt);
-        return RecordResult.RECORDED;
     }
 
     @Override

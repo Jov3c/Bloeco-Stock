@@ -1,6 +1,7 @@
 package cn.blockeco.exchange.infrastructure.sql;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import cn.blockeco.exchange.domain.company.CompanyId;
 import cn.blockeco.exchange.domain.finance.AssetBinding;
@@ -65,6 +66,53 @@ class SqlCompanyOperationsRepositoryTest {
         }
     }
 
+    @Test
+    void rejectedExpenseDoesNotLeaveAnEventClaimWhenCallerCommitsAfterHandlingTheError() throws Exception {
+        try (Fixture fixture = Fixture.create(10)) {
+            CompanyOperationsRepository repository = new SqlCompanyOperationsRepository(fixture.database.dataSource());
+            VerifiedOperatingEvent expense = new VerifiedOperatingEvent("shop", "cost-too-large", OperatingEventKind.EXPENSE, 11,
+                    RECORDED_AT, "无法支付的成本");
+
+            fixture.commitAfterRejectedRecord(repository, expense);
+
+            assertThat(fixture.count("company_operating_events")).isZero();
+            assertThat(fixture.count("audit_events")).isZero();
+            assertThat(fixture.countCompanyTreasuryEntries()).isEqualTo(1);
+
+            fixture.setCash(20);
+            CompanyOperationsRepository.RecordResult retry = fixture.database.inTransaction(connection -> repository.record(connection, fixture.binding, expense, RECORDED_AT));
+            assertThat(retry)
+                    .isEqualTo(CompanyOperationsRepository.RecordResult.RECORDED);
+            assertThat(fixture.count("company_operating_events")).isEqualTo(1);
+            assertThat(fixture.count("audit_events")).isEqualTo(1);
+            assertThat(fixture.countCompanyTreasuryEntries()).isEqualTo(2);
+        }
+    }
+
+    @Test
+    void inactiveBindingDoesNotLeaveAnEventClaimWhenCallerCommitsAfterHandlingTheError() throws Exception {
+        try (Fixture fixture = Fixture.create(10)) {
+            CompanyOperationsRepository repository = new SqlCompanyOperationsRepository(fixture.database.dataSource());
+            fixture.deactivateBinding();
+            VerifiedOperatingEvent income = new VerifiedOperatingEvent("shop", "inactive-binding-sale", OperatingEventKind.INCOME, 1,
+                    RECORDED_AT, "不活动绑定的销售");
+
+            fixture.commitAfterRejectedRecord(repository, income);
+
+            assertThat(fixture.count("company_operating_events")).isZero();
+            assertThat(fixture.count("audit_events")).isZero();
+            assertThat(fixture.countCompanyTreasuryEntries()).isEqualTo(1);
+
+            fixture.activateBinding();
+            CompanyOperationsRepository.RecordResult retry = fixture.database.inTransaction(connection -> repository.record(connection, fixture.binding, income, RECORDED_AT));
+            assertThat(retry)
+                    .isEqualTo(CompanyOperationsRepository.RecordResult.RECORDED);
+            assertThat(fixture.count("company_operating_events")).isEqualTo(1);
+            assertThat(fixture.count("audit_events")).isEqualTo(1);
+            assertThat(fixture.countCompanyTreasuryEntries()).isEqualTo(2);
+        }
+    }
+
     private static final class Fixture implements AutoCloseable {
         private final Path file;
         private final Database database;
@@ -103,6 +151,46 @@ class SqlCompanyOperationsRepositoryTest {
 
         CompanyOperationsRepository.FinancialSnapshot snapshot(CompanyOperationsRepository repository) {
             return repository.snapshot(companyId).orElseThrow();
+        }
+
+        void deactivateBinding() {
+            database.inTransaction(connection -> {
+                try (PreparedStatement statement = connection.prepareStatement("UPDATE asset_bindings SET state = 'REVOKED' WHERE id = ?")) {
+                    statement.setString(1, binding.id().toString());
+                    statement.executeUpdate();
+                }
+                return null;
+            });
+        }
+
+        void activateBinding() {
+            database.inTransaction(connection -> {
+                try (PreparedStatement statement = connection.prepareStatement("UPDATE asset_bindings SET state = 'ACTIVE' WHERE id = ?")) {
+                    statement.setString(1, binding.id().toString());
+                    statement.executeUpdate();
+                }
+                return null;
+            });
+        }
+
+        void setCash(long cash) {
+            database.inTransaction(connection -> {
+                try (PreparedStatement statement = connection.prepareStatement("UPDATE company_cash_accounts SET cash_minor = ? WHERE company_id = ?")) {
+                    statement.setLong(1, cash);
+                    statement.setString(2, companyId.value().toString());
+                    statement.executeUpdate();
+                }
+                return null;
+            });
+        }
+
+        void commitAfterRejectedRecord(CompanyOperationsRepository repository, VerifiedOperatingEvent event) throws Exception {
+            try (Connection connection = database.dataSource().getConnection()) {
+                connection.setAutoCommit(false);
+                assertThatThrownBy(() -> repository.record(connection, binding, event, RECORDED_AT))
+                        .isInstanceOf(IllegalArgumentException.class);
+                connection.commit();
+            }
         }
 
         long count(String table) { return value("SELECT COUNT(*) FROM " + table); }

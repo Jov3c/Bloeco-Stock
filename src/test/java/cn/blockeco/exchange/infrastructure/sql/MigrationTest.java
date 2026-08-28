@@ -183,7 +183,7 @@ class MigrationTest {
                 assertThat(historyRows(connection, "V003")).isEqualTo(1);
 
                 insertCompany(connection, "company-1");
-                try (PreparedStatement cash = connection.prepareStatement("INSERT INTO company_cash_accounts VALUES (?, ?, ?, ?, ?)")) {
+                try (PreparedStatement cash = connection.prepareStatement("INSERT INTO company_cash_accounts (company_id, cash_minor, paid_in_capital_minor, retained_earnings_minor, reserved_minor) VALUES (?, ?, ?, ?, ?)")) {
                     cash.setString(1, "company-1"); cash.setLong(2, 10); cash.setLong(3, 10); cash.setLong(4, 0); cash.setLong(5, 0); cash.executeUpdate();
                     assertThatThrownBy(cash::executeUpdate).isInstanceOf(Exception.class);
                 }
@@ -317,7 +317,7 @@ class MigrationTest {
                 }
                 insertCompany(connection, "00000000-0000-0000-0000-000000000007");
                 try (PreparedStatement cash = connection.prepareStatement(
-                        "INSERT INTO company_cash_accounts VALUES (?, ?, ?, ?, ?)")) {
+                        "INSERT INTO company_cash_accounts (company_id, cash_minor, paid_in_capital_minor, retained_earnings_minor, reserved_minor) VALUES (?, ?, ?, ?, ?)")) {
                     cash.setString(1, "00000000-0000-0000-0000-000000000007");
                     cash.setLong(2, 1234); cash.setLong(3, 1234); cash.setLong(4, 0); cash.setLong(5, 0);
                     cash.executeUpdate();
