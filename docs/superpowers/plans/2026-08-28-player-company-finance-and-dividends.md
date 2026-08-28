@@ -87,12 +87,16 @@ git commit -m "feat: persist player company operating events"
 ### Task 2: Verified event ingestion service and optional source contract
 
 **Files:**
+- Modify: `src/main/java/cn/blockeco/exchange/ports/AssetBindingRepository.java`
+- Modify: `src/main/java/cn/blockeco/exchange/infrastructure/sql/SqlAssetBindingRepository.java`
 - Create: `src/main/java/cn/blockeco/exchange/ports/CompanyOperatingEventSource.java`
 - Create: `src/main/java/cn/blockeco/exchange/application/CompanyOperationsService.java`
 - Test: `src/test/java/cn/blockeco/exchange/application/CompanyOperationsServiceTest.java`
+- Test: `src/test/java/cn/blockeco/exchange/infrastructure/sql/SqlAssetBindingRepositoryTest.java`
 
 **Interfaces:**
 - Consumes Task 1 `CompanyOperationsRepository.record` and `VerifiedOperatingEvent`.
+- Extends `AssetBindingRepository` with `List<AssetBinding> allActive()` and makes `SqlAssetBindingRepository` return every ACTIVE binding in deterministic `(created_at, id)` order.
 - Produces `CompletionStage<IngestionResult> ingestDueEvents()` where `IngestionResult` exposes accepted, duplicate, rejected and source-failure counts.
 - `CompanyOperatingEventSource.readSince(AssetBinding binding, Instant afterExclusive, Instant throughInclusive)` returns a list of source-verified events and must return only its own `adapterId()`.
 
@@ -104,7 +108,7 @@ git commit -m "feat: persist player company operating events"
 @Test void rejectsWrongAdapterNegativeAmountAndFutureEvent() { }
 ```
 
-Use a real migrated SQLite repository plus small in-test source implementations. Assert the accepted source affects balance once and the failure counter increments without rolling back the other binding.
+Use a real migrated SQLite repository plus small in-test source implementations. Assert the accepted source affects balance once and the failure counter increments without rolling back the other binding. Add a repository test proving `allActive()` excludes REVOKED/PENDING bindings and returns deterministic active bindings.
 
 - [ ] **Step 2: Run the focused test to verify RED**
 
@@ -114,7 +118,7 @@ Expected: compilation failure because `CompanyOperationsService` and the source 
 
 - [ ] **Step 3: Implement minimal ingestion**
 
-Read active bindings from the repository, select sources by exact adapter ID, invoke each source through the supplied `MainThreadExecutor` when one is configured, validate adapter/key/positive amount/not-future time, and persist each event transactionally. Catch a source exception per binding and return it as a source failure; do not let an unavailable optional plugin fail the whole cycle. Do not implement a synthetic source for `native-asset`.
+Read active bindings through `AssetBindingRepository.allActive()`, select sources by exact adapter ID, invoke each source through the supplied `MainThreadExecutor` when one is configured, validate adapter/key/positive amount/not-future time, and persist each event transactionally. Catch a source exception per binding and return it as a source failure; do not let an unavailable optional plugin fail the whole cycle. Do not implement a synthetic source for `native-asset`.
 
 - [ ] **Step 4: Run the focused test to verify GREEN**
 
@@ -123,7 +127,7 @@ Run the command in Step 2. Expected: PASS.
 - [ ] **Step 5: Commit owned files**
 
 ```powershell
-git add src/main/java/cn/blockeco/exchange/ports/CompanyOperatingEventSource.java src/main/java/cn/blockeco/exchange/application/CompanyOperationsService.java src/test/java/cn/blockeco/exchange/application/CompanyOperationsServiceTest.java
+git add src/main/java/cn/blockeco/exchange/ports/AssetBindingRepository.java src/main/java/cn/blockeco/exchange/infrastructure/sql/SqlAssetBindingRepository.java src/main/java/cn/blockeco/exchange/ports/CompanyOperatingEventSource.java src/main/java/cn/blockeco/exchange/application/CompanyOperationsService.java src/test/java/cn/blockeco/exchange/application/CompanyOperationsServiceTest.java src/test/java/cn/blockeco/exchange/infrastructure/sql/SqlAssetBindingRepositoryTest.java
 git commit -m "feat: ingest verified company operating events"
 ```
 
@@ -229,4 +233,3 @@ git commit -m "feat: schedule player company financial reporting"
 - **Spec coverage:** Tasks 1–2 cover verified automatic financial events and safety boundaries; Task 3 covers monthly reports and Chinese GUI; Task 4 covers fifteen-day dividend integration, scheduler, docs and isolated Paper test. External plugin-specific collectors remain explicitly out of scope until their API-level compatibility work, as required by the specification.
 - **Placeholder scan:** no `TODO`, `TBD`, “appropriate handling”, or cross-task implicit implementation references remain.
 - **Type consistency:** Task 1 defines the exact event and repository contracts consumed by Task 2; Task 3 extends that repository for reports; Task 4 wires the services without changing the dividend service signature.
-
