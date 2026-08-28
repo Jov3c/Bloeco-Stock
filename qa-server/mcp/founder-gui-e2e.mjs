@@ -1,5 +1,7 @@
 import net from 'node:net'
 import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { DatabaseSync } from 'node:sqlite'
 import mineflayer from 'mineflayer'
 
 const HOST = '127.0.0.1'
@@ -11,6 +13,16 @@ const FOUNDER = `Founder${Date.now().toString(36)}`
 const COMPANY_NAME = `公司${Date.now().toString(36)}`
 const timeoutMs = 15000
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms))
+
+function offlineUuid(name) {
+  const bytes = createHash('md5').update(`OfflinePlayer:${name}`).digest()
+  bytes[6] = (bytes[6] & 0x0f) | 0x30; bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = bytes.toString('hex')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+function readDb(read) { const db = new DatabaseSync('../plugins/BlockStock/blockeco.db', { readOnly: true }); try { return read(db) } finally { db.close() } }
+function one(db, sql, ...values) { const row = db.prepare(sql).get(...values); return row && Object.values(row)[0] }
+async function waitDb(label, check) { const deadline = Date.now() + timeoutMs; let observed; while (Date.now() < deadline) { observed = readDb(check); if (observed) return; await delay(200) }; throw new Error(`${label} timed out (${observed})`) }
 
 function packet(id, type, body) {
   const bodyBuffer = Buffer.from(body, 'utf8')
@@ -128,8 +140,19 @@ async function sendAnvilText(bot, value, expected) {
   return clickAndWait(bot, 2, expected)
 }
 
+async function doubleConfirm(bot, expected) {
+  const sequence = bot.windowSequence
+  const next = waitForWindow(bot, expected, sequence)
+  await delay(150)
+  try { await bot.clickWindow(29, 0, 0) } catch { }
+  await delay(40)
+  try { await bot.clickWindow(29, 0, 0) } catch { }
+  return next
+}
+
 async function main() {
   const bot = await connect()
+  const founderId = offlineUuid(FOUNDER)
   bot.windowSequence = 0
   bot.on('windowOpen', () => { bot.windowSequence += 1 })
   try {
@@ -146,22 +169,30 @@ async function main() {
     await sendAnvilText(bot, COMPANY_NAME, '输入实缴资本')
     await sendAnvilText(bot, '10000', '选择分红比例')
     await clickAndWait(bot, 20, '确认执行')
-    await clickAndWait(bot, 29, '公司中心')
+    const companiesBefore = readDb(db => one(db, 'SELECT COUNT(*) FROM companies WHERE founder_uuid=?', founderId))
+    await doubleConfirm(bot, '公司中心')
+    await waitDb('double company confirmation', db => one(db, 'SELECT COUNT(*) FROM companies WHERE founder_uuid=?', founderId) === companiesBefore + 1)
 
     await clickAndWait(bot, 29, '资产管理')
     await clickAndWait(bot, 45, '输入资产名称')
     await sendAnvilText(bot, 'QA Mine', '确认执行')
-    await clickAndWait(bot, 29, '资产管理')
+    const assetsBefore = readDb(db => one(db, 'SELECT COUNT(*) FROM native_assets WHERE founder_uuid=?', founderId))
+    await doubleConfirm(bot, '资产管理')
+    await waitDb('double native asset confirmation', db => one(db, 'SELECT COUNT(*) FROM native_assets WHERE founder_uuid=?', founderId) === assetsBefore + 1)
     await clickAndWait(bot, 0, '确认执行')
-    await clickAndWait(bot, 29, '资产管理')
+    const bindingsBefore = readDb(db => one(db, 'SELECT COUNT(*) FROM asset_bindings WHERE company_id=(SELECT id FROM companies WHERE founder_uuid=?)', founderId))
+    await doubleConfirm(bot, '资产管理')
+    await waitDb('double asset binding confirmation', db => one(db, 'SELECT COUNT(*) FROM asset_bindings WHERE company_id=(SELECT id FROM companies WHERE founder_uuid=?)', founderId) === bindingsBefore + 1)
 
     await clickAndWait(bot, 49, '公司中心')
     await clickAndWait(bot, 31, 'IPO 管理')
     await clickAndWait(bot, 31, '输入募资目标')
     await sendAnvilText(bot, '10000', '输入每股发行价')
     await sendAnvilText(bot, '100', '确认 IPO 操作')
-    await clickAndWait(bot, 29, 'IPO 管理')
-    console.log(`FOUNDER_GUI_E2E_PASS|founder=${FOUNDER}|company-created|asset-bound|ipo-announced`)
+    const ipoBefore = readDb(db => one(db, 'SELECT COUNT(*) FROM primary_offerings WHERE company_id=(SELECT id FROM companies WHERE founder_uuid=?)', founderId))
+    await doubleConfirm(bot, 'IPO 管理')
+    await waitDb('double IPO confirmation', db => one(db, 'SELECT COUNT(*) FROM primary_offerings WHERE company_id=(SELECT id FROM companies WHERE founder_uuid=?)', founderId) === ipoBefore + 1)
+    console.log(`FOUNDER_GUI_E2E_PASS|founder=${FOUNDER}|company-created-once|native-asset-once|asset-bound-once|ipo-announced-once`)
   } finally {
     bot.quit('Founder QA flow complete')
   }
