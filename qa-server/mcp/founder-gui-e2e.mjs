@@ -192,7 +192,15 @@ async function main() {
     const ipoBefore = readDb(db => one(db, 'SELECT COUNT(*) FROM primary_offerings WHERE company_id=(SELECT id FROM companies WHERE founder_uuid=?)', founderId))
     await doubleConfirm(bot, 'IPO 管理')
     await waitDb('double IPO confirmation', db => one(db, 'SELECT COUNT(*) FROM primary_offerings WHERE company_id=(SELECT id FROM companies WHERE founder_uuid=?)', founderId) === ipoBefore + 1)
-    console.log(`FOUNDER_GUI_E2E_PASS|founder=${FOUNDER}|company-created-once|native-asset-once|asset-bound-once|ipo-announced-once`)
+
+    // Regression for the user-facing return paths across company, IPO and market GUIs.
+    await clickAndWait(bot, 49, '公司中心')
+    await clickAndWait(bot, 31, 'IPO 管理')
+    await clickAndWait(bot, 33, '公开 IPO')
+    await clickAndWait(bot, 49, '交易所')
+    await clickAndWait(bot, 11, '市场')
+    await clickAndWait(bot, 49, '交易所')
+    console.log(`FOUNDER_GUI_E2E_PASS|founder=${FOUNDER}|company-created-once|native-asset-once|asset-bound-once|ipo-announced-once|return-navigation`)
   } finally {
     bot.quit('Founder QA flow complete')
   }
