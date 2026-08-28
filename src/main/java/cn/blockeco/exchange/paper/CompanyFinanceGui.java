@@ -32,7 +32,11 @@ public final class CompanyFinanceGui implements CompanyGuiOpener, Listener {
         openInventory(player, null);
     }
     private void openLoaded(Player player) {
-        companies.findByFounder(player.getUniqueId()).thenCompose(company -> company.map(value -> java.util.concurrent.CompletableFuture.supplyAsync(() -> { var dashboard=finance.financeDashboard(value.id(), clock.now(), zone); return new FinanceView(dashboard.snapshot(), dashboard.nextDividendAt(), dashboard.recentReports()); }, executor)).orElseGet(() -> java.util.concurrent.CompletableFuture.failedFuture(new IllegalArgumentException("company not found")))).whenComplete((view,error)->{if(error!=null){companyCenter.open(player);return;} Bukkit.getScheduler().runTask(plugin,()->openInventory(player,view));});
+        companies.findByFounder(player.getUniqueId()).thenCompose(company -> company.map(value -> java.util.concurrent.CompletableFuture.supplyAsync(() -> { var dashboard=finance.financeDashboard(value.id(), clock.now(), zone); return new FinanceView(dashboard.snapshot(), dashboard.nextDividendAt(), dashboard.recentReports()); }, executor)).orElseGet(() -> java.util.concurrent.CompletableFuture.failedFuture(new IllegalArgumentException("company not found")))).whenComplete((view,error)-> Bukkit.getScheduler().runTask(plugin,()->{
+            if (!player.isOnline()) return;
+            if(error!=null) { player.sendMessage(Component.text("财务数据将在公司上市后提供；上市后开始分红。")); companyCenter.open(player); return; }
+            openInventory(player,view);
+        }));
     }
     private void openInventory(Player player, FinanceView view) {
         if(view!=null) views.put(player.getUniqueId(),view);

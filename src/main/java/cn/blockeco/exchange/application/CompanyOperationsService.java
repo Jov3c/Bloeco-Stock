@@ -36,10 +36,12 @@ public final class CompanyOperationsService {
         Supplier<List<VerifiedOperatingEvent>> read = () -> source.readSince(binding, Instant.EPOCH, through);
         CompletionStage<List<VerifiedOperatingEvent>> events = mainThread == null ? CompletableFuture.supplyAsync(read) : mainThread.submit(read);
         return events.handle((readEvents, failure) -> {
-            if (failure != null) { result.sourceFailures++; return result; }
-            CompletableFuture.runAsync(() -> { for (VerifiedOperatingEvent event : readEvents) record(binding, source, event, through, result); }, sqlExecutor).join();
-            return result;
-        });
+            if (failure != null) { result.sourceFailures++; return CompletableFuture.completedFuture(result); }
+            return CompletableFuture.supplyAsync(() -> {
+                for (VerifiedOperatingEvent event : readEvents) record(binding, source, event, through, result);
+                return result;
+            }, sqlExecutor);
+        }).thenCompose(stage -> stage);
     }
 
     private void record(AssetBinding binding, CompanyOperatingEventSource source, VerifiedOperatingEvent event, Instant through, MutableResult result) {
