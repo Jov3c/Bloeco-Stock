@@ -13,3 +13,8 @@ BUILD SUCCESSFUL
 gradlew.bat test --tests cn.blockeco.exchange.application.SecuritiesCashServiceTest --tests cn.blockeco.exchange.application.SecondaryMarketServiceTest --tests cn.blockeco.exchange.infrastructure.sql.SqlSecuritiesCashRepositoryTest
 BUILD SUCCESSFUL
 ```
+
+Review follow-up:
+
+- Correlation-key retries now reject a different holder or share count.
+- Holding and paid-in-capital increments use checked Java arithmetic plus conditional projection writes; `Long.MAX_VALUE` regressions prove settlement rolls back without moving cash, shares, or proposal state.

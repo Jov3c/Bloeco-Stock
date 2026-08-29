@@ -114,6 +114,51 @@ class ShareIssuanceServiceTest {
         } finally { Files.deleteIfExists(file); }
     }
 
+    @Test void subscriptionCorrelationReplayRejectsDifferentHolderOrShareCount() throws Exception {
+        Path file = Files.createTempFile("issuance-subscribe-replay-", ".db");
+        try (Database db = new Database("jdbc:sqlite:" + file)) {
+            db.migrate(); CompanyId company = listedCompany(db); UUID founder = Fixtures.founder(db, company), holder = UUID.randomUUID(), other = UUID.randomUUID();
+            MutableClock clock = new MutableClock(); ShareIssuanceService service = service(db, clock); var proposal = subscribingProposal(db, service, founder, company, clock);
+            SqlSecuritiesCashRepository cash = new SqlSecuritiesCashRepository(db.dataSource());
+            db.inTransaction(c -> { cash.creditAvailable(c, holder, Money.ofMinor(100), clock.now()); cash.creditAvailable(c, other, Money.ofMinor(100), clock.now()); return null; });
+            service.subscribe(holder, proposal.id(), 2, "replay-key");
+
+            assertThatThrownBy(() -> service.subscribe(other, proposal.id(), 2, "replay-key")).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("correlation");
+            assertThatThrownBy(() -> service.subscribe(holder, proposal.id(), 3, "replay-key")).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("correlation");
+            assertThat(cash.find(other)).hasValueSatisfying(a -> { assertThat(a.available().minorUnits()).isEqualTo(100); assertThat(a.reserved().minorUnits()).isZero(); });
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test void settlementHoldingOverflowRollsBackCashAndShareProjections() throws Exception {
+        Path file = Files.createTempFile("issuance-holding-overflow-", ".db");
+        try (Database db = new Database("jdbc:sqlite:" + file)) {
+            db.migrate(); CompanyId company = listedCompany(db); UUID founder = Fixtures.founder(db, company), holder = UUID.randomUUID();
+            MutableClock clock = new MutableClock(); ShareIssuanceService service = service(db, clock); var proposal = subscribingProposal(db, service, founder, company, clock, 1, 1);
+            SqlSecuritiesCashRepository cash = new SqlSecuritiesCashRepository(db.dataSource()); seedHolding(db, company, holder, Long.MAX_VALUE); db.inTransaction(c -> { cash.creditAvailable(c, holder, Money.ofMinor(1), clock.now()); return null; });
+            service.subscribe(holder, proposal.id(), 1, "overflow-holding");
+
+            assertThatThrownBy(() -> service.closeSubscription(proposal.id())).isInstanceOf(ArithmeticException.class);
+            assertThat(holding(db, company, holder)).isEqualTo(Long.MAX_VALUE);
+            assertThat(cash.find(holder)).hasValueSatisfying(a -> { assertThat(a.available().minorUnits()).isZero(); assertThat(a.reserved().minorUnits()).isEqualTo(1); });
+            assertThat(state(db, proposal.id())).isEqualTo(IssuanceProposalState.SUBSCRIBING);
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test void settlementPaidInCapitalOverflowRollsBackCashAndShareProjections() throws Exception {
+        Path file = Files.createTempFile("issuance-capital-overflow-", ".db");
+        try (Database db = new Database("jdbc:sqlite:" + file)) {
+            db.migrate(); CompanyId company = listedCompany(db); UUID founder = Fixtures.founder(db, company), holder = UUID.randomUUID();
+            MutableClock clock = new MutableClock(); ShareIssuanceService service = service(db, clock); var proposal = subscribingProposal(db, service, founder, company, clock, 1, 1);
+            SqlSecuritiesCashRepository cash = new SqlSecuritiesCashRepository(db.dataSource()); db.inTransaction(c -> { try (PreparedStatement statement = c.prepareStatement("UPDATE company_cash_accounts SET paid_in_capital_minor=? WHERE company_id=?")) { statement.setLong(1, Long.MAX_VALUE); statement.setString(2, company.value().toString()); statement.executeUpdate(); } cash.creditAvailable(c, holder, Money.ofMinor(1), clock.now()); return null; });
+            service.subscribe(holder, proposal.id(), 1, "overflow-capital");
+
+            assertThatThrownBy(() -> service.closeSubscription(proposal.id())).isInstanceOf(ArithmeticException.class);
+            assertThat(number(db, "SELECT COUNT(*) FROM share_holdings WHERE company_id=? AND holder_uuid=?", company.value().toString(), holder.toString())).isZero();
+            assertThat(cash.find(holder)).hasValueSatisfying(a -> { assertThat(a.available().minorUnits()).isZero(); assertThat(a.reserved().minorUnits()).isEqualTo(1); });
+            assertThat(state(db, proposal.id())).isEqualTo(IssuanceProposalState.SUBSCRIBING);
+        } finally { Files.deleteIfExists(file); }
+    }
+
     @Test void closeSettlesCapacityThenReleasesUnfilledCashAndReconcilesLedgers() throws Exception {
         Path file = Files.createTempFile("issuance-close-cash-", ".db");
         try (Database db = new Database("jdbc:sqlite:" + file)) {

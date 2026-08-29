@@ -51,7 +51,10 @@ public final class ShareIssuanceService {
             if (proposal.state != IssuanceProposalState.SUBSCRIBING) throw new IllegalStateException("proposal is not open for subscriptions");
             long reserved = Math.multiplyExact(shares, proposal.issuePriceMinor);
             ShareIssuanceRepository.Subscription existing = subscription(connection, proposalId, correlationKey);
-            if (existing != null) return existing;
+            if (existing != null) {
+                if (!existing.holder().equals(holder) || existing.shares() != shares) throw new IllegalArgumentException("correlation key does not match the original subscription");
+                return existing;
+            }
             cash.reserve(connection, holder, Money.ofMinor(reserved));
             try { return repository.subscribe(connection, holder, proposalId, shares, correlationKey, clock.now()); }
             catch (RuntimeException | SQLException failure) { cash.release(connection, holder, Money.ofMinor(reserved)); throw failure; }
