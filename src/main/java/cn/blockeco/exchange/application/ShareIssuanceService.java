@@ -7,6 +7,7 @@ import cn.blockeco.exchange.domain.governance.VoteChoice;
 import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.ports.AppClock;
 import cn.blockeco.exchange.ports.ShareIssuanceRepository;
+import cn.blockeco.exchange.ports.SecuritiesCashRepository;
 import cn.blockeco.exchange.ports.TransactionRunner;
 import java.math.BigInteger;
 import java.sql.Connection;
@@ -26,13 +27,41 @@ public final class ShareIssuanceService {
     private static final Duration VOTING_PERIOD = Duration.ofDays(2);
 
     private final ShareIssuanceRepository repository;
+    private final SecuritiesCashRepository cash;
     private final TransactionRunner transactions;
     private final AppClock clock;
 
     public ShareIssuanceService(ShareIssuanceRepository repository, TransactionRunner transactions, AppClock clock) {
+        this(repository, null, transactions, clock);
+    }
+
+    public ShareIssuanceService(ShareIssuanceRepository repository, SecuritiesCashRepository cash, TransactionRunner transactions, AppClock clock) {
         this.repository = Objects.requireNonNull(repository, "repository");
+        this.cash = cash;
         this.transactions = Objects.requireNonNull(transactions, "transactions");
         this.clock = Objects.requireNonNull(clock, "clock");
+    }
+
+    public ShareIssuanceRepository.Subscription subscribe(UUID holder, UUID proposalId, long shares, String correlationKey) {
+        Objects.requireNonNull(holder, "holder"); Objects.requireNonNull(proposalId, "proposalId"); Objects.requireNonNull(correlationKey, "correlationKey");
+        if (shares <= 0) throw new IllegalArgumentException("shares must be positive");
+        if (cash == null) throw new IllegalStateException("securities cash repository is required for subscriptions");
+        return transactions.inTransaction(connection -> {
+            Proposal proposal = proposal(connection, proposalId);
+            if (proposal.state != IssuanceProposalState.SUBSCRIBING) throw new IllegalStateException("proposal is not open for subscriptions");
+            long reserved = Math.multiplyExact(shares, proposal.issuePriceMinor);
+            ShareIssuanceRepository.Subscription existing = subscription(connection, proposalId, correlationKey);
+            if (existing != null) return existing;
+            cash.reserve(connection, holder, Money.ofMinor(reserved));
+            try { return repository.subscribe(connection, holder, proposalId, shares, correlationKey, clock.now()); }
+            catch (RuntimeException | SQLException failure) { cash.release(connection, holder, Money.ofMinor(reserved)); throw failure; }
+        });
+    }
+
+    public void closeSubscription(UUID proposalId) {
+        Objects.requireNonNull(proposalId, "proposalId");
+        if (cash == null) throw new IllegalStateException("securities cash repository is required for subscriptions");
+        transactions.inTransaction(connection -> { repository.settleSubscription(connection, proposalId, cash, clock.now()); return null; });
     }
 
     public IssuanceProposal propose(UUID founder, CompanyId company, long shares, Money price) {
@@ -104,12 +133,19 @@ public final class ShareIssuanceService {
     }
 
     private static Proposal proposal(Connection connection, UUID proposalId) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement("SELECT state, announced_at FROM issuance_proposals WHERE id=?")) {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT state, announced_at, issue_price_minor FROM issuance_proposals WHERE id=?")) {
             statement.setString(1, proposalId.toString());
             try (ResultSet rows = statement.executeQuery()) {
                 if (!rows.next()) throw new IllegalArgumentException("proposal is missing");
-                return new Proposal(proposalId, Instant.parse(rows.getString(2)), IssuanceProposalState.valueOf(rows.getString(1)));
+                return new Proposal(proposalId, Instant.parse(rows.getString(2)), IssuanceProposalState.valueOf(rows.getString(1)), rows.getLong(3));
             }
+        }
+    }
+
+    private static ShareIssuanceRepository.Subscription subscription(Connection connection, UUID proposalId, String key) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT id,subscriber_uuid,shares,reserved_cash_minor FROM issuance_subscriptions WHERE proposal_id=? AND correlation_key=?")) {
+            statement.setString(1, proposalId.toString()); statement.setString(2, key);
+            try (ResultSet rows = statement.executeQuery()) { return rows.next() ? new ShareIssuanceRepository.Subscription(UUID.fromString(rows.getString(1)), proposalId, UUID.fromString(rows.getString(2)), rows.getLong(3), rows.getLong(4)) : null; }
         }
     }
 
@@ -132,7 +168,7 @@ public final class ShareIssuanceService {
         }
     }
 
-    private record Proposal(UUID id, Instant announcedAt, IssuanceProposalState state) {
-        private Proposal(UUID id, Instant announcedAt) { this(id, announcedAt, null); }
+    private record Proposal(UUID id, Instant announcedAt, IssuanceProposalState state, long issuePriceMinor) {
+        private Proposal(UUID id, Instant announcedAt) { this(id, announcedAt, null, 0); }
     }
 }
