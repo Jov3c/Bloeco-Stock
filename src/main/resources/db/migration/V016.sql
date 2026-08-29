@@ -15,6 +15,18 @@ CREATE TABLE issuance_record_snapshots (
   PRIMARY KEY (proposal_id, voter_uuid)
 );
 
+CREATE TRIGGER issuance_record_snapshots_no_update
+BEFORE UPDATE ON issuance_record_snapshots
+BEGIN
+  SELECT RAISE(ABORT, 'issuance record snapshots are immutable');
+END;
+
+CREATE TRIGGER issuance_record_snapshots_no_delete
+BEFORE DELETE ON issuance_record_snapshots
+BEGIN
+  SELECT RAISE(ABORT, 'issuance record snapshots are immutable');
+END;
+
 CREATE TABLE issuance_votes (
   proposal_id TEXT NOT NULL REFERENCES issuance_proposals(id),
   voter_uuid TEXT NOT NULL,
@@ -25,14 +37,21 @@ CREATE TABLE issuance_votes (
   FOREIGN KEY (proposal_id, voter_uuid) REFERENCES issuance_record_snapshots(proposal_id, voter_uuid)
 );
 
+CREATE TRIGGER issuance_votes_snapshot_shares_no_update
+BEFORE UPDATE OF snapshot_shares ON issuance_votes
+BEGIN
+  SELECT RAISE(ABORT, 'issuance vote snapshot shares are immutable');
+END;
+
 CREATE TABLE issuance_subscriptions (
   id TEXT PRIMARY KEY,
   proposal_id TEXT NOT NULL REFERENCES issuance_proposals(id),
   subscriber_uuid TEXT NOT NULL,
   shares INTEGER NOT NULL CHECK (shares > 0),
   reserved_cash_minor INTEGER NOT NULL CHECK (reserved_cash_minor >= 0),
+  correlation_key TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  UNIQUE (proposal_id, subscriber_uuid, id)
+  UNIQUE (proposal_id, correlation_key)
 );
 
 CREATE TABLE issuance_subscription_settlements (
