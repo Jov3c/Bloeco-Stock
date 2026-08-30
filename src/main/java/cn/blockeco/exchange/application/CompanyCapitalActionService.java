@@ -63,7 +63,10 @@ public final class CompanyCapitalActionService {
         CompanyPayoutOperation payout = transactions.inTransaction(connection -> {
             if (!exits.transitionAction(connection, action.id(), GovernanceActionState.ANNOUNCED, GovernanceActionState.EXECUTION_READY, now))
                 throw new IllegalStateException("capital action state changed");
-            if (!exits.reserveCompanyCash(connection, action.companyId(), action.amountMinor()))
+            boolean reserved = action.type() == GovernanceActionType.FOUNDER_CASH_OUT
+                    ? exits.reserveFounderCashOut(connection, action.companyId(), action.amountMinor())
+                    : exits.reserveCompanyCash(connection, action.companyId(), action.amountMinor());
+            if (!reserved)
                 throw new IllegalStateException("company authoritative cash is insufficient");
             if (!exits.transitionAction(connection, action.id(), GovernanceActionState.EXECUTION_READY, GovernanceActionState.EXECUTING, now))
                 throw new IllegalStateException("capital action state changed");

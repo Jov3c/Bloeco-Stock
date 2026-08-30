@@ -61,12 +61,25 @@ class SqlCompanyExitRepositoryTest {
     }
 
     @Test
+    void rejectsIllegalGovernanceStateJumps() throws Exception {
+        try (Fixture fixture = Fixture.create()) {
+            CompanyExitRepository repository = new SqlCompanyExitRepository(fixture.database.dataSource());
+            CompanyGovernanceAction action = fixture.action(GovernanceActionType.FOUNDER_CASH_OUT);
+            fixture.database.inTransaction(connection -> { repository.createAction(connection, action, "套现公告", NOW); return null; });
+
+            assertThatThrownBy(() -> fixture.database.inTransaction(connection -> repository.transitionAction(
+                    connection, action.id(), GovernanceActionState.ANNOUNCED, GovernanceActionState.EXECUTED, NOW)))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Test
     void retainsUnknownPayoutForManualRecoveryAndRejectsDuplicateCorrelationKeys() throws Exception {
         try (Fixture fixture = Fixture.create()) {
             CompanyExitRepository repository = new SqlCompanyExitRepository(fixture.database.dataSource());
             CompanyGovernanceAction action = fixture.action(GovernanceActionType.FOUNDER_CASH_OUT);
             CompanyPayoutOperation payout = new CompanyPayoutOperation(UUID.randomUUID(), fixture.companyId, action.id(),
-                    UUID.randomUUID(), 70, "vault:cashout:1", PayoutOperationState.PREPARED, NOW, NOW, null);
+                    fixture.founder, 70, "vault:cashout:1", PayoutOperationState.PREPARED, NOW, NOW, null);
             fixture.database.inTransaction(connection -> { repository.createAction(connection, action, "套现公告", NOW); repository.transitionAction(connection, action.id(), GovernanceActionState.ANNOUNCED, GovernanceActionState.EXECUTION_READY, NOW); repository.transitionAction(connection, action.id(), GovernanceActionState.EXECUTION_READY, GovernanceActionState.EXECUTING, NOW); repository.createPayout(connection, payout); return null; });
 
             boolean moved = fixture.database.inTransaction(connection -> repository.transitionPayout(connection, payout.id(),
@@ -75,9 +88,27 @@ class SqlCompanyExitRepositoryTest {
             assertThat(repository.recoverablePayouts(10)).extracting(CompanyPayoutOperation::id).containsExactly(payout.id());
 
             CompanyPayoutOperation duplicate = new CompanyPayoutOperation(UUID.randomUUID(), fixture.companyId, action.id(),
-                    UUID.randomUUID(), 1, "vault:cashout:1", PayoutOperationState.PREPARED, NOW, NOW, null);
+                    fixture.founder, 1, "vault:cashout:1", PayoutOperationState.PREPARED, NOW, NOW, null);
             assertThatThrownBy(() -> fixture.database.inTransaction(connection -> { repository.createPayout(connection, duplicate); return null; }))
                     .isInstanceOf(IllegalStateException.class);
+        }
+    }
+
+    @Test
+    void rejectsPayoutWhoseRecipientIsNotTheFounder() throws Exception {
+        try (Fixture fixture = Fixture.create()) {
+            CompanyExitRepository repository = new SqlCompanyExitRepository(fixture.database.dataSource());
+            CompanyGovernanceAction action = fixture.action(GovernanceActionType.FOUNDER_CASH_OUT);
+            CompanyPayoutOperation payout = new CompanyPayoutOperation(UUID.randomUUID(), fixture.companyId, action.id(),
+                    UUID.randomUUID(), 70, "vault:cashout:not-founder", PayoutOperationState.PREPARED, NOW, NOW, null);
+
+            assertThatThrownBy(() -> fixture.database.inTransaction(connection -> {
+                repository.createAction(connection, action, "套现公告", NOW);
+                repository.transitionAction(connection, action.id(), GovernanceActionState.ANNOUNCED, GovernanceActionState.EXECUTION_READY, NOW);
+                repository.transitionAction(connection, action.id(), GovernanceActionState.EXECUTION_READY, GovernanceActionState.EXECUTING, NOW);
+                repository.createPayout(connection, payout);
+                return null;
+            })).isInstanceOf(IllegalArgumentException.class);
         }
     }
 

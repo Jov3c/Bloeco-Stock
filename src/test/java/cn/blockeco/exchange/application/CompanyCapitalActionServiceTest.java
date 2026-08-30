@@ -109,6 +109,19 @@ class CompanyCapitalActionServiceTest {
         }
     }
 
+    @Test
+    void founderCashOutCannotConsumePaidInCapitalProtection() throws Exception {
+        try (Fixture f = Fixture.create()) {
+            f.protectCapital(100);
+            UUID action = f.service.announceFounderCashOut(f.founder, f.company.id(), Money.ofMinor(1), "cashout:protected-capital");
+            f.now = START.plusSeconds(43_200);
+
+            assertThatThrownBy(() -> f.service.execute(f.founder, action)).isInstanceOf(IllegalStateException.class);
+            assertThat(f.cash()).containsExactly(100L, 0L);
+            assertThat(f.gateway.calls).isZero();
+        }
+    }
+
     private static final class Fixture implements AutoCloseable {
         final Path file; final Database database; final Company company; final UUID founder; final RecordingGateway gateway = new RecordingGateway();
         Instant now = START; final CompanyCapitalActionService service;
@@ -124,6 +137,7 @@ class CompanyCapitalActionServiceTest {
             return new Fixture(file, database, company);
         }
         void setStatus(CompanyStatus status) { database.inTransaction(c -> { try (PreparedStatement s = c.prepareStatement("UPDATE companies SET status=? WHERE id=?")) { s.setString(1, status.name()); s.setString(2, company.id().value().toString()); s.executeUpdate(); } return null; }); }
+        void protectCapital(long paidInCapital) { database.inTransaction(c -> { try (PreparedStatement s = c.prepareStatement("UPDATE company_cash_accounts SET paid_in_capital_minor=? WHERE company_id=?")) { s.setLong(1, paidInCapital); s.setString(2, company.id().value().toString()); s.executeUpdate(); } return null; }); }
         void holding(UUID player, long shares) { database.inTransaction(c -> { try (PreparedStatement s = c.prepareStatement("INSERT INTO share_holdings (company_id,holder_uuid,available_shares,reserved_shares) VALUES (?,?,?,0)")) { s.setString(1, company.id().value().toString()); s.setString(2, player.toString()); s.setLong(3, shares); s.executeUpdate(); } return null; }); }
         long[] cash() throws Exception { try (Connection c = database.dataSource().getConnection(); PreparedStatement s = c.prepareStatement("SELECT cash_minor,reserved_minor FROM company_cash_accounts WHERE company_id=?")) { s.setString(1, company.id().value().toString()); var rows = s.executeQuery(); rows.next(); return new long[]{rows.getLong(1), rows.getLong(2)}; } }
         long securitiesCash(UUID player) throws Exception { try (Connection c = database.dataSource().getConnection(); PreparedStatement s = c.prepareStatement("SELECT available_minor FROM securities_cash_accounts WHERE player_uuid=?")) { s.setString(1, player.toString()); var rows = s.executeQuery(); rows.next(); return rows.getLong(1); } }
@@ -131,7 +145,7 @@ class CompanyCapitalActionServiceTest {
         String actionState(UUID id) throws Exception { return string("SELECT state FROM company_governance_actions WHERE id='" + id + "'"); }
         String string(String query) throws Exception { try (Connection c = database.dataSource().getConnection(); PreparedStatement s = c.prepareStatement(query); var rows = s.executeQuery()) { rows.next(); return rows.getString(1); } }
         static void insertCompany(Connection c, Company x) throws java.sql.SQLException { try (PreparedStatement s = c.prepareStatement("INSERT INTO companies (id,normalized_name,display_name,founder_uuid,status,treasury_minor,total_shares,dividend_basis_points,created_at) VALUES (?,?,?,?,?,?,?,?,?)")) { s.setString(1,x.id().value().toString());s.setString(2,x.normalizedName());s.setString(3,x.displayName());s.setString(4,x.founderId().toString());s.setString(5,x.status().name());s.setLong(6,x.treasury().minorUnits());s.setLong(7,x.totalShares());s.setInt(8,x.dividendRate().basisPoints());s.setString(9,x.createdAt().toString());s.executeUpdate(); } }
-        static void insertCash(Connection c, CompanyId id, long cash) throws java.sql.SQLException { try (PreparedStatement s = c.prepareStatement("INSERT INTO company_cash_accounts (company_id,cash_minor,paid_in_capital_minor,retained_earnings_minor,reserved_minor,accumulated_loss_minor) VALUES (?,?,?,0,0,0)")) { s.setString(1,id.value().toString());s.setLong(2,cash);s.setLong(3,cash);s.executeUpdate(); } }
+        static void insertCash(Connection c, CompanyId id, long cash) throws java.sql.SQLException { try (PreparedStatement s = c.prepareStatement("INSERT INTO company_cash_accounts (company_id,cash_minor,paid_in_capital_minor,retained_earnings_minor,reserved_minor,accumulated_loss_minor) VALUES (?,?,0,0,0,0)")) { s.setString(1,id.value().toString());s.setLong(2,cash);s.executeUpdate(); } }
         static void insertListing(Connection c, CompanyId id) throws java.sql.SQLException { try (PreparedStatement s = c.prepareStatement("INSERT INTO stock_listings (company_id,stock_code,issue_reference_price_minor,issued_shares,listed_at) VALUES (?,'CA000001',1,1000,?)")) {s.setString(1,id.value().toString());s.setString(2,START.toString());s.executeUpdate();} }
         @Override public void close() throws Exception { database.close(); Files.deleteIfExists(file); }
     }

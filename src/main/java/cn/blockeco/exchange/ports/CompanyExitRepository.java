@@ -23,6 +23,11 @@ public interface CompanyExitRepository {
     boolean transitionPayout(Connection connection, UUID payoutId, PayoutOperationState expected, PayoutOperationState next, String detail, Instant updatedAt) throws SQLException;
     /** Reserves authoritative company cash; it never reads legacy companies.treasury_minor. */
     boolean reserveCompanyCash(Connection connection, CompanyId companyId, long amountMinor) throws SQLException;
+    /**
+     * Reserves cash for a founder cash-out while preserving paid-in capital and positive
+     * retained earnings: cash - reserved - paid-in - max(retained earnings, 0) >= amount.
+     */
+    boolean reserveFounderCashOut(Connection connection, CompanyId companyId, long amountMinor) throws SQLException;
     boolean releaseCompanyCash(Connection connection, CompanyId companyId, long amountMinor) throws SQLException;
     /** Final internal debit only after the external Vault deposit is durably confirmed. */
     boolean completePayout(Connection connection, UUID payoutId, Instant completedAt) throws SQLException;

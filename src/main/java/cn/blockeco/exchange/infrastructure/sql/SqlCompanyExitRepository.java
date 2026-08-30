@@ -57,6 +57,7 @@ public final class SqlCompanyExitRepository implements CompanyExitRepository {
     @Override
     public boolean transitionAction(Connection connection, UUID actionId, GovernanceActionState expected, GovernanceActionState next, Instant updatedAt) throws SQLException {
         requireTransaction(connection); Objects.requireNonNull(actionId, "actionId"); Objects.requireNonNull(expected, "expected"); Objects.requireNonNull(next, "next"); Objects.requireNonNull(updatedAt, "updatedAt");
+        if (!legalActionTransition(expected, next)) throw new IllegalArgumentException("illegal company governance transition: " + expected + " -> " + next);
         try (PreparedStatement statement = connection.prepareStatement("UPDATE company_governance_actions SET state=?,updated_at=? WHERE id=? AND state=?")) {
             statement.setString(1, next.name()); statement.setString(2, updatedAt.toString()); statement.setString(3, actionId.toString()); statement.setString(4, expected.name()); return statement.executeUpdate() == 1;
         }
@@ -101,6 +102,21 @@ public final class SqlCompanyExitRepository implements CompanyExitRepository {
         requireTransaction(connection); requirePositive(amountMinor); Objects.requireNonNull(companyId, "companyId");
         try (PreparedStatement statement = connection.prepareStatement("UPDATE company_cash_accounts SET reserved_minor=reserved_minor+? WHERE company_id=? AND cash_minor-reserved_minor>=? AND reserved_minor<=?")) {
             statement.setLong(1, amountMinor); statement.setString(2, companyId.value().toString()); statement.setLong(3, amountMinor); statement.setLong(4, Math.subtractExact(Long.MAX_VALUE, amountMinor)); return statement.executeUpdate() == 1;
+        }
+    }
+
+    @Override public boolean reserveFounderCashOut(Connection connection, CompanyId companyId, long amountMinor) throws SQLException {
+        requireTransaction(connection); requirePositive(amountMinor); Objects.requireNonNull(companyId, "companyId");
+        try (PreparedStatement statement = connection.prepareStatement("""
+                UPDATE company_cash_accounts SET reserved_minor=reserved_minor+?
+                WHERE company_id=?
+                  AND cash_minor-reserved_minor-paid_in_capital_minor
+                      -CASE WHEN retained_earnings_minor>0 THEN retained_earnings_minor ELSE 0 END >= ?
+                  AND reserved_minor<=?
+                """)) {
+            statement.setLong(1, amountMinor); statement.setString(2, companyId.value().toString());
+            statement.setLong(3, amountMinor); statement.setLong(4, Math.subtractExact(Long.MAX_VALUE, amountMinor));
+            return statement.executeUpdate() == 1;
         }
     }
 
@@ -283,6 +299,13 @@ public final class SqlCompanyExitRepository implements CompanyExitRepository {
             case AMBIGUOUS -> next == PayoutOperationState.EXTERNAL_DEBIT_CONFIRMED || next == PayoutOperationState.FAILED;
             default -> false;
         };
+    }
+
+    private static boolean legalActionTransition(GovernanceActionState expected, GovernanceActionState next) {
+        return (expected == GovernanceActionState.ANNOUNCED && next == GovernanceActionState.EXECUTION_READY)
+                || (expected == GovernanceActionState.EXECUTION_READY && next == GovernanceActionState.EXECUTING)
+                || (expected == GovernanceActionState.EXECUTING
+                    && (next == GovernanceActionState.EXECUTED || next == GovernanceActionState.CANCELLED));
     }
 
     private static void requireTransaction(Connection connection) throws SQLException {
