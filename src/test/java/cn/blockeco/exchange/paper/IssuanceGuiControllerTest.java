@@ -4,8 +4,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import cn.blockeco.exchange.domain.governance.IssuanceProposalState;
 import cn.blockeco.exchange.domain.money.Money;
+import cn.blockeco.exchange.domain.company.Company;
+import cn.blockeco.exchange.domain.company.CompanyId;
+import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
 class IssuanceGuiControllerTest {
@@ -32,12 +40,27 @@ class IssuanceGuiControllerTest {
         assertThat(subscriptionSlots).extracting(IssuanceGuiController.Slot::lore)
                 .anyMatch(copy -> copy.contains("证券账户"));
         assertThat(IssuanceGuiController.dilution(subscribing)).isEqualTo("10.0%");
-        assertThat(IssuanceGuiController.deadline(subscribing)).contains("2026-09-03");
+        assertThat(IssuanceGuiController.deadline(subscribing)).contains("09-03", "服务器时间");
     }
 
     @Test
     void exchangeHomeExposesPublicIssuanceMarketToEveryPlayer() {
         assertThat(StockGuiController.homeSlots()).extracting(StockGuiController.HomeSlot::action)
                 .contains("issuance");
+    }
+
+    @Test
+    void founderProposalCompositionDoesNotDeadlockOnSingleSqlExecutor() throws Exception {
+        ExecutorService singleSqlExecutor = Executors.newSingleThreadExecutor();
+        try {
+            UUID founder = UUID.randomUUID();
+            Company company = Company.register(new CompanyId(UUID.randomUUID()), "星河公司", founder, Money.ofMinor(100),
+                    cn.blockeco.exchange.domain.company.DividendRate.FIFTY, Instant.EPOCH);
+            var result = IssuanceGuiController.composeFounderProposal(
+                    CompletableFuture.supplyAsync(() -> Optional.of(company), singleSqlExecutor),
+                    selected -> selected.displayName() + "-提案", singleSqlExecutor);
+
+            assertThat(result.toCompletableFuture().get(2, TimeUnit.SECONDS)).isEqualTo("星河公司-提案");
+        } finally { singleSqlExecutor.shutdownNow(); }
     }
 }
