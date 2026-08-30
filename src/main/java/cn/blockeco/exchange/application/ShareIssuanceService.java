@@ -25,6 +25,7 @@ import java.util.UUID;
 public final class ShareIssuanceService {
     private static final Duration ANNOUNCEMENT_PERIOD = Duration.ofHours(12);
     private static final Duration VOTING_PERIOD = Duration.ofDays(2);
+    private static final Duration SUBSCRIPTION_PERIOD = Duration.ofDays(2);
 
     private final ShareIssuanceRepository repository;
     private final SecuritiesCashRepository cash;
@@ -98,6 +99,27 @@ public final class ShareIssuanceService {
         return transactions.inTransaction(connection -> advanceDueProposals(connection, now));
     }
 
+    /** Read model used by the public, server-rendered governance screens. */
+    public List<ProposalView> listOpenProposals() {
+        return transactions.inTransaction(connection -> {
+            String sql = "SELECT p.id,c.display_name,p.new_shares,p.issue_price_minor,p.state,p.announced_at,c.total_shares,"
+                    + "COALESCE((SELECT SUM(shares) FROM issuance_record_snapshots s WHERE s.proposal_id=p.id),0),"
+                    + "COALESCE((SELECT SUM(snapshot_shares) FROM issuance_votes v WHERE v.proposal_id=p.id),0),"
+                    + "COALESCE((SELECT SUM(snapshot_shares) FROM issuance_votes v WHERE v.proposal_id=p.id AND v.choice='YES'),0),"
+                    + "COALESCE((SELECT SUM(snapshot_shares) FROM issuance_votes v WHERE v.proposal_id=p.id AND v.choice='NO'),0),"
+                    + "COALESCE((SELECT SUM(snapshot_shares) FROM issuance_votes v WHERE v.proposal_id=p.id AND v.choice='ABSTAIN'),0) "
+                    + "FROM issuance_proposals p JOIN companies c ON c.id=p.company_id "
+                    + "WHERE p.state IN ('ANNOUNCED','VOTING','APPROVED','SUBSCRIBING') ORDER BY p.announced_at DESC";
+            try (PreparedStatement statement = connection.prepareStatement(sql); ResultSet rows = statement.executeQuery()) {
+                List<ProposalView> proposals = new ArrayList<>();
+                while (rows.next()) proposals.add(new ProposalView(UUID.fromString(rows.getString(1)), rows.getString(2), rows.getLong(3),
+                        Money.ofMinor(rows.getLong(4)), IssuanceProposalState.valueOf(rows.getString(5)), Instant.parse(rows.getString(6)),
+                        rows.getLong(7), rows.getLong(8), rows.getLong(9), rows.getLong(10), rows.getLong(11), rows.getLong(12)));
+                return List.copyOf(proposals);
+            }
+        });
+    }
+
     private List<UUID> advanceDueProposals(Connection connection, Instant now) throws SQLException {
         List<UUID> changed = new ArrayList<>();
         for (Proposal proposal : proposalsInState(connection, IssuanceProposalState.ANNOUNCED)) {
@@ -106,11 +128,25 @@ public final class ShareIssuanceService {
                 changed.add(proposal.id);
             }
         }
+        // Approved proposals are promoted on a later scheduler pass.  That makes the
+        // vote result observable before the subscription window opens.
+        for (Proposal proposal : proposalsInState(connection, IssuanceProposalState.APPROVED)) {
+            if (transition(connection, proposal.id, IssuanceProposalState.APPROVED, IssuanceProposalState.SUBSCRIBING)) {
+                changed.add(proposal.id);
+            }
+        }
         for (Proposal proposal : proposalsInState(connection, IssuanceProposalState.VOTING)) {
             if (!now.isBefore(proposal.announcedAt.plus(ANNOUNCEMENT_PERIOD).plus(VOTING_PERIOD))) {
                 ShareIssuanceRepository.VoteTally tally = tally(connection, proposal.id);
                 IssuanceProposalState result = passes(tally) ? IssuanceProposalState.APPROVED : IssuanceProposalState.REJECTED;
                 if (transition(connection, proposal.id, IssuanceProposalState.VOTING, result)) changed.add(proposal.id);
+            }
+        }
+        for (Proposal proposal : proposalsInState(connection, IssuanceProposalState.SUBSCRIBING)) {
+            Instant subscriptionCloses = proposal.announcedAt.plus(ANNOUNCEMENT_PERIOD).plus(VOTING_PERIOD).plus(SUBSCRIPTION_PERIOD);
+            if (!now.isBefore(subscriptionCloses)) {
+                repository.settleSubscription(connection, proposal.id, cash, now);
+                changed.add(proposal.id);
             }
         }
         return List.copyOf(changed);
@@ -174,4 +210,8 @@ public final class ShareIssuanceService {
     private record Proposal(UUID id, Instant announcedAt, IssuanceProposalState state, long issuePriceMinor) {
         private Proposal(UUID id, Instant announcedAt) { this(id, announcedAt, null, 0); }
     }
+
+    public record ProposalView(UUID id, String companyName, long newShares, Money issuePrice, IssuanceProposalState state,
+                               Instant announcedAt, long totalShares, long recordShares, long effectiveShares,
+                               long yesShares, long noShares, long abstainShares) { }
 }

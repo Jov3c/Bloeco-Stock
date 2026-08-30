@@ -95,6 +95,50 @@ class ShareIssuanceServiceTest {
         } finally { Files.deleteIfExists(file); }
     }
 
+    @Test void approvedProposalOpensSubscriptionThenSettlesAtSubscriptionDeadline() throws Exception {
+        Path file = Files.createTempFile("issuance-lifecycle-", ".db");
+        try (Database db = new Database("jdbc:sqlite:" + file)) {
+            db.migrate(); CompanyId company = listedCompany(db); UUID founder = Fixtures.founder(db, company), subscriber = UUID.randomUUID();
+            seedHolding(db, company, founder, 100);
+            MutableClock clock = new MutableClock(); ShareIssuanceService service = service(db, clock);
+            SqlSecuritiesCashRepository cash = new SqlSecuritiesCashRepository(db.dataSource());
+            db.inTransaction(c -> { cash.creditAvailable(c, subscriber, Money.ofMinor(10), clock.now()); return null; });
+            var proposal = service.propose(founder, company, 5, Money.ofMinor(2));
+
+            clock.advance(Duration.ofHours(12)); service.advanceDueProposals();
+            service.vote(founder, proposal.id(), VoteChoice.YES);
+            clock.advance(Duration.ofDays(2)); service.advanceDueProposals();
+            assertThat(state(db, proposal.id())).isEqualTo(IssuanceProposalState.APPROVED);
+
+            assertThat(service.advanceDueProposals()).containsExactly(proposal.id());
+            assertThat(state(db, proposal.id())).isEqualTo(IssuanceProposalState.SUBSCRIBING);
+            service.subscribe(subscriber, proposal.id(), 5, "lifecycle");
+            clock.advance(Duration.ofDays(2));
+
+            assertThat(service.advanceDueProposals()).containsExactly(proposal.id());
+            assertThat(state(db, proposal.id())).isEqualTo(IssuanceProposalState.CLOSED);
+            assertThat(holding(db, company, subscriber)).isEqualTo(5);
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test void publicProposalListIncludesActiveCompanyNameStateAndVotingTotals() throws Exception {
+        Path file = Files.createTempFile("issuance-public-list-", ".db");
+        try (Database db = new Database("jdbc:sqlite:" + file)) {
+            db.migrate(); CompanyId company = listedCompany(db); UUID founder = Fixtures.founder(db, company);
+            seedHolding(db, company, founder, 100); MutableClock clock = new MutableClock(); ShareIssuanceService service = service(db, clock);
+            var proposal = service.propose(founder, company, 25, Money.ofMinor(4));
+            clock.advance(Duration.ofHours(12)); service.advanceDueProposals(); service.vote(founder, proposal.id(), VoteChoice.YES);
+
+            assertThat(service.listOpenProposals()).singleElement().satisfies(view -> {
+                assertThat(view.id()).isEqualTo(proposal.id());
+                assertThat(view.companyName()).isNotBlank();
+                assertThat(view.state()).isEqualTo(IssuanceProposalState.VOTING);
+                assertThat(view.recordShares()).isEqualTo(100);
+                assertThat(view.yesShares()).isEqualTo(100);
+            });
+        } finally { Files.deleteIfExists(file); }
+    }
+
     @Test void subscriptionReservesSecuritiesCashAndDuplicateKeyDoesNotDoubleReserve() throws Exception {
         Path file = Files.createTempFile("issuance-subscribe-cash-", ".db");
         try (Database db = new Database("jdbc:sqlite:" + file)) {

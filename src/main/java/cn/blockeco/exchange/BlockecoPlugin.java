@@ -275,6 +275,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         var issuanceGui = new IssuanceGuiController(this, issuanceService, companyQueries, mainThread, sqlExecutor,
                 runtime::accepting, scale, companyGui, stockGui);
         companyGui.attachIssuanceGui(issuanceGui);
+        stockGui.attachIssuanceGui(issuanceGui);
         getServer().getPluginManager().registerEvents(issuanceGui, this);
         stockCommand = new StockCommand(publicQueries, primaryOfferings, cashService, secondaryMarket, secondaryQueries,
                 mainThread, runtime::accepting, secondaryTradingGate::mutationsOpen, messages, scale, stockGui);

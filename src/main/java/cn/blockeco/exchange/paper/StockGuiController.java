@@ -53,6 +53,7 @@ public final class StockGuiController implements Listener, StockGuiOpener {
     private final int currencyScale;
     private final CompanyGuiOpener companyGui;
     private volatile IpoGuiOpener ipoGui;
+    private volatile IssuanceGuiController issuanceGui;
     private volatile PublicStockQueryService publicQueries;
     private volatile MarketChartQueryService chartQueries;
 
@@ -76,12 +77,14 @@ public final class StockGuiController implements Listener, StockGuiOpener {
         this.mutationsOpen = Objects.requireNonNull(mutationsOpen, "mutationsOpen"); this.messages = Objects.requireNonNull(messages, "messages"); this.currencyScale = currencyScale; this.companyGui=companyGui; this.ipoGui=ipoGui;
     }
 
-    private StockGuiController() { plugin = null; items = null; queries = null; cash = null; trading = null; mainThread = null; accepting = () -> true; mutationsOpen = () -> true; messages = null; currencyScale = 2; companyGui=null; ipoGui=null; }
+    private StockGuiController() { plugin = null; items = null; queries = null; cash = null; trading = null; mainThread = null; accepting = () -> true; mutationsOpen = () -> true; messages = null; currencyScale = 2; companyGui=null; ipoGui=null; issuanceGui=null; }
 
     static StockGuiController forSessionTests() { return new StockGuiController(); }
 
     /** Completes the cyclic GUI wiring after the IPO controller is constructed. */
     public void attachIpoGui(IpoGuiOpener opener) { this.ipoGui = Objects.requireNonNull(opener, "opener"); }
+    /** Makes shareholder voting and new-share subscriptions reachable from the public exchange. */
+    public void attachIssuanceGui(IssuanceGuiController opener) { this.issuanceGui = Objects.requireNonNull(opener, "opener"); }
     public void attachPublicQueries(PublicStockQueryService opener) { this.publicQueries = Objects.requireNonNull(opener, "queries"); }
     /** Connects daily/intraday candle reads after the exchange services are constructed. */
     public void attachChartQueries(MarketChartQueryService queries) { this.chartQueries = Objects.requireNonNull(queries, "queries"); }
@@ -147,6 +150,7 @@ public final class StockGuiController implements Listener, StockGuiOpener {
                 new HomeSlot(15, Material.CHEST, "portfolio", "我的持仓", "查看你持有的股票"),
                 new HomeSlot(20, Material.NETHER_STAR, "company", "公司中心", "创建、资产绑定、IPO 与公告"),
                 new HomeSlot(22, Material.BOOK, "ipo", "公开 IPO", "查看所有公司发行并认购股票"),
+                new HomeSlot(24, Material.WRITABLE_BOOK, "issuance", "增发市场", "查看所有公司增发、投票和认购"),
                 new HomeSlot(29, Material.WRITABLE_BOOK, "orders", "我的委托", "查看和撤销自己的委托"),
                 new HomeSlot(31, Material.EMERALD, "trades", "成交记录", "查看自己的最近成交"),
                 new HomeSlot(33, Material.PAPER, "news", "市场快讯", "查看最近五条蓝筹市场公告"),
@@ -163,6 +167,7 @@ public final class StockGuiController implements Listener, StockGuiOpener {
             case "close" -> closeInventory(player);
             case "help" -> messages.stockHelp(player).forEach(player::sendMessage);
             case "ipo" -> { if (ipoGui == null) player.sendMessage(messages.marketUnavailable()); else ipoGui.openPublic(player); }
+            case "issuance" -> { if (issuanceGui == null) player.sendMessage(messages.marketUnavailable()); else issuanceGui.openPublic(player); }
             case "news" -> openNews(player);
             case "market" -> openMarket(player, 0);
             case "cash" -> openCash(player);
