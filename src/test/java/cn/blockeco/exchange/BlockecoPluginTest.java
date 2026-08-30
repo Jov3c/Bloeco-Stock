@@ -25,8 +25,23 @@ import cn.blockeco.exchange.paper.PublicStockSymbolCache;
 import cn.blockeco.exchange.application.PublicStockQueryService;
 import cn.blockeco.exchange.ports.MainThreadExecutor;
 import cn.blockeco.exchange.application.CompanyFinanceSchedulers;
+import cn.blockeco.exchange.application.IssuanceLifecycleScheduler;
 
 class BlockecoPluginTest {
+
+    @Test
+    void pluginStartsAndStopsIssuanceLifecycleScheduler() {
+        java.util.concurrent.atomic.AtomicInteger polls = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger cancellations = new java.util.concurrent.atomic.AtomicInteger();
+        var scheduler = new IssuanceLifecycleScheduler(task -> { task.run(); return cancellations::incrementAndGet; },
+                polls::incrementAndGet, ignored -> { });
+
+        scheduler.start();
+        scheduler.stop();
+
+        assertThat(polls).hasValue(1);
+        assertThat(cancellations).hasValue(1);
+    }
 
     @Test
     void pluginRegistersOperationsAndMonthlyReportSchedulersAfterStartup() {

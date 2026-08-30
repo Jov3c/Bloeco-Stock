@@ -11,6 +11,8 @@ import cn.blockeco.exchange.application.SecondaryMarketQueryService;
 import cn.blockeco.exchange.application.SecondaryMarketService;
 import cn.blockeco.exchange.application.MarketSessionService;
 import cn.blockeco.exchange.application.IpoLifecycleScheduler;
+import cn.blockeco.exchange.application.IssuanceLifecycleScheduler;
+import cn.blockeco.exchange.application.ShareIssuanceService;
 import cn.blockeco.exchange.application.NativeAssetService;
 import cn.blockeco.exchange.application.BluechipBootstrapService;
 import cn.blockeco.exchange.application.BluechipMarketMakerService;
@@ -36,6 +38,7 @@ import cn.blockeco.exchange.infrastructure.sql.SqlNativeAssetRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlBluechipRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlBluechipBootstrapFundingRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlCompanyOperationsRepository;
+import cn.blockeco.exchange.infrastructure.sql.SqlShareIssuanceRepository;
 import cn.blockeco.exchange.infrastructure.vault.VaultEconomyGateway;
 import cn.blockeco.exchange.infrastructure.vault.VaultSecuritiesCashGateway;
 import cn.blockeco.exchange.infrastructure.vault.VaultTreasuryEscrowGateway;
@@ -56,6 +59,7 @@ import cn.blockeco.exchange.paper.SecondaryTradingGate;
 import cn.blockeco.exchange.paper.StockGuiController;
 import cn.blockeco.exchange.paper.CompanyGuiController;
 import cn.blockeco.exchange.paper.IpoGuiController;
+import cn.blockeco.exchange.paper.IssuanceGuiController;
 import cn.blockeco.exchange.paper.CompanyFinanceGui;
 import cn.blockeco.exchange.paper.OptionalAssetAdapterLoader;
 import cn.blockeco.exchange.paper.BluechipConfig;
@@ -89,6 +93,7 @@ public final class BlockecoPlugin extends JavaPlugin {
     private final PluginRuntime runtime = new PluginRuntime();
     private final CompanyAssetAdapterRegistry assetAdapterRegistry = new CompanyAssetAdapterRegistryImpl();
     private IpoLifecycleScheduler ipoLifecycle;
+    private IssuanceLifecycleScheduler issuanceLifecycle;
     private org.bukkit.scheduler.BukkitTask marketSessionTransitions;
     private SecondaryTradingGate secondaryTradingGate;
     private BluechipSchedulers bluechipSchedulers;
@@ -201,6 +206,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         var cashGateway = new VaultSecuritiesCashGateway(economy, mainThread, escrowId);
         secondaryTradingGate = new SecondaryTradingGate();
         var cashService = new SecuritiesCashService(cashRepository, db, cashGateway, sqlExecutor, clock, Duration.ofSeconds(15), secondaryTradingGate::mutationsOpen);
+        var issuanceService = new ShareIssuanceService(new SqlShareIssuanceRepository(db.dataSource()), cashRepository, db, clock);
         java.util.function.Supplier<cn.blockeco.exchange.domain.market.MarketSession> marketSession = () -> cn.blockeco.exchange.domain.market.MarketSession.at(clock.now(), marketZone);
         var secondaryMarket = new SecondaryMarketService(tradingRepository, db, sqlExecutor, clock, feeBps, marketSession);
         var marketSessions = new MarketSessionService(secondaryMarket, tradingRepository, db, sqlExecutor, clock, marketZone, marketSession);
@@ -266,6 +272,10 @@ public final class BlockecoPlugin extends JavaPlugin {
         stockGui.attachIpoGui(ipoGui);
         companyGui.attachIpoGui(ipoGui);
         getServer().getPluginManager().registerEvents(ipoGui, this);
+        var issuanceGui = new IssuanceGuiController(this, issuanceService, companyQueries, mainThread, sqlExecutor,
+                runtime::accepting, scale, companyGui, stockGui);
+        companyGui.attachIssuanceGui(issuanceGui);
+        getServer().getPluginManager().registerEvents(issuanceGui, this);
         stockCommand = new StockCommand(publicQueries, primaryOfferings, cashService, secondaryMarket, secondaryQueries,
                 mainThread, runtime::accepting, secondaryTradingGate::mutationsOpen, messages, scale, stockGui);
         var stock = getCommand("stock");
@@ -288,6 +298,12 @@ public final class BlockecoPlugin extends JavaPlugin {
                                     + (staleFailure == null ? count : "failed"))));
                     ipoLifecycle = new IpoLifecycleScheduler(task -> { var bukkitTask=getServer().getScheduler().runTaskTimerAsynchronously(this,task,20L,1200L); return bukkitTask::cancel; }, clock::now, primaryOfferings, failure -> getLogger().warning("IPO 状态调度失败，将在下个周期重试: " + failure.getMessage()), ignoredClose -> refreshSymbolsIfAccepting(runtime, symbols, publicQueries, error -> getLogger().warning("股票代码缓存刷新失败，将在下个周期重试: " + error.getMessage())));
                     ipoLifecycle.start();
+                    issuanceLifecycle = new IssuanceLifecycleScheduler(task -> {
+                        var bukkitTask = getServer().getScheduler().runTaskTimerAsynchronously(this, task, 20L, 1200L);
+                        return bukkitTask::cancel;
+                    }, issuanceService::advanceDueProposals,
+                            failure -> getLogger().warning("增发投票状态调度失败，将在下个周期重试: " + failure.getMessage()));
+                    issuanceLifecycle.start();
                     marketSessionTransitions = getServer().getScheduler().runTaskTimerAsynchronously(this,
                             () -> marketSessions.onSessionTransition().exceptionally(failure -> { getLogger().warning("股票交易时段调度失败，将在下个周期重试: " + failure.getMessage()); return 0; }), 20L, 20L);
                     bluechipSchedulers = new BluechipSchedulers((task, initial, period) -> {
@@ -335,6 +351,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         if (companyFinanceSchedulers != null) companyFinanceSchedulers.stop();
         if (bluechipSchedulers != null) bluechipSchedulers.stop();
         if (ipoLifecycle != null) ipoLifecycle.stop();
+        if (issuanceLifecycle != null) issuanceLifecycle.stop();
         if (marketSessionTransitions != null) marketSessionTransitions.cancel();
         getServer().getServicesManager().unregisterAll(this);
         runtime.stop();
