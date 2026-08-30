@@ -67,7 +67,7 @@ class SqlCompanyExitRepositoryTest {
             CompanyGovernanceAction action = fixture.action(GovernanceActionType.FOUNDER_CASH_OUT);
             CompanyPayoutOperation payout = new CompanyPayoutOperation(UUID.randomUUID(), fixture.companyId, action.id(),
                     UUID.randomUUID(), 70, "vault:cashout:1", PayoutOperationState.PREPARED, NOW, NOW, null);
-            fixture.database.inTransaction(connection -> { repository.createAction(connection, action, "套现公告", NOW); repository.createPayout(connection, payout); return null; });
+            fixture.database.inTransaction(connection -> { repository.createAction(connection, action, "套现公告", NOW); repository.transitionAction(connection, action.id(), GovernanceActionState.ANNOUNCED, GovernanceActionState.EXECUTION_READY, NOW); repository.transitionAction(connection, action.id(), GovernanceActionState.EXECUTION_READY, GovernanceActionState.EXECUTING, NOW); repository.createPayout(connection, payout); return null; });
 
             boolean moved = fixture.database.inTransaction(connection -> repository.transitionPayout(connection, payout.id(),
                     PayoutOperationState.PREPARED, PayoutOperationState.AMBIGUOUS, "Vault 超时", NOW));
@@ -78,6 +78,31 @@ class SqlCompanyExitRepositoryTest {
                     UUID.randomUUID(), 1, "vault:cashout:1", PayoutOperationState.PREPARED, NOW, NOW, null);
             assertThatThrownBy(() -> fixture.database.inTransaction(connection -> { repository.createPayout(connection, duplicate); return null; }))
                     .isInstanceOf(IllegalStateException.class);
+        }
+    }
+
+    @Test
+    void completesConfirmedCompanyPayoutWithLinkedLedgerAndNoSecuritiesForeignKeyViolation() throws Exception {
+        try (Fixture fixture = Fixture.create()) {
+            CompanyExitRepository repository = new SqlCompanyExitRepository(fixture.database.dataSource());
+            CompanyGovernanceAction action = fixture.action(GovernanceActionType.FOUNDER_CASH_OUT);
+            CompanyPayoutOperation payout = new CompanyPayoutOperation(UUID.randomUUID(), fixture.companyId, action.id(), fixture.founder,
+                    70, "vault:cashout:complete", PayoutOperationState.PREPARED, NOW, NOW, null);
+            fixture.database.inTransaction(connection -> {
+                repository.createAction(connection, action, "套现公告", NOW);
+                repository.transitionAction(connection, action.id(), GovernanceActionState.ANNOUNCED, GovernanceActionState.EXECUTION_READY, NOW);
+                repository.transitionAction(connection, action.id(), GovernanceActionState.EXECUTION_READY, GovernanceActionState.EXECUTING, NOW);
+                assertThat(repository.reserveCompanyCash(connection, fixture.companyId, 70)).isTrue();
+                repository.createPayout(connection, payout);
+                assertThat(repository.transitionPayout(connection, payout.id(), PayoutOperationState.PREPARED, PayoutOperationState.EXTERNAL_DEBIT_CONFIRMED, "Vault 已付款", NOW)).isTrue();
+                assertThat(repository.completePayout(connection, payout.id(), NOW)).isTrue();
+                return null;
+            });
+            assertThat(fixture.cash()).containsExactly(30L, 0L);
+            assertThat(fixture.count("company_payout_ledger_links")).isEqualTo(1);
+            assertThat(repository.findAction(action.id())).isPresent();
+            assertThatThrownBy(() -> fixture.database.inTransaction(connection -> repository.transitionPayout(connection, payout.id(), PayoutOperationState.COMPLETED, PayoutOperationState.PREPARED, "非法", NOW)))
+                    .isInstanceOf(IllegalArgumentException.class);
         }
     }
 
@@ -115,9 +140,9 @@ class SqlCompanyExitRepositoryTest {
             });
 
             boolean first = fixture.database.inTransaction(connection -> repository.acceptBuyback(
-                    connection, action.id(), fixture.companyId, shareholder, 10, 70, "buyback:accept:1", securitiesCash, NOW));
+                    connection, action.id(), fixture.companyId, shareholder, 10, "buyback:accept:1", securitiesCash, NOW));
             boolean duplicate = fixture.database.inTransaction(connection -> repository.acceptBuyback(
-                    connection, action.id(), fixture.companyId, shareholder, 10, 70, "buyback:accept:1", securitiesCash, NOW));
+                    connection, action.id(), fixture.companyId, shareholder, 10, "buyback:accept:1", securitiesCash, NOW));
 
             assertThat(first).isTrue();
             assertThat(duplicate).isFalse();

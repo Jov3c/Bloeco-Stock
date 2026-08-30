@@ -31,7 +31,7 @@ public interface CompanyExitRepository {
      * securities account, and transfers the shares into the company's internal treasury holding.
      */
     boolean acceptBuyback(Connection connection, UUID actionId, CompanyId companyId, UUID shareholderId, long shares,
-                          long amountMinor, String correlationKey, SecuritiesCashRepository securitiesCash,
+                          String correlationKey, SecuritiesCashRepository securitiesCash,
                           Instant acceptedAt) throws SQLException;
     List<CompanyPayoutOperation> recoverablePayouts(int limit);
     List<UUID> activeOrderIds(Connection connection, CompanyId companyId, UUID afterOrderId, int limit) throws SQLException;
