@@ -63,4 +63,11 @@ class IssuanceGuiControllerTest {
             assertThat(result.toCompletableFuture().get(2, TimeUnit.SECONDS)).isEqualTo("星河公司-提案");
         } finally { singleSqlExecutor.shutdownNow(); }
     }
+
+    @Test
+    void publicProposalPaginationCanAdvanceBeyondSecondPage() {
+        assertThat(IssuanceGuiController.nextPage(1)).isEqualTo(2);
+        assertThat(IssuanceGuiController.previousPage(2)).isEqualTo(1);
+        assertThat(IssuanceGuiController.previousPage(0)).isZero();
+    }
 }
