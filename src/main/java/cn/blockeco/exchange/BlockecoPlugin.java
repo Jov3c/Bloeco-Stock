@@ -209,7 +209,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         var bluechipRepository = new SqlBluechipRepository(db.dataSource());
         var cashGateway = new VaultSecuritiesCashGateway(economy, mainThread, escrowId);
         var capitalActions = new CompanyCapitalActionService(companies, new SqlCompanyExitRepository(db.dataSource()), cashRepository, db,
-                new VaultCompanyPayoutGateway(economy, mainThread), clock,
+                new VaultCompanyPayoutGateway(escrow), clock,
                 () -> configuredMoney("company.capital-actions.maximum-founder-cashout", scale).minorUnits());
         secondaryTradingGate = new SecondaryTradingGate();
         var cashService = new SecuritiesCashService(cashRepository, db, cashGateway, sqlExecutor, clock, Duration.ofSeconds(15), secondaryTradingGate::mutationsOpen);
