@@ -49,7 +49,8 @@ class CompanyTabCompleterTest {
         MutableCompanyCreationRules live = new MutableCompanyCreationRules(new CompanyCreationRules(Money.ofMinor(1), Money.ofMinor(2), 0, 1_000, List.of(50)));
         StockAdminConfigCommand tab = new StockAdminConfigCommand(live, mock(StockAdminConfigCommand.ConfigStore.class), mock(cn.blockeco.exchange.ports.AuditLog.class), new TransactionRunner() { @Override public <T> T inTransaction(SqlWork<T> work) { throw new AssertionError(); } }, Runnable::run, java.time.Instant::now, new Messages(null));
         assertThat(tab.complete(playerWith("blockstock.admin.config"), new String[] {""})).containsExactly("config");
-        assertThat(tab.complete(playerWith("blockstock.admin.config"), new String[] {"config", ""})).containsExactly("min-capital");
+        assertThat(tab.complete(playerWith("blockstock.admin.config"), new String[] {"config", ""}))
+                .containsExactly("min-capital", "cashout-limit");
         assertThat(tab.complete(mock(CommandSender.class), new String[] {""})).isEmpty();
     }
 
