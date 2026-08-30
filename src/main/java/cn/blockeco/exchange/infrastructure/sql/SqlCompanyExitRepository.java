@@ -7,6 +7,10 @@ import cn.blockeco.exchange.domain.governance.GovernanceActionState;
 import cn.blockeco.exchange.domain.governance.GovernanceActionType;
 import cn.blockeco.exchange.domain.governance.OrderReleaseProgress;
 import cn.blockeco.exchange.domain.governance.PayoutOperationState;
+import cn.blockeco.exchange.domain.governance.CompanyExitSnapshot;
+import cn.blockeco.exchange.domain.governance.CompanyLiquidationClaim;
+import cn.blockeco.exchange.domain.governance.LiquidationClaimState;
+import cn.blockeco.exchange.domain.company.CompanyStatus;
 import cn.blockeco.exchange.ports.CompanyExitRepository;
 import cn.blockeco.exchange.ports.SecuritiesCashRepository;
 import cn.blockeco.exchange.domain.money.Money;
@@ -69,6 +73,13 @@ public final class SqlCompanyExitRepository implements CompanyExitRepository {
         try (Connection connection = dataSource.getConnection(); PreparedStatement statement = connection.prepareStatement("SELECT * FROM company_governance_actions WHERE id=?")) {
             statement.setString(1, actionId.toString()); try (ResultSet rows = statement.executeQuery()) { return rows.next() ? Optional.of(action(rows)) : Optional.empty(); }
         } catch (SQLException exception) { throw new IllegalStateException("could not read governance action", exception); }
+    }
+
+    @Override public List<CompanyGovernanceAction> activeBuybacks(CompanyId companyId) {
+        Objects.requireNonNull(companyId, "companyId");
+        try (Connection connection=dataSource.getConnection(); PreparedStatement statement=connection.prepareStatement("SELECT * FROM company_governance_actions WHERE company_id=? AND action_type='BUYBACK' AND state IN ('ANNOUNCED','EXECUTION_READY','EXECUTING') ORDER BY announced_at,id")) {
+            statement.setString(1,companyId.value().toString()); try(ResultSet rows=statement.executeQuery()){List<CompanyGovernanceAction> actions=new ArrayList<>();while(rows.next())actions.add(action(rows));return List.copyOf(actions);}
+        } catch(SQLException exception) { throw new IllegalStateException("could not read active buybacks",exception); }
     }
 
     @Override
@@ -219,13 +230,111 @@ public final class SqlCompanyExitRepository implements CompanyExitRepository {
     @Override
     public Optional<OrderReleaseProgress> orderReleaseProgress(UUID actionId) {
         Objects.requireNonNull(actionId, "actionId");
-        try (Connection connection = dataSource.getConnection(); PreparedStatement statement = connection.prepareStatement("SELECT last_released_order_id,released_orders,complete,updated_at FROM company_order_release_progress WHERE governance_action_id=?")) {
+        try (Connection connection = dataSource.getConnection()) { return readOrderReleaseProgress(connection, actionId); }
+        catch (SQLException exception) { throw new IllegalStateException("could not read order release progress", exception); }
+    }
+
+    @Override public Optional<OrderReleaseProgress> orderReleaseProgress(Connection connection, UUID actionId) throws SQLException {
+        requireTransaction(connection); Objects.requireNonNull(actionId,"actionId");
+        return readOrderReleaseProgress(connection, actionId);
+    }
+
+    private static Optional<OrderReleaseProgress> readOrderReleaseProgress(Connection connection, UUID actionId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT last_released_order_id,released_orders,complete,updated_at FROM company_order_release_progress WHERE governance_action_id=?")) {
             statement.setString(1, actionId.toString()); try (ResultSet rows = statement.executeQuery()) {
                 if (!rows.next()) return Optional.empty(); String last = rows.getString(1);
                 return Optional.of(new OrderReleaseProgress(actionId, Optional.ofNullable(last).map(UUID::fromString), rows.getLong(2), rows.getInt(3) != 0, Instant.parse(rows.getString(4))));
             }
-        } catch (SQLException exception) { throw new IllegalStateException("could not read order release progress", exception); }
+        }
     }
+
+    @Override
+    public boolean transitionCompanyStatus(Connection connection, CompanyId companyId, CompanyStatus expected, CompanyStatus next) throws SQLException {
+        requireTransaction(connection); Objects.requireNonNull(companyId, "companyId");
+        if (!((expected == CompanyStatus.LISTED && next == CompanyStatus.DELISTING)
+                || (expected == CompanyStatus.DELISTING && next == CompanyStatus.LIQUIDATING)
+                || (expected == CompanyStatus.LIQUIDATING && next == CompanyStatus.DELISTED))) {
+            throw new IllegalArgumentException("illegal company exit status transition: " + expected + " -> " + next);
+        }
+        try (PreparedStatement statement = connection.prepareStatement("UPDATE companies SET status=? WHERE id=? AND status=?")) {
+            statement.setString(1, next.name()); statement.setString(2, companyId.value().toString()); statement.setString(3, expected.name());
+            return statement.executeUpdate() == 1;
+        }
+    }
+
+    @Override public boolean hasCompanyStatus(Connection connection, CompanyId companyId, CompanyStatus status) throws SQLException {
+        requireTransaction(connection); try (PreparedStatement statement=connection.prepareStatement("SELECT 1 FROM companies WHERE id=? AND status=?")) { statement.setString(1,companyId.value().toString());statement.setString(2,status.name());try(ResultSet rows=statement.executeQuery()){return rows.next();} }
+    }
+
+    @Override
+    public List<CompanyExitSnapshot> createExitSnapshots(Connection connection, UUID actionId, CompanyId companyId, Instant snapshottedAt) throws SQLException {
+        requireTransaction(connection); Objects.requireNonNull(actionId, "actionId"); Objects.requireNonNull(companyId, "companyId"); Objects.requireNonNull(snapshottedAt, "snapshottedAt");
+        if (activeOrderIds(connection, companyId, null, 1).size() != 0) throw new IllegalStateException("active orders must be released before snapshot");
+        if (exitSnapshots(connection, actionId).isEmpty()) {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    INSERT INTO company_exit_snapshots (governance_action_id,company_id,holder_uuid,available_shares,reserved_shares,snapshotted_at)
+                    SELECT ?,company_id,holder_uuid,available_shares,reserved_shares,?
+                    FROM share_holdings WHERE company_id=? AND holder_uuid<>? AND available_shares+reserved_shares>0
+                    ORDER BY holder_uuid
+                    """)) {
+                statement.setString(1, actionId.toString()); statement.setString(2, snapshottedAt.toString());
+                statement.setString(3, companyId.value().toString()); statement.setString(4, companyId.value().toString()); statement.executeUpdate();
+            }
+        }
+        return exitSnapshots(connection, actionId);
+    }
+
+    @Override public List<CompanyExitSnapshot> exitSnapshots(UUID actionId) { try (Connection c=dataSource.getConnection()) { return exitSnapshots(c, actionId); } catch (SQLException e) { throw new IllegalStateException("could not read exit snapshots", e); } }
+
+    @Override
+    public List<CompanyLiquidationClaim> createLiquidationClaims(Connection connection, UUID actionId, long pricePerShareMinor, Instant createdAt) throws SQLException {
+        requireTransaction(connection); Objects.requireNonNull(actionId, "actionId"); Objects.requireNonNull(createdAt, "createdAt"); requirePositive(pricePerShareMinor);
+        List<CompanyLiquidationClaim> existing = claims(connection, actionId); if (!existing.isEmpty()) return existing;
+        CompanyId company = actionCompany(connection, actionId);
+        long companyRemaining = companyCash(connection, company); long fundRemaining = compensationFund(connection);
+        for (CompanyExitSnapshot snapshot : exitSnapshots(connection, actionId)) {
+            long entitlement = Math.multiplyExact(snapshot.totalShares(), pricePerShareMinor);
+            long companyPart = Math.min(entitlement, companyRemaining); companyRemaining = Math.subtractExact(companyRemaining, companyPart);
+            long fundPart = Math.min(Math.subtractExact(entitlement, companyPart), fundRemaining); fundRemaining = Math.subtractExact(fundRemaining, fundPart);
+            try (PreparedStatement insert = connection.prepareStatement("INSERT INTO company_liquidation_claims (governance_action_id,holder_uuid,shares,entitlement_minor,company_contribution_minor,fund_contribution_minor,state,created_at,updated_at) VALUES (?,?,?,?,?,?, 'PENDING',?,?)")) {
+                insert.setString(1,actionId.toString()); insert.setString(2,snapshot.holderUuid().toString()); insert.setLong(3,snapshot.totalShares()); insert.setLong(4,Math.addExact(companyPart,fundPart)); insert.setLong(5,companyPart); insert.setLong(6,fundPart); insert.setString(7,createdAt.toString()); insert.setString(8,createdAt.toString()); insert.executeUpdate();
+            }
+        }
+        return claims(connection, actionId);
+    }
+
+    @Override public List<CompanyLiquidationClaim> liquidationClaims(UUID actionId) { try (Connection c=dataSource.getConnection()) { return claims(c, actionId); } catch (SQLException e) { throw new IllegalStateException("could not read liquidation claims", e); } }
+    @Override public List<CompanyLiquidationClaim> liquidationClaims(Connection connection, UUID actionId) throws SQLException { requireTransaction(connection); return claims(connection, actionId); }
+
+    @Override
+    public boolean creditLiquidationClaim(Connection connection, UUID actionId, UUID holderId, SecuritiesCashRepository securitiesCash, Instant creditedAt) throws SQLException {
+        requireTransaction(connection); Objects.requireNonNull(actionId,"actionId"); Objects.requireNonNull(holderId,"holderId"); Objects.requireNonNull(securitiesCash,"securitiesCash"); Objects.requireNonNull(creditedAt,"creditedAt");
+        CompanyLiquidationClaim claim = claim(connection, actionId, holderId);
+        if (claim.state() == LiquidationClaimState.CREDITED) return false;
+        if (claim.state() != LiquidationClaimState.PENDING) throw new IllegalStateException("claim is not pending");
+        CompanyId company = actionCompany(connection, actionId);
+        if (claim.companyContributionMinor() > 0) debitCompanyCash(connection, company, claim.companyContributionMinor(), creditedAt);
+        if (claim.fundContributionMinor() > 0) debitCompensationFund(connection, claim.fundContributionMinor(), creditedAt);
+        if (claim.entitlementMinor() > 0) securitiesCash.creditAvailable(connection, holderId, Money.ofMinor(claim.entitlementMinor()), creditedAt);
+        try (PreparedStatement update=connection.prepareStatement("UPDATE company_liquidation_claims SET state='CREDITED',updated_at=? WHERE governance_action_id=? AND holder_uuid=? AND state='PENDING'")) {
+            update.setString(1,creditedAt.toString());update.setString(2,actionId.toString());update.setString(3,holderId.toString());if(update.executeUpdate()!=1)throw new IllegalStateException("liquidation claim state conflict");
+        }
+        audit(connection, company, holderId, "COMPANY_LIQUIDATION_CREDITED", "{\"actionId\":\""+actionId+"\",\"amountMinor\":"+claim.entitlementMinor()+"}", creditedAt);
+        return true;
+    }
+
+    private static List<CompanyExitSnapshot> exitSnapshots(Connection connection, UUID actionId) throws SQLException {
+        try (PreparedStatement statement=connection.prepareStatement("SELECT governance_action_id,company_id,holder_uuid,available_shares,reserved_shares,snapshotted_at FROM company_exit_snapshots WHERE governance_action_id=? ORDER BY holder_uuid")) { statement.setString(1,actionId.toString()); try(ResultSet rows=statement.executeQuery()){ List<CompanyExitSnapshot> out=new ArrayList<>(); while(rows.next())out.add(new CompanyExitSnapshot(UUID.fromString(rows.getString(1)),new CompanyId(UUID.fromString(rows.getString(2))),UUID.fromString(rows.getString(3)),rows.getLong(4),rows.getLong(5),Instant.parse(rows.getString(6)))); return List.copyOf(out); } }
+    }
+    private static List<CompanyLiquidationClaim> claims(Connection connection, UUID actionId) throws SQLException {
+        try (PreparedStatement statement=connection.prepareStatement("SELECT * FROM company_liquidation_claims WHERE governance_action_id=? ORDER BY holder_uuid")) { statement.setString(1,actionId.toString()); try(ResultSet rows=statement.executeQuery()){ List<CompanyLiquidationClaim> out=new ArrayList<>();while(rows.next())out.add(new CompanyLiquidationClaim(UUID.fromString(rows.getString("governance_action_id")),UUID.fromString(rows.getString("holder_uuid")),rows.getLong("shares"),rows.getLong("entitlement_minor"),rows.getLong("company_contribution_minor"),rows.getLong("fund_contribution_minor"),LiquidationClaimState.valueOf(rows.getString("state")),Instant.parse(rows.getString("created_at")),Instant.parse(rows.getString("updated_at"))));return List.copyOf(out);}}
+    }
+    private static CompanyLiquidationClaim claim(Connection connection, UUID actionId, UUID holderId) throws SQLException { return claims(connection,actionId).stream().filter(c->c.holderUuid().equals(holderId)).findFirst().orElseThrow(()->new IllegalArgumentException("liquidation claim missing")); }
+    private static CompanyId actionCompany(Connection connection, UUID actionId) throws SQLException { try(PreparedStatement statement=connection.prepareStatement("SELECT company_id FROM company_governance_actions WHERE id=? AND action_type IN ('VOLUNTARY_DELIST','FORCED_DELIST')")){statement.setString(1,actionId.toString());try(ResultSet rows=statement.executeQuery()){if(!rows.next())throw new IllegalArgumentException("delisting action missing");return new CompanyId(UUID.fromString(rows.getString(1)));}} }
+    private static long companyCash(Connection connection, CompanyId company) throws SQLException {try(PreparedStatement statement=connection.prepareStatement("SELECT cash_minor FROM company_cash_accounts WHERE company_id=?")){statement.setString(1,company.value().toString());try(ResultSet rows=statement.executeQuery()){if(!rows.next())throw new IllegalStateException("company cash account missing");return rows.getLong(1);}}}
+    private static long compensationFund(Connection connection) throws SQLException {try(PreparedStatement statement=connection.prepareStatement("SELECT balance_minor FROM compensation_fund WHERE singleton=1");ResultSet rows=statement.executeQuery()){if(!rows.next())throw new IllegalStateException("compensation fund missing");return rows.getLong(1);}}
+    private static void debitCompanyCash(Connection connection, CompanyId company,long amount,Instant at)throws SQLException {try(PreparedStatement statement=connection.prepareStatement("UPDATE company_cash_accounts SET cash_minor=cash_minor-? WHERE company_id=? AND cash_minor>=?")){statement.setLong(1,amount);statement.setString(2,company.value().toString());statement.setLong(3,amount);if(statement.executeUpdate()!=1)throw new IllegalStateException("company liquidation cash changed");}ledger(connection,company,-amount,at);}
+    private static void debitCompensationFund(Connection connection,long amount,Instant at)throws SQLException {try(PreparedStatement statement=connection.prepareStatement("UPDATE compensation_fund SET balance_minor=balance_minor-? WHERE singleton=1 AND balance_minor>=?")){statement.setLong(1,amount);statement.setLong(2,amount);if(statement.executeUpdate()!=1)throw new IllegalStateException("compensation fund changed");}try(PreparedStatement statement=connection.prepareStatement("INSERT INTO escrow_ledger_entries (id,liability_kind,company_id,player_uuid,amount_minor,operation_id,trade_id,occurred_at) VALUES (?,'COMPENSATION_FUND',NULL,NULL,?,NULL,NULL,?)")){statement.setString(1,UUID.randomUUID().toString());statement.setLong(2,-amount);statement.setString(3,at.toString());statement.executeUpdate();}}
 
     private static CompanyGovernanceAction action(ResultSet row) throws SQLException {
         return new CompanyGovernanceAction(UUID.fromString(row.getString("id")), new CompanyId(UUID.fromString(row.getString("company_id"))), UUID.fromString(row.getString("actor_uuid")),

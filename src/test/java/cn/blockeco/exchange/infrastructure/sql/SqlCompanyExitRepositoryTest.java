@@ -155,6 +155,38 @@ class SqlCompanyExitRepositoryTest {
     }
 
     @Test
+    void preventsSnapshotActionCompanyMismatchAndClaimFactMutation() throws Exception {
+        try (Fixture fixture = Fixture.create()) {
+            CompanyExitRepository repository = new SqlCompanyExitRepository(fixture.database.dataSource());
+            CompanyGovernanceAction action = fixture.action(GovernanceActionType.VOLUNTARY_DELIST);
+            UUID holder = UUID.randomUUID();
+            fixture.database.inTransaction(connection -> { repository.createAction(connection, action, "退市公告", NOW); fixture.insertHolding(connection, holder, 3); return null; });
+
+            assertThatThrownBy(() -> fixture.database.inTransaction(connection -> {
+                try (PreparedStatement s=connection.prepareStatement("INSERT INTO company_exit_snapshots VALUES (?,?,?,?,?,?)")) {
+                    s.setString(1,action.id().toString());s.setString(2,UUID.randomUUID().toString());s.setString(3,holder.toString());s.setLong(4,3);s.setLong(5,0);s.setString(6,NOW.toString());s.executeUpdate();
+                } return null;
+            })).isInstanceOf(IllegalStateException.class);
+
+            fixture.database.inTransaction(connection -> { repository.createExitSnapshots(connection,action.id(),fixture.companyId,NOW); repository.createLiquidationClaims(connection,action.id(),1,NOW); return null; });
+            assertThatThrownBy(() -> fixture.database.inTransaction(connection -> {
+                try (PreparedStatement s=connection.prepareStatement("UPDATE company_liquidation_claims SET shares=4 WHERE governance_action_id=? AND holder_uuid=?")) {s.setString(1,action.id().toString());s.setString(2,holder.toString());s.executeUpdate();} return null;
+            })).isInstanceOf(IllegalStateException.class);
+        }
+    }
+
+    @Test
+    void returnsOnlyNonTerminalBuybacksForCompany() throws Exception {
+        try (Fixture fixture = Fixture.create()) {
+            CompanyExitRepository repository = new SqlCompanyExitRepository(fixture.database.dataSource());
+            CompanyGovernanceAction active=fixture.action(GovernanceActionType.BUYBACK);
+            CompanyGovernanceAction terminal=fixture.action(GovernanceActionType.BUYBACK);
+            fixture.database.inTransaction(connection->{repository.createAction(connection,active,"回购",NOW);repository.createAction(connection,terminal,"回购",NOW);repository.transitionAction(connection,terminal.id(),GovernanceActionState.ANNOUNCED,GovernanceActionState.EXECUTION_READY,NOW);repository.transitionAction(connection,terminal.id(),GovernanceActionState.EXECUTION_READY,GovernanceActionState.EXECUTING,NOW);repository.transitionAction(connection,terminal.id(),GovernanceActionState.EXECUTING,GovernanceActionState.EXECUTED,NOW);return null;});
+            assertThat(repository.activeBuybacks(fixture.companyId)).extracting(CompanyGovernanceAction::id).containsExactly(active.id());
+        }
+    }
+
+    @Test
     void settlesOnlyOneVoluntaryBuybackAcceptanceAndKeepsCompanyCashReservedUntilSettlement() throws Exception {
         try (Fixture fixture = Fixture.create()) {
             CompanyExitRepository repository = new SqlCompanyExitRepository(fixture.database.dataSource());

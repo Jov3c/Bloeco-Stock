@@ -6,6 +6,9 @@ import cn.blockeco.exchange.domain.governance.CompanyPayoutOperation;
 import cn.blockeco.exchange.domain.governance.GovernanceActionState;
 import cn.blockeco.exchange.domain.governance.OrderReleaseProgress;
 import cn.blockeco.exchange.domain.governance.PayoutOperationState;
+import cn.blockeco.exchange.domain.governance.CompanyExitSnapshot;
+import cn.blockeco.exchange.domain.governance.CompanyLiquidationClaim;
+import cn.blockeco.exchange.domain.company.CompanyStatus;
 import cn.blockeco.exchange.ports.SecuritiesCashRepository;
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -19,6 +22,8 @@ public interface CompanyExitRepository {
     void createAction(Connection connection, CompanyGovernanceAction action, String announcementBody, Instant recordedAt) throws SQLException;
     boolean transitionAction(Connection connection, UUID actionId, GovernanceActionState expected, GovernanceActionState next, Instant updatedAt) throws SQLException;
     Optional<CompanyGovernanceAction> findAction(UUID actionId);
+    /** Read model for the shareholder buyback page; terminal actions are intentionally omitted. */
+    List<CompanyGovernanceAction> activeBuybacks(CompanyId companyId);
     void createPayout(Connection connection, CompanyPayoutOperation payout) throws SQLException;
     boolean transitionPayout(Connection connection, UUID payoutId, PayoutOperationState expected, PayoutOperationState next, String detail, Instant updatedAt) throws SQLException;
     /** Reserves authoritative company cash; it never reads legacy companies.treasury_minor. */
@@ -42,4 +47,14 @@ public interface CompanyExitRepository {
     List<UUID> activeOrderIds(Connection connection, CompanyId companyId, UUID afterOrderId, int limit) throws SQLException;
     void recordOrderReleaseProgress(Connection connection, UUID actionId, UUID lastReleasedOrderId, long releasedOrders, boolean complete, Instant updatedAt) throws SQLException;
     Optional<OrderReleaseProgress> orderReleaseProgress(UUID actionId);
+    Optional<OrderReleaseProgress> orderReleaseProgress(Connection connection, UUID actionId) throws SQLException;
+    boolean transitionCompanyStatus(Connection connection, CompanyId companyId, CompanyStatus expected, CompanyStatus next) throws SQLException;
+    boolean hasCompanyStatus(Connection connection, CompanyId companyId, CompanyStatus status) throws SQLException;
+    List<CompanyExitSnapshot> createExitSnapshots(Connection connection, UUID actionId, CompanyId companyId, Instant snapshottedAt) throws SQLException;
+    List<CompanyExitSnapshot> exitSnapshots(UUID actionId);
+    List<CompanyLiquidationClaim> createLiquidationClaims(Connection connection, UUID actionId, long pricePerShareMinor, Instant createdAt) throws SQLException;
+    List<CompanyLiquidationClaim> liquidationClaims(UUID actionId);
+    List<CompanyLiquidationClaim> liquidationClaims(Connection connection, UUID actionId) throws SQLException;
+    /** Credits one pending claim and applies its already-fixed company/fund contributions exactly once. */
+    boolean creditLiquidationClaim(Connection connection, UUID actionId, UUID holderId, SecuritiesCashRepository securitiesCash, Instant creditedAt) throws SQLException;
 }
