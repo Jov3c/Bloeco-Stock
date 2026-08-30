@@ -133,6 +133,9 @@ bluechips:
     event-sensitivity-bps: 100
     dividend-payout-bps: 2000
 company:
+  capital-actions:
+    # 单次创始人套现上限；0 为安全默认值，表示禁用。管理员可用 /stockadmin config cashout-limit <金额> 修改。
+    maximum-founder-cashout: '0.00'
   finance:
     # 已验证经营事件的轮询周期（分钟）；月报仍固定每小时检查一次。
     operations-ingestion-minutes: 5

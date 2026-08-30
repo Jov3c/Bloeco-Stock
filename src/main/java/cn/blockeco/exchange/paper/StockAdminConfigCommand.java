@@ -18,13 +18,14 @@ import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
 import org.bukkit.entity.Player;
+import net.kyori.adventure.text.Component;
 
 /** Administrative runtime configuration for the single mutable company creation rule. */
 public final class StockAdminConfigCommand implements CommandExecutor, TabCompleter {
     static final String PERMISSION = "blockstock.admin.config";
     static final String RECOVERY_PERMISSION = "blockeco.admin.recovery";
     private final MutableCompanyCreationRules rules; private final ConfigStore config; private final AuditLog audit;
-    public interface ConfigStore { void persistMinimumCapital(String value) throws java.io.IOException; }
+    public interface ConfigStore { void persistMinimumCapital(String value) throws java.io.IOException; default void persistFounderCashOutMaximum(String value) throws java.io.IOException { throw new UnsupportedOperationException("cash-out limit persistence unavailable"); } }
     private final TransactionRunner transactions; private final Executor sql; private final AppClock clock; private final Messages messages; private final MainThreadExecutor main; private final RecoveryInspector recovery;
     public interface RecoveryInspector { CompletionStage<cn.blockeco.exchange.application.SecondaryMarketRecoveryService.RecoverySnapshot> inspect(); }
     public StockAdminConfigCommand(MutableCompanyCreationRules rules, ConfigStore config, AuditLog audit, TransactionRunner transactions, Executor sql, AppClock clock, Messages messages) { this(rules, config, audit, transactions, sql, clock, messages, new MainThreadExecutor() { @Override public <T> java.util.concurrent.CompletionStage<T> submit(java.util.function.Supplier<T> work) { return java.util.concurrent.CompletableFuture.completedFuture(work.get()); } }, null); }
@@ -34,6 +35,7 @@ public final class StockAdminConfigCommand implements CommandExecutor, TabComple
         if (args.length > 0 && ("recovery".equalsIgnoreCase(args[0]) || "reconcile".equalsIgnoreCase(args[0]))) return recovery(sender, args);
         if (!sender.hasPermission(PERMISSION)) { sender.sendMessage(messages.noPermission()); return true; }
         if (args.length == 1 && "config".equalsIgnoreCase(args[0])) { sender.sendMessage(messages.minimumCapital(rules.current())); return true; }
+        if (args.length == 3 && "config".equalsIgnoreCase(args[0]) && "cashout-limit".equalsIgnoreCase(args[1])) return updateCashOutLimit(sender, args[2]);
         if (args.length != 3 || !"config".equalsIgnoreCase(args[0]) || !"min-capital".equalsIgnoreCase(args[1])) { sender.sendMessage(messages.usageStockAdminConfig()); return true; }
         CompanyCreationRules before = rules.current(); Money next;
         try { next = Money.fromMajor(new BigDecimal(args[2]), before.scale()); } catch (RuntimeException failure) { sender.sendMessage(messages.invalidMinimumCapital()); return true; }
@@ -46,6 +48,14 @@ public final class StockAdminConfigCommand implements CommandExecutor, TabComple
         AuditEvent event = new AuditEvent(UUID.randomUUID(), Optional.empty(), Optional.ofNullable(actor), "ADMIN_MINIMUM_CAPITAL_CHANGED", Map.of("oldMinor", before.minimumCapital().minorUnits(), "newMinor", next.minorUnits(), "actor", actor == null ? "CONSOLE" : actor.toString(), "source", actor == null ? "CONSOLE" : "PLAYER"), clock.now());
         sql.execute(() -> { try { transactions.inTransaction(connection -> { audit.append(connection, event); return null; }); } catch (RuntimeException failure) { main.submit(() -> { sender.sendMessage(messages.minimumCapitalAuditFailed()); return null; }); } });
         return true;
+    }
+    private boolean updateCashOutLimit(CommandSender sender, String raw) {
+        Money next;
+        try { next = Money.fromMajor(new BigDecimal(raw), rules.current().scale()); } catch (RuntimeException invalid) { sender.sendMessage(Component.text("单次创始人套现上限必须是非负金额，0 表示禁用。")); return true; }
+        if (next.minorUnits() < 0) { sender.sendMessage(Component.text("单次创始人套现上限必须是非负金额，0 表示禁用。")); return true; }
+        try { config.persistFounderCashOutMaximum(next.toMajor(rules.current().scale()).toPlainString()); }
+        catch (Exception failure) { sender.sendMessage(Component.text("套现上限保存失败，当前规则未改变。")); return true; }
+        sender.sendMessage(Component.text("单次创始人套现上限已更新为 " + next.toMajor(rules.current().scale()).toPlainString() + "（0 表示禁用）。")); return true;
     }
     private boolean recovery(CommandSender sender, String[] args) {
         if (!sender.hasPermission(RECOVERY_PERMISSION)) { sender.sendMessage(messages.noPermission()); return true; }
@@ -72,7 +82,7 @@ public final class StockAdminConfigCommand implements CommandExecutor, TabComple
         }
         if (args.length == 2 && "recovery".equalsIgnoreCase(args[0])) return sender.hasPermission(RECOVERY_PERMISSION) ? filter(List.of("cash"), args[1]) : List.of();
         if (!sender.hasPermission(PERMISSION)) return List.of();
-        if (args.length == 2 && "config".equalsIgnoreCase(args[0])) return filter(List.of("min-capital"), args[1]);
+        if (args.length == 2 && "config".equalsIgnoreCase(args[0])) return filter(List.of("min-capital", "cashout-limit"), args[1]);
         return List.of();
     }
     private static List<String> filter(List<String> values, String prefix) { return values.stream().filter(value -> value.regionMatches(true, 0, prefix, 0, prefix.length())).toList(); }

@@ -19,16 +19,22 @@ public final class FileConfigStore implements StockAdminConfigCommand.ConfigStor
     public FileConfigStore(FileConfiguration live, Path target) { this(live, target, SYSTEM_WRITER, SYSTEM_FILES); }
     FileConfigStore(FileConfiguration live, Path target, ConfigurationWriter writer, FileOperations files) { this.live=live; this.target=target; this.writer=writer; this.files=files; }
     @Override public void persistMinimumCapital(String value) throws IOException {
+        persist("company.minimum-capital", value);
+    }
+    @Override public void persistFounderCashOutMaximum(String value) throws IOException {
+        persist("company.capital-actions.maximum-founder-cashout", value);
+    }
+    private void persist(String key, String value) throws IOException {
         Path parent = target.toAbsolutePath().getParent(); if (parent == null) throw new IOException("config target has no parent");
         Path temporary = files.createTempFile(parent, target.getFileName().toString());
         try {
             YamlConfiguration staged = new YamlConfiguration();
             try { staged.loadFromString(live.saveToString()); }
             catch (org.bukkit.configuration.InvalidConfigurationException invalid) { throw new IOException("could not stage config", invalid); }
-            staged.set("company.minimum-capital", value);
+            staged.set(key, value);
             writer.save(staged, temporary);
             files.atomicReplace(temporary, target);
-            live.set("company.minimum-capital", value);
+            live.set(key, value);
         } finally { files.deleteIfExists(temporary); }
     }
     @FunctionalInterface interface ConfigurationWriter { void save(FileConfiguration configuration, Path file) throws IOException; }

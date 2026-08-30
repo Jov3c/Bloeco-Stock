@@ -122,9 +122,23 @@ class CompanyCapitalActionServiceTest {
         }
     }
 
+    @Test
+    void founderCashOutIsRejectedAtAnnouncementWhenAdministratorLimitIsDisabledOrExceeded() throws Exception {
+        try (Fixture f = Fixture.create()) {
+            f.service = new CompanyCapitalActionService(new SqlCompanyRepository(f.database.dataSource()), new SqlCompanyExitRepository(f.database.dataSource()),
+                    new SqlSecuritiesCashRepository(f.database.dataSource()), f.database, f.gateway, () -> f.now, () -> 0L);
+            assertThatThrownBy(() -> f.service.announceFounderCashOut(f.founder, f.company.id(), Money.ofMinor(1), "cashout:disabled"))
+                    .isInstanceOf(IllegalStateException.class);
+            f.service = new CompanyCapitalActionService(new SqlCompanyRepository(f.database.dataSource()), new SqlCompanyExitRepository(f.database.dataSource()),
+                    new SqlSecuritiesCashRepository(f.database.dataSource()), f.database, f.gateway, () -> f.now, () -> 50L);
+            assertThatThrownBy(() -> f.service.announceFounderCashOut(f.founder, f.company.id(), Money.ofMinor(51), "cashout:over-limit"))
+                    .isInstanceOf(IllegalStateException.class);
+        }
+    }
+
     private static final class Fixture implements AutoCloseable {
         final Path file; final Database database; final Company company; final UUID founder; final RecordingGateway gateway = new RecordingGateway();
-        Instant now = START; final CompanyCapitalActionService service;
+        Instant now = START; CompanyCapitalActionService service;
         private Fixture(Path file, Database database, Company company) {
             this.file = file; this.database = database; this.company = company; this.founder = company.founderId();
             service = new CompanyCapitalActionService(new SqlCompanyRepository(database.dataSource()), new SqlCompanyExitRepository(database.dataSource()),

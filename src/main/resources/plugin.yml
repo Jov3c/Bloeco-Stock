@@ -22,6 +22,7 @@ permissions:
       blockeco.company.asset.bind: true
       blockeco.company.ipo.announce: true
       blockeco.company.ipo.subscribe: true
+      blockeco.company.capital-actions: true
       blockeco.stock.subscribe: true
       blockeco.stock.cash: true
       blockeco.stock.trade: true
@@ -42,6 +43,9 @@ permissions:
   blockeco.company.ipo.announce:
     default: true
   blockeco.company.ipo.subscribe:
+    default: true
+  blockeco.company.capital-actions:
+    description: '发起和查看公司回购及创始人套现公告'
     default: true
   blockeco.stock.subscribe:
     description: '认购公开 IPO'

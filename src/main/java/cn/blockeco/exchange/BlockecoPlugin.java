@@ -23,6 +23,7 @@ import cn.blockeco.exchange.application.DividendCycleService;
 import cn.blockeco.exchange.application.CompanyOperationsService;
 import cn.blockeco.exchange.application.CompanyFinancialReportService;
 import cn.blockeco.exchange.application.CompanyFinanceSchedulers;
+import cn.blockeco.exchange.application.CompanyCapitalActionService;
 import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.infrastructure.sql.Database;
 import cn.blockeco.exchange.infrastructure.sql.SqlAuditLog;
@@ -39,9 +40,11 @@ import cn.blockeco.exchange.infrastructure.sql.SqlBluechipRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlBluechipBootstrapFundingRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlCompanyOperationsRepository;
 import cn.blockeco.exchange.infrastructure.sql.SqlShareIssuanceRepository;
+import cn.blockeco.exchange.infrastructure.sql.SqlCompanyExitRepository;
 import cn.blockeco.exchange.infrastructure.vault.VaultEconomyGateway;
 import cn.blockeco.exchange.infrastructure.vault.VaultSecuritiesCashGateway;
 import cn.blockeco.exchange.infrastructure.vault.VaultTreasuryEscrowGateway;
+import cn.blockeco.exchange.infrastructure.vault.VaultCompanyPayoutGateway;
 import cn.blockeco.exchange.paper.CompanyCommand;
 import cn.blockeco.exchange.paper.CompanyCreationRules;
 import cn.blockeco.exchange.paper.MutableCompanyCreationRules;
@@ -61,6 +64,7 @@ import cn.blockeco.exchange.paper.CompanyGuiController;
 import cn.blockeco.exchange.paper.IpoGuiController;
 import cn.blockeco.exchange.paper.IssuanceGuiController;
 import cn.blockeco.exchange.paper.CompanyFinanceGui;
+import cn.blockeco.exchange.paper.CapitalActionGuiController;
 import cn.blockeco.exchange.paper.OptionalAssetAdapterLoader;
 import cn.blockeco.exchange.paper.BluechipConfig;
 import cn.blockeco.exchange.paper.BluechipAdminCommand;
@@ -204,6 +208,9 @@ public final class BlockecoPlugin extends JavaPlugin {
         var tradingRepository = new SqlSecondaryTradingRepository(db.dataSource(), cashRepository);
         var bluechipRepository = new SqlBluechipRepository(db.dataSource());
         var cashGateway = new VaultSecuritiesCashGateway(economy, mainThread, escrowId);
+        var capitalActions = new CompanyCapitalActionService(companies, new SqlCompanyExitRepository(db.dataSource()), cashRepository, db,
+                new VaultCompanyPayoutGateway(economy, mainThread), clock,
+                () -> configuredMoney("company.capital-actions.maximum-founder-cashout", scale).minorUnits());
         secondaryTradingGate = new SecondaryTradingGate();
         var cashService = new SecuritiesCashService(cashRepository, db, cashGateway, sqlExecutor, clock, Duration.ofSeconds(15), secondaryTradingGate::mutationsOpen);
         var issuanceService = new ShareIssuanceService(new SqlShareIssuanceRepository(db.dataSource()), cashRepository, db, clock);
@@ -261,6 +268,9 @@ public final class BlockecoPlugin extends JavaPlugin {
         var companyFinanceGui = new CompanyFinanceGui(this, companyGui, companyQueries, operationsRepository, clock, marketZone, sqlExecutor);
         companyGui.attachFinanceGui(companyFinanceGui);
         getServer().getPluginManager().registerEvents(companyFinanceGui, this);
+        var capitalActionGui = new CapitalActionGuiController(this, capitalActions, companyQueries, mainThread, runtime::accepting, scale, companyGui);
+        companyGui.attachCapitalActionGui(capitalActionGui);
+        getServer().getPluginManager().registerEvents(capitalActionGui, this);
         var stockGui = new StockGuiController(this, secondaryQueries, cashService, secondaryMarket, mainThread,
                 runtime::accepting, secondaryTradingGate::mutationsOpen, messages, scale, companyGui);
         stockGui.attachPublicQueries(publicQueries);
@@ -369,6 +379,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         catch (IllegalArgumentException failure) { throw new IllegalArgumentException("company.treasury-escrow-uuid must be a non-zero UUID", failure); }
         if (maker.equals(participant) || maker.equals(treasury) || participant.equals(treasury)) throw new IllegalArgumentException("market participant, maker, and treasury UUIDs must be distinct");
         positive("company.registration-fee", scale); positive("company.minimum-capital", scale);
+        if (configuredMoney("company.capital-actions.maximum-founder-cashout", scale).minorUnits() < 0) throw new IllegalArgumentException("company.capital-actions.maximum-founder-cashout must be non-negative");
         configuredOperationsIngestionMinutes();
         try { if (new java.util.UUID(0, 0).equals(java.util.UUID.fromString(getConfig().getString("company.treasury-escrow-uuid")))) throw new IllegalArgumentException("company.treasury-escrow-uuid must not be zero"); }
         catch (IllegalArgumentException failure) { throw new IllegalArgumentException("company.treasury-escrow-uuid must be a non-zero UUID", failure); }

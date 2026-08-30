@@ -30,16 +30,24 @@ public final class CompanyCapitalActionService {
     private final TransactionRunner transactions;
     private final CompanyPayoutGateway payoutGateway;
     private final AppClock clock;
+    private final java.util.function.LongSupplier maximumFounderCashOutMinor;
 
     public CompanyCapitalActionService(CompanyRepository companies, CompanyExitRepository exits,
             SecuritiesCashRepository securitiesCash, TransactionRunner transactions,
             CompanyPayoutGateway payoutGateway, AppClock clock) {
+        this(companies, exits, securitiesCash, transactions, payoutGateway, clock, () -> Long.MAX_VALUE);
+    }
+
+    public CompanyCapitalActionService(CompanyRepository companies, CompanyExitRepository exits,
+            SecuritiesCashRepository securitiesCash, TransactionRunner transactions,
+            CompanyPayoutGateway payoutGateway, AppClock clock, java.util.function.LongSupplier maximumFounderCashOutMinor) {
         this.companies = Objects.requireNonNull(companies, "companies");
         this.exits = Objects.requireNonNull(exits, "exits");
         this.securitiesCash = Objects.requireNonNull(securitiesCash, "securitiesCash");
         this.transactions = Objects.requireNonNull(transactions, "transactions");
         this.payoutGateway = Objects.requireNonNull(payoutGateway, "payoutGateway");
         this.clock = Objects.requireNonNull(clock, "clock");
+        this.maximumFounderCashOutMinor = Objects.requireNonNull(maximumFounderCashOutMinor, "maximumFounderCashOutMinor");
     }
 
     public UUID announceBuyback(UUID founder, CompanyId companyId, Money budget, Money pricePerShare, String correlationKey) {
@@ -49,6 +57,7 @@ public final class CompanyCapitalActionService {
 
     public UUID announceFounderCashOut(UUID founder, CompanyId companyId, Money amount, String correlationKey) {
         requirePositive(amount, "cash-out amount");
+        requireFounderCashOutWithinLimit(amount);
         return announce(founder, companyId, GovernanceActionType.FOUNDER_CASH_OUT, amount.minorUnits(), 0, correlationKey, "创始人套现公告");
     }
 
@@ -59,6 +68,7 @@ public final class CompanyCapitalActionService {
         if (action.state() != GovernanceActionState.ANNOUNCED) throw new IllegalStateException("capital action is already started or finished");
         Instant now = clock.now();
         if (now.isBefore(action.executableAt())) throw new IllegalStateException("capital action announcement period has not ended");
+        if (action.type() == GovernanceActionType.FOUNDER_CASH_OUT) requireFounderCashOutWithinLimit(Money.ofMinor(action.amountMinor()));
 
         CompanyPayoutOperation payout = transactions.inTransaction(connection -> {
             if (!exits.transitionAction(connection, action.id(), GovernanceActionState.ANNOUNCED, GovernanceActionState.EXECUTION_READY, now))
@@ -169,6 +179,11 @@ public final class CompanyCapitalActionService {
 
     private static void requirePositive(Money value, String field) {
         Objects.requireNonNull(value, field); if (value.minorUnits() <= 0) throw new IllegalArgumentException(field + " must be positive");
+    }
+    private void requireFounderCashOutWithinLimit(Money amount) {
+        long maximum = maximumFounderCashOutMinor.getAsLong();
+        if (maximum <= 0) throw new IllegalStateException("founder cash-out is disabled by administrator");
+        if (amount.minorUnits() > maximum) throw new IllegalStateException("founder cash-out exceeds administrator limit");
     }
 
     public enum ExecutionResult { EXECUTING, COMPLETED, FAILED, AMBIGUOUS }
