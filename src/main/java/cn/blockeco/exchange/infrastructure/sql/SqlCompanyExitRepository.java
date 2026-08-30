@@ -8,6 +8,8 @@ import cn.blockeco.exchange.domain.governance.GovernanceActionType;
 import cn.blockeco.exchange.domain.governance.OrderReleaseProgress;
 import cn.blockeco.exchange.domain.governance.PayoutOperationState;
 import cn.blockeco.exchange.ports.CompanyExitRepository;
+import cn.blockeco.exchange.ports.SecuritiesCashRepository;
+import cn.blockeco.exchange.domain.money.Money;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -93,6 +95,60 @@ public final class SqlCompanyExitRepository implements CompanyExitRepository {
         }
     }
 
+    @Override public boolean reserveCompanyCash(Connection connection, CompanyId companyId, long amountMinor) throws SQLException {
+        requireTransaction(connection); requirePositive(amountMinor); Objects.requireNonNull(companyId, "companyId");
+        try (PreparedStatement statement = connection.prepareStatement("UPDATE company_cash_accounts SET reserved_minor=reserved_minor+? WHERE company_id=? AND cash_minor-reserved_minor>=? AND reserved_minor<=?")) {
+            statement.setLong(1, amountMinor); statement.setString(2, companyId.value().toString()); statement.setLong(3, amountMinor); statement.setLong(4, Math.subtractExact(Long.MAX_VALUE, amountMinor)); return statement.executeUpdate() == 1;
+        }
+    }
+
+    @Override public boolean releaseCompanyCash(Connection connection, CompanyId companyId, long amountMinor) throws SQLException {
+        requireTransaction(connection); requirePositive(amountMinor); Objects.requireNonNull(companyId, "companyId");
+        try (PreparedStatement statement = connection.prepareStatement("UPDATE company_cash_accounts SET reserved_minor=reserved_minor-? WHERE company_id=? AND reserved_minor>=?")) {
+            statement.setLong(1, amountMinor); statement.setString(2, companyId.value().toString()); statement.setLong(3, amountMinor); return statement.executeUpdate() == 1;
+        }
+    }
+
+    @Override public boolean completePayout(Connection connection, UUID payoutId, Instant completedAt) throws SQLException {
+        requireTransaction(connection); Objects.requireNonNull(payoutId, "payoutId"); Objects.requireNonNull(completedAt, "completedAt");
+        CompanyPayoutOperation payout = payoutForUpdate(connection, payoutId);
+        if (payout.state() == PayoutOperationState.COMPLETED) return false;
+        if (payout.state() != PayoutOperationState.EXTERNAL_DEBIT_CONFIRMED) throw new IllegalStateException("payout cannot complete from " + payout.state());
+        try (PreparedStatement debit = connection.prepareStatement("UPDATE company_cash_accounts SET cash_minor=cash_minor-?,reserved_minor=reserved_minor-? WHERE company_id=? AND cash_minor>=? AND reserved_minor>=?")) {
+            debit.setLong(1, payout.amountMinor()); debit.setLong(2, payout.amountMinor()); debit.setString(3, payout.companyId().value().toString()); debit.setLong(4, payout.amountMinor()); debit.setLong(5, payout.amountMinor());
+            if (debit.executeUpdate() != 1) throw new IllegalStateException("company payout reserve missing");
+        }
+        if (!transitionPayout(connection, payoutId, PayoutOperationState.EXTERNAL_DEBIT_CONFIRMED, PayoutOperationState.COMPLETED, "Vault deposit confirmed", completedAt)) throw new IllegalStateException("payout state conflict");
+        ledger(connection, payout.companyId(), -payout.amountMinor(), payoutId, completedAt);
+        audit(connection, payout.companyId(), payout.recipientUuid(), "COMPANY_PAYOUT_COMPLETED", "{\"payoutId\":\"" + payoutId + "\",\"amountMinor\":" + payout.amountMinor() + "}", completedAt);
+        return true;
+    }
+
+    @Override public boolean acceptBuyback(Connection connection, UUID actionId, CompanyId companyId, UUID shareholderId, long shares, long amountMinor, String correlationKey, SecuritiesCashRepository securitiesCash, Instant acceptedAt) throws SQLException {
+        requireTransaction(connection); Objects.requireNonNull(actionId, "actionId"); Objects.requireNonNull(companyId, "companyId"); Objects.requireNonNull(shareholderId, "shareholderId"); Objects.requireNonNull(correlationKey, "correlationKey"); Objects.requireNonNull(securitiesCash, "securitiesCash"); Objects.requireNonNull(acceptedAt, "acceptedAt"); requirePositive(shares); requirePositive(amountMinor);
+        if (correlationKey.isBlank()) throw new IllegalArgumentException("correlation key is required");
+        try (PreparedStatement existing = connection.prepareStatement("SELECT 1 FROM company_buyback_acceptances WHERE governance_action_id=? AND shareholder_uuid=? AND correlation_key=?")) {
+            existing.setString(1, actionId.toString()); existing.setString(2, shareholderId.toString()); existing.setString(3, correlationKey); try (ResultSet rows = existing.executeQuery()) { if (rows.next()) return false; }
+        }
+        try (PreparedStatement action = connection.prepareStatement("SELECT 1 FROM company_governance_actions WHERE id=? AND company_id=? AND action_type='BUYBACK' AND state='EXECUTING'")) {
+            action.setString(1, actionId.toString()); action.setString(2, companyId.value().toString()); try (ResultSet rows = action.executeQuery()) { if (!rows.next()) throw new IllegalStateException("buyback is not executing"); }
+        }
+        try (PreparedStatement holding = connection.prepareStatement("UPDATE share_holdings SET available_shares=available_shares-? WHERE company_id=? AND holder_uuid=? AND available_shares>=?")) {
+            holding.setLong(1, shares); holding.setString(2, companyId.value().toString()); holding.setString(3, shareholderId.toString()); holding.setLong(4, shares); if (holding.executeUpdate() != 1) throw new IllegalStateException("shareholder did not voluntarily offer sufficient available shares");
+        }
+        try (PreparedStatement cash = connection.prepareStatement("UPDATE company_cash_accounts SET cash_minor=cash_minor-?,reserved_minor=reserved_minor-? WHERE company_id=? AND cash_minor>=? AND reserved_minor>=?")) {
+            cash.setLong(1, amountMinor); cash.setLong(2, amountMinor); cash.setString(3, companyId.value().toString()); cash.setLong(4, amountMinor); cash.setLong(5, amountMinor); if (cash.executeUpdate() != 1) throw new IllegalStateException("company buyback reserve missing");
+        }
+        creditTreasuryHolding(connection, companyId, shares);
+        securitiesCash.creditAvailable(connection, shareholderId, Money.ofMinor(amountMinor), acceptedAt);
+        try (PreparedStatement insert = connection.prepareStatement("INSERT INTO company_buyback_acceptances (governance_action_id,shareholder_uuid,shares,amount_minor,correlation_key,accepted_at) VALUES (?,?,?,?,?,?)")) {
+            insert.setString(1, actionId.toString()); insert.setString(2, shareholderId.toString()); insert.setLong(3, shares); insert.setLong(4, amountMinor); insert.setString(5, correlationKey); insert.setString(6, acceptedAt.toString()); insert.executeUpdate();
+        }
+        ledger(connection, companyId, -amountMinor, null, acceptedAt);
+        audit(connection, companyId, shareholderId, "COMPANY_BUYBACK_ACCEPTED", "{\"actionId\":\"" + actionId + "\",\"shares\":" + shares + ",\"amountMinor\":" + amountMinor + "}", acceptedAt);
+        return true;
+    }
+
     @Override
     public List<CompanyPayoutOperation> recoverablePayouts(int limit) {
         int bound = Math.max(1, Math.min(100, limit));
@@ -165,6 +221,41 @@ public final class SqlCompanyExitRepository implements CompanyExitRepository {
     private static String actionPayload(CompanyGovernanceAction action) {
         return "{\"actionId\":\"" + action.id() + "\",\"companyId\":\"" + action.companyId().value() + "\",\"type\":\"" + action.type() + "\",\"amountMinor\":" + action.amountMinor() + ",\"pricePerShareMinor\":" + action.pricePerShareMinor() + ",\"executableAt\":\"" + action.executableAt() + "\"}";
     }
+
+    private static CompanyPayoutOperation payoutForUpdate(Connection connection, UUID payoutId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT * FROM company_payout_operations WHERE id=?")) {
+            statement.setString(1, payoutId.toString()); try (ResultSet rows = statement.executeQuery()) {
+                if (!rows.next()) throw new IllegalStateException("company payout missing: " + payoutId); return payout(rows);
+            }
+        }
+    }
+
+    private static void ledger(Connection connection, CompanyId companyId, long amountMinor, UUID operationId, Instant at) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("INSERT INTO escrow_ledger_entries (id,liability_kind,company_id,player_uuid,amount_minor,operation_id,trade_id,occurred_at) VALUES (?,'COMPANY_TREASURY',?,NULL,?,?,NULL,?)")) {
+            statement.setString(1, UUID.randomUUID().toString()); statement.setString(2, companyId.value().toString()); statement.setLong(3, amountMinor); statement.setString(4, operationId == null ? null : operationId.toString()); statement.setString(5, at.toString()); statement.executeUpdate();
+        }
+    }
+
+    /** The company UUID is an internal holder identity, not a player account. */
+    private static void creditTreasuryHolding(Connection connection, CompanyId companyId, long shares) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                INSERT INTO share_holdings (company_id,holder_uuid,available_shares,reserved_shares) VALUES (?,?,?,0)
+                ON CONFLICT(company_id,holder_uuid) DO UPDATE SET available_shares=share_holdings.available_shares+excluded.available_shares
+                WHERE share_holdings.available_shares <= ?
+                """)) {
+            statement.setString(1, companyId.value().toString()); statement.setString(2, companyId.value().toString());
+            statement.setLong(3, shares); statement.setLong(4, Math.subtractExact(Long.MAX_VALUE, shares));
+            if (statement.executeUpdate() != 1) throw new ArithmeticException("company treasury holding overflow or state conflict");
+        }
+    }
+
+    private static void audit(Connection connection, CompanyId companyId, UUID actorUuid, String eventType, String payload, Instant at) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("INSERT INTO audit_events (event_id,company_id,actor_uuid,event_type,payload_json,occurred_at) VALUES (?,?,?,?,?,?)")) {
+            statement.setString(1, UUID.randomUUID().toString()); statement.setString(2, companyId.value().toString()); statement.setString(3, actorUuid == null ? null : actorUuid.toString()); statement.setString(4, eventType); statement.setString(5, payload); statement.setString(6, at.toString()); statement.executeUpdate();
+        }
+    }
+
+    private static void requirePositive(long value) { if (value <= 0) throw new IllegalArgumentException("amount must be positive"); }
 
     private static void requireTransaction(Connection connection) throws SQLException {
         if (connection == null || connection.getAutoCommit()) throw new IllegalStateException("caller-owned transaction connection required");

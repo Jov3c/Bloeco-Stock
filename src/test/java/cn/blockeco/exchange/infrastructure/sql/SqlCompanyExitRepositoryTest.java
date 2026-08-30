@@ -10,6 +10,7 @@ import cn.blockeco.exchange.domain.governance.GovernanceActionType;
 import cn.blockeco.exchange.domain.governance.PayoutOperationState;
 import cn.blockeco.exchange.domain.governance.CompanyPayoutOperation;
 import cn.blockeco.exchange.ports.CompanyExitRepository;
+import cn.blockeco.exchange.ports.SecuritiesCashRepository;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -97,6 +98,37 @@ class SqlCompanyExitRepositoryTest {
         }
     }
 
+    @Test
+    void settlesOnlyOneVoluntaryBuybackAcceptanceAndKeepsCompanyCashReservedUntilSettlement() throws Exception {
+        try (Fixture fixture = Fixture.create()) {
+            CompanyExitRepository repository = new SqlCompanyExitRepository(fixture.database.dataSource());
+            SecuritiesCashRepository securitiesCash = new SqlSecuritiesCashRepository(fixture.database.dataSource());
+            CompanyGovernanceAction action = fixture.action(GovernanceActionType.BUYBACK);
+            UUID shareholder = UUID.randomUUID();
+            fixture.database.inTransaction(connection -> {
+                repository.createAction(connection, action, "回购公告", NOW);
+                fixture.insertHolding(connection, shareholder, 10);
+                repository.reserveCompanyCash(connection, fixture.companyId, 70);
+                repository.transitionAction(connection, action.id(), GovernanceActionState.ANNOUNCED, GovernanceActionState.EXECUTION_READY, NOW);
+                repository.transitionAction(connection, action.id(), GovernanceActionState.EXECUTION_READY, GovernanceActionState.EXECUTING, NOW);
+                return null;
+            });
+
+            boolean first = fixture.database.inTransaction(connection -> repository.acceptBuyback(
+                    connection, action.id(), fixture.companyId, shareholder, 10, 70, "buyback:accept:1", securitiesCash, NOW));
+            boolean duplicate = fixture.database.inTransaction(connection -> repository.acceptBuyback(
+                    connection, action.id(), fixture.companyId, shareholder, 10, 70, "buyback:accept:1", securitiesCash, NOW));
+
+            assertThat(first).isTrue();
+            assertThat(duplicate).isFalse();
+            assertThat(fixture.cash()).containsExactly(30L, 0L);
+            assertThat(fixture.holdingShares(shareholder)).isEqualTo(0L);
+            assertThat(fixture.holdingShares(fixture.companyId.value())).isEqualTo(10L);
+            assertThat(fixture.securitiesCash(shareholder)).isEqualTo(70L);
+            assertThat(fixture.count("company_buyback_acceptances")).isEqualTo(1);
+        }
+    }
+
     private static final class Fixture implements AutoCloseable {
         private final Path file; private final Database database; private final CompanyId companyId; private final UUID founder;
         private Fixture(Path file, Database database, CompanyId companyId, UUID founder) { this.file = file; this.database = database; this.companyId = companyId; this.founder = founder; }
@@ -116,6 +148,10 @@ class SqlCompanyExitRepositoryTest {
         CompanyGovernanceAction action(GovernanceActionType type) { return new CompanyGovernanceAction(UUID.randomUUID(), companyId, founder, type, 70, 7, NOW, NOW.plusSeconds(43_200), GovernanceActionState.ANNOUNCED, "exit:action:" + UUID.randomUUID()); }
         void updateActionPayload(UUID id) throws Exception { try (Connection connection = database.dataSource().getConnection(); PreparedStatement statement = connection.prepareStatement("UPDATE company_governance_actions SET payload_json = '{}' WHERE id = ?")) { statement.setString(1, id.toString()); statement.executeUpdate(); } }
         void insertOrder(Connection connection, String id, long sequence) throws java.sql.SQLException { try (PreparedStatement statement = connection.prepareStatement("INSERT INTO stock_orders (id,company_id,stock_code,player_uuid,side,limit_price_minor,original_shares,remaining_shares,priority_sequence,reserved_cash_minor,filled_notional_minor,fee_charged_minor,fee_bps,accepted_at,state) VALUES (?,?,'EX000001',?,'SELL',1,1,1,?,0,0,0,0,?,'OPEN')")) { statement.setString(1, id); statement.setString(2, companyId.value().toString()); statement.setString(3, UUID.randomUUID().toString()); statement.setLong(4, sequence); statement.setString(5, NOW.toString()); statement.executeUpdate(); } }
+        void insertHolding(Connection connection, UUID holder, long shares) throws java.sql.SQLException { try (PreparedStatement statement = connection.prepareStatement("INSERT INTO share_holdings (company_id,holder_uuid,available_shares,reserved_shares) VALUES (?,?,?,0)")) { statement.setString(1, companyId.value().toString()); statement.setString(2, holder.toString()); statement.setLong(3, shares); statement.executeUpdate(); } }
+        long[] cash() throws Exception { try (Connection connection = database.dataSource().getConnection(); PreparedStatement statement = connection.prepareStatement("SELECT cash_minor,reserved_minor FROM company_cash_accounts WHERE company_id=?")) { statement.setString(1, companyId.value().toString()); var rows = statement.executeQuery(); rows.next(); return new long[] { rows.getLong(1), rows.getLong(2) }; } }
+        long holdingShares(UUID holder) throws Exception { try (Connection connection = database.dataSource().getConnection(); PreparedStatement statement = connection.prepareStatement("SELECT available_shares FROM share_holdings WHERE company_id=? AND holder_uuid=?")) { statement.setString(1, companyId.value().toString()); statement.setString(2, holder.toString()); var rows = statement.executeQuery(); rows.next(); return rows.getLong(1); } }
+        long securitiesCash(UUID holder) throws Exception { try (Connection connection = database.dataSource().getConnection(); PreparedStatement statement = connection.prepareStatement("SELECT available_minor FROM securities_cash_accounts WHERE player_uuid=?")) { statement.setString(1, holder.toString()); var rows = statement.executeQuery(); rows.next(); return rows.getLong(1); } }
         long count(String table) throws Exception { try (Connection connection = database.dataSource().getConnection(); PreparedStatement statement = connection.prepareStatement("SELECT COUNT(*) FROM " + table); var rows = statement.executeQuery()) { rows.next(); return rows.getLong(1); } }
         @Override public void close() throws Exception { database.close(); Files.deleteIfExists(file); }
     }
