@@ -67,6 +67,7 @@ import cn.blockeco.exchange.paper.CompanyFinanceGui;
 import cn.blockeco.exchange.paper.CapitalActionGuiController;
 import cn.blockeco.exchange.paper.OptionalAssetAdapterLoader;
 import cn.blockeco.exchange.paper.BluechipConfig;
+import cn.blockeco.exchange.paper.BluechipQuantConfig;
 import cn.blockeco.exchange.paper.BluechipAdminCommand;
 import cn.blockeco.exchange.ports.AppClock;
 import cn.blockeco.exchange.ports.CompanyAssetAdapterRegistry;
@@ -371,6 +372,7 @@ public final class BlockecoPlugin extends JavaPlugin {
     private void validateConfiguration() {
         int scale = getConfig().getInt("currency.scale", -1); if (scale < 0 || scale > 8) throw new IllegalArgumentException("currency.scale must be between 0 and 8");
         validateMarketConfiguration(configuredMarketFeeBps(), getConfig().getString("market.time-zone", "Asia/Shanghai"));
+        BluechipQuantConfig.load(getConfig());
         BluechipConfig.load(getConfig(), scale);
         java.util.UUID maker = configuredBluechipSystemAccount();
         java.util.UUID participant = configuredBluechipParticipantAccount();
@@ -442,5 +444,3 @@ public final class BlockecoPlugin extends JavaPlugin {
     }
     private void failEnable(String message) { getLogger().severe(message); getServer().getPluginManager().disablePlugin(this); }
 }
-import cn.blockeco.exchange.paper.BluechipQuantConfig;
-        BluechipQuantConfig.load(getConfig());
