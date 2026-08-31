@@ -7,6 +7,13 @@ market:
   participant-account-uuid: '00000000-0000-0000-0000-000000000077'
   # 买方手续费，创建委托时快照到订单；范围 0..10000（万分比）。
   fee-bps: 10
+  quant:
+    # 量化策略只在置信度达到此阈值时使用有限系统证券账户挂普通委托；并非单笔收益保证。
+    target-confidence-bps: 6500
+    # 单笔最多使用可用资金或库存的万分比；500 即 5%，默认 200 即 2%。
+    maximum-order-bps: 200
+    # 连续亏损达到策略保护线后的冷却时间（秒）。
+    loss-cooldown-seconds: 120
   # 日内行情和成交日的时区；必须为 Java ZoneId，例如 Asia/Shanghai。
   time-zone: 'Asia/Shanghai'
   # 每 15 天蓝筹模拟经营的基础利润；活跃事件会以万分比调整此金额。
