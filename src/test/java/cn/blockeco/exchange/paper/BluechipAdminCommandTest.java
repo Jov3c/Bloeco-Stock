@@ -33,4 +33,14 @@ class BluechipAdminCommandTest {
 
         assertThat(command.onCommand(player, mock(Command.class), "stockadmin", new String[]{"bluechip", "init"})).isTrue();
     }
+
+    @Test void quantStatusIsAReadOnlyPermissionGatedCompletion() {
+        Player player = mock(Player.class); when(player.hasPermission(BluechipAdminCommand.PERMISSION)).thenReturn(true);
+        BluechipAdminCommand command = new BluechipAdminCommand(() -> { }, paused -> { }, (code, kind, value) -> { },
+                new BluechipAdminCommand.EventControl() { @Override public void company(String code, int impact) { } @Override public void industry(String industry, int impact) { } @Override public void market(int impact) { } },
+                new Messages(new org.bukkit.configuration.file.YamlConfiguration()));
+
+        assertThat(command.onTabComplete(player, mock(Command.class), "stockadmin", new String[]{"bluechip", "quant", ""}))
+                .containsExactly("status");
+    }
 }
