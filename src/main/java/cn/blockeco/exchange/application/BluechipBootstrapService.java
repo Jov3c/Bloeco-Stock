@@ -30,7 +30,8 @@ public final class BluechipBootstrapService {
     private final BluechipBootstrapFundingService funding; private final BluechipBootstrapFundingRepository fundingRecords; private final TransactionRunner transactions;
     private final Executor executor; private final AppClock clock;
     private final UUID participantAccountId; private final BluechipParticipantRepository participantAllocations;
-    private static final Money PARTICIPANT_INITIAL_CASH = Money.ofMinor(10_000);
+    /** $10,000.00 at the default scale: enough for a bounded 2% ordinary order to buy a share. */
+    private static final Money PARTICIPANT_INITIAL_CASH = Money.ofMinor(1_000_000);
     private static final long PARTICIPANT_INITIAL_SHARES_PER_COMPANY = 20;
 
     public BluechipBootstrapService(BluechipConfig config, UUID systemAccountId, CompanyRepository companies, StockListingRepository listings,

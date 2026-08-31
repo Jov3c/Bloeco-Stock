@@ -271,6 +271,7 @@ class BluechipBootstrapServiceTest {
             var sharesAfterFirst = repository.all().stream().mapToLong(company -> heldShares(database, company.companyId(), PARTICIPANT_ACCOUNT)).sum();
 
             assertThat(cashAfterFirst).isEqualTo(config.definitions().stream().mapToLong(definition -> definition.initialFundCash()).sum());
+            assertThat(participantCashAfterFirst).isEqualTo(1_000_000L);
             assertThat(count(database, "SELECT COUNT(*) FROM escrow_ledger_entries WHERE liability_kind = 'SECURITIES_CASH'"))
                     .isEqualTo(1);
             assertThat(repository.all()).allSatisfy(company -> assertThat(sumHeldShares(database, company.companyId()))
