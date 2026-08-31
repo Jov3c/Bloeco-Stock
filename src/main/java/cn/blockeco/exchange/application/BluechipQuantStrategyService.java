@@ -60,7 +60,8 @@ public final class BluechipQuantStrategyService {
     private CompletionStage<Integer> decide(Snapshot snapshot) {
         if (snapshot == null) return CompletableFuture.completedFuture(0);
         var company = snapshot.company();
-        QuantSignalPolicy.Signal signal = signals.evaluate(snapshot.book(), company.listing().issueReferencePrice(), company.modelPrice(), snapshot.eventImpactBps());
+        QuantSignalPolicy.Signal observed = signals.evaluate(snapshot.book(), company.listing().issueReferencePrice(), company.modelPrice(), snapshot.eventImpactBps());
+        QuantSignalPolicy.Signal signal = signals.projectForMarketActivity(observed, company.listing().stockCode(), snapshot.step(), threshold);
         long desired = 1L + Math.floorMod(snapshot.step() + company.listing().stockCode().hashCode(), 10L);
         if (signal.confidenceBps() < threshold || "NONE".equals(signal.direction())) {
             return audit(snapshot, signal, "NO_TRADE", 0, 0).thenApply(ignored -> 0);

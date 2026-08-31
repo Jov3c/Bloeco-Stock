@@ -30,4 +30,13 @@ class QuantSignalPolicyTest {
 
         assertThat(signal).isEqualTo(new QuantSignalPolicy.Signal("NONE", 0));
     }
+
+    @Test
+    void simulatedMicrostructureProjectionActivatesExactlyThirteenOfTwentyWeakSignalBuckets() {
+        long active = java.util.stream.LongStream.range(0, 20)
+                .map(step -> policy.projectForMarketActivity(new QuantSignalPolicy.Signal("NONE", 0), "NOVA", step, 6_500).confidenceBps() >= 6_500 ? 1 : 0)
+                .sum();
+
+        assertThat(active).isEqualTo(13);
+    }
 }
