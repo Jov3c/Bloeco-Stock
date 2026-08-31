@@ -1,6 +1,8 @@
 package cn.blockeco.exchange.ports;
 
 import cn.blockeco.exchange.domain.company.CompanyId;
+import cn.blockeco.exchange.domain.bluechip.QuantDecision;
+import cn.blockeco.exchange.domain.bluechip.QuantRiskState;
 import cn.blockeco.exchange.domain.finance.StockListing;
 import cn.blockeco.exchange.domain.money.Money;
 import java.sql.Connection;
@@ -49,6 +51,12 @@ public interface BluechipRepository {
     List<DividendSettlement> settleDueDividendRuns(Connection connection, Instant now, long bluechipBaseProfitMinor) throws SQLException;
     /** Applies an audited operator delta and rejects any resulting negative fund balance. */
     void adjustFund(Connection connection, String stockCode, String kind, long delta, Instant occurredAt) throws SQLException;
+    Optional<QuantRiskState> loadQuantRisk(String stockCode);
+    List<QuantDecision> quantDecisions(String stockCode, int limit);
+    /** Sum only currently active fictional events applicable to this code and industry. */
+    int activeEventImpactBps(String stockCode, String industry, Instant now);
+    void saveQuantRisk(Connection connection, QuantRiskState risk) throws SQLException;
+    void recordQuantDecision(Connection connection, QuantDecision decision) throws SQLException;
 
     record BluechipCompany(CompanyId companyId, StockListing listing, String industry, UUID systemAccountId,
                            Money referencePrice, Money modelPrice, Money lowerPrice, Money upperPrice, int spreadBps, long fundShares, Money fundCash) { }

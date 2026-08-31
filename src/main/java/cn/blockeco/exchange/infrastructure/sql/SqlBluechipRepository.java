@@ -1,6 +1,8 @@
 package cn.blockeco.exchange.infrastructure.sql;
 
 import cn.blockeco.exchange.domain.company.CompanyId;
+import cn.blockeco.exchange.domain.bluechip.QuantDecision;
+import cn.blockeco.exchange.domain.bluechip.QuantRiskState;
 import cn.blockeco.exchange.domain.finance.StockListing;
 import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.ports.BluechipRepository;
@@ -88,6 +90,54 @@ public final class SqlBluechipRepository implements BluechipRepository {
             try (PreparedStatement statement=connection.prepareStatement("UPDATE share_holdings SET available_shares = available_shares + ? WHERE company_id = ? AND holder_uuid = ? AND available_shares + ? >= 0")) { statement.setLong(1,delta);statement.setString(2,company.companyId().value().toString());statement.setString(3,company.systemAccountId().toString());statement.setLong(4,delta);if(statement.executeUpdate()!=1)throw new IllegalArgumentException("negative shares"); }
         }
         try (PreparedStatement statement=connection.prepareStatement("INSERT INTO bluechip_fund_audit (id, company_id, operation, cash_delta_minor, shares_delta, occurred_at) VALUES (?, ?, 'ADMIN_FUND_ADJUSTED', 0, ?, ?)")) { statement.setString(1,UUID.randomUUID().toString());statement.setString(2,company.companyId().value().toString());statement.setLong(3,delta);statement.setString(4,occurredAt.toString());statement.executeUpdate(); }
+    }
+    @Override public Optional<QuantRiskState> loadQuantRisk(String stockCode) {
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement("SELECT stock_code, risk_level, consecutive_losses, cooldown_until, updated_at FROM bluechip_quant_risk WHERE stock_code = ?")) {
+            statement.setString(1, stockCode);
+            try (ResultSet rows = statement.executeQuery()) {
+                return rows.next() ? Optional.of(new QuantRiskState(rows.getString(1), rows.getInt(2), rows.getInt(3), Instant.parse(rows.getString(4)), Instant.parse(rows.getString(5)))) : Optional.empty();
+            }
+        } catch (SQLException exception) { throw new IllegalStateException("could not read bluechip quant risk", exception); }
+    }
+    @Override public List<QuantDecision> quantDecisions(String stockCode, int requested) {
+        int limit = Math.max(1, Math.min(100, requested));
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement("SELECT id, stock_code, signal, confidence_bps, action, requested_shares, filled_shares, realized_pnl_minor, risk_level, decided_at FROM bluechip_quant_decisions WHERE stock_code = ? ORDER BY decided_at DESC, id DESC LIMIT ?")) {
+            statement.setString(1, stockCode); statement.setInt(2, limit);
+            try (ResultSet rows = statement.executeQuery()) {
+                java.util.ArrayList<QuantDecision> decisions = new java.util.ArrayList<>();
+                while (rows.next()) decisions.add(quantDecision(rows));
+                return List.copyOf(decisions);
+            }
+        } catch (SQLException exception) { throw new IllegalStateException("could not read bluechip quant decisions", exception); }
+    }
+    @Override public int activeEventImpactBps(String stockCode, String industry, Instant now) {
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement("""
+                     SELECT COALESCE(SUM(event.price_impact_bps), 0)
+                     FROM bluechip_events event
+                     LEFT JOIN stock_listings listing ON listing.company_id = event.company_id
+                     WHERE event.state = 'ACTIVE' AND event.starts_at <= ? AND event.ends_at > ?
+                       AND (event.scope = 'MARKET' OR (event.scope = 'INDUSTRY' AND event.industry = ?)
+                            OR (event.scope = 'COMPANY' AND listing.stock_code = ?))
+                     """)) {
+            statement.setString(1, now.toString()); statement.setString(2, now.toString()); statement.setString(3, industry); statement.setString(4, stockCode);
+            try (ResultSet rows = statement.executeQuery()) { return rows.next() ? rows.getInt(1) : 0; }
+        } catch (SQLException exception) { throw new IllegalStateException("could not read active bluechip events", exception); }
+    }
+    @Override public void saveQuantRisk(Connection connection, QuantRiskState risk) throws SQLException {
+        requireTransaction(connection);
+        try (PreparedStatement statement = connection.prepareStatement("INSERT INTO bluechip_quant_risk (stock_code, risk_level, consecutive_losses, cooldown_until, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(stock_code) DO UPDATE SET risk_level = excluded.risk_level, consecutive_losses = excluded.consecutive_losses, cooldown_until = excluded.cooldown_until, updated_at = excluded.updated_at")) {
+            statement.setString(1, risk.stockCode()); statement.setInt(2, risk.riskLevel()); statement.setInt(3, risk.consecutiveLosses()); statement.setString(4, risk.cooldownUntil().toString()); statement.setString(5, risk.updatedAt().toString()); statement.executeUpdate();
+        }
+    }
+    @Override public void recordQuantDecision(Connection connection, QuantDecision decision) throws SQLException {
+        requireTransaction(connection);
+        try (PreparedStatement statement = connection.prepareStatement("INSERT INTO bluechip_quant_decisions (id, stock_code, signal, confidence_bps, action, requested_shares, filled_shares, realized_pnl_minor, risk_level, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+            statement.setString(1, decision.id()); statement.setString(2, decision.stockCode()); statement.setString(3, decision.signal()); statement.setInt(4, decision.confidenceBps()); statement.setString(5, decision.action());
+            statement.setLong(6, decision.requestedShares()); statement.setLong(7, decision.filledShares()); statement.setLong(8, decision.realizedPnlMinor()); statement.setInt(9, decision.riskLevel()); statement.setString(10, decision.decidedAt().toString()); statement.executeUpdate();
+        }
     }
 
     @Override public void insertInitial(Connection connection, BluechipSeed seed) throws SQLException {
@@ -338,6 +388,10 @@ public final class SqlBluechipRepository implements BluechipRepository {
         return new BluechipMetadata(companyId, listing, row.getString("industry"), UUID.fromString(row.getString("system_account_uuid")), Money.ofMinor(row.getLong("model_price_minor")), Money.ofMinor(row.getLong("lower_price_minor")), Money.ofMinor(row.getLong("upper_price_minor")), row.getInt("spread_bps"), row.getInt("event_sensitivity_bps"), row.getInt("payout_bps"));
     }
     private static cn.blockeco.exchange.domain.bluechip.BluechipEvent event(ResultSet r)throws SQLException{return new cn.blockeco.exchange.domain.bluechip.BluechipEvent(r.getString(1),r.getString(2),r.getString(3),r.getString(4),r.getString(5),r.getString(6),r.getInt(7),r.getInt(8),Instant.parse(r.getString(9)),Instant.parse(r.getString(10)),r.getString(11));}
+    private static QuantDecision quantDecision(ResultSet row) throws SQLException {
+        return new QuantDecision(row.getString(1), row.getString(2), row.getString(3), row.getInt(4), row.getString(5),
+                row.getLong(6), row.getLong(7), row.getLong(8), row.getInt(9), Instant.parse(row.getString(10)));
+    }
     private static void insertHolding(Connection connection, BluechipSeed seed) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("INSERT INTO share_holdings (company_id, holder_uuid, available_shares, reserved_shares) VALUES (?, ?, ?, 0)")) {
             statement.setString(1, seed.companyId().value().toString()); statement.setString(2, seed.systemAccountId().toString()); statement.setLong(3, seed.fundShares()); statement.executeUpdate();
