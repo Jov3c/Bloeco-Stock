@@ -185,7 +185,7 @@ Run the Step 2 command; commit with `feat: add frequent fictional bluechip event
 
 ### Task 5: One-second refresh, read-only metrics, and local observation
 
-**Status:** in progress — one-second quote and GUI refresh tests are green; diagnostics and QA observation remain.
+**Status:** completed (`c2e51d2`; shared plugin/scheduler integration and QA observer are in the current release worktree)
 
 **Files:**
 - Modify: `src/main/java/cn/blockeco/exchange/paper/StockGuiController.java`
@@ -195,28 +195,28 @@ Run the Step 2 command; commit with `feat: add frequent fictional bluechip event
 - Test: `src/test/java/cn/blockeco/exchange/paper/BluechipAdminCommandTest.java`
 - Create: `qa-server/mcp/quant-observation.mjs`
 
-- [ ] **Step 1: Write failing UI/admin tests**
+- [x] **Step 1: Write failing UI/admin tests**
 
 ```java
 assertThat(StockGuiController.liveRefreshPeriodTicks()).isEqualTo(20L);
 assertThat(command.complete(admin, new String[]{"bluechip", "quant", ""})).contains("status");
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `$env:JAVA_TOOL_OPTIONS='-Djdk.net.unixdomain.tmpdir=C:\Temp\BlockStock-JavaSockets'; .\gradlew.bat test --tests cn.blockeco.exchange.paper.StockGuiControllerTest --tests cn.blockeco.exchange.paper.BluechipAdminCommandTest --rerun-tasks`
 
 Expected: FAIL because refresh is 40 ticks and quant status is absent.
 
-- [ ] **Step 3: Implement UI and read-only diagnostics**
+- [x] **Step 3: Implement UI and read-only diagnostics**
 
 Change the existing session-owned refresh chain to 20 ticks; retain identity/page guards. Change the quote scheduler from two seconds to one second. Add only `/stockadmin bluechip quant status [CODE]`, permission-gated and read-only, showing cash, inventory, decisions, recent win rate, risk level, cooldown and no-trade count. No command may fund the strategy.
 
-- [ ] **Step 4: Package, deploy, and observe local QA**
+- [x] **Step 4: Package, deploy, and observe local QA**
 
 Build with `$env:JAVA_TOOL_OPTIONS='-Djdk.net.unixdomain.tmpdir=C:\Temp\BlockStock-JavaSockets'; .\gradlew.bat clean test shadowJar --no-configuration-cache --rerun-tasks`. Stop only local QA `127.0.0.1:25566`, move its jar to a timestamp backup, deploy the shaded jar and start with both Java socket temp properties. During an open session, `quant-observation.mjs` samples for ten minutes and asserts decision growth, no more than one strategy order per eight-second bucket, nonnegative cash/shares, unchanged compensation-fund balance and risk level at most 3.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Commit metrics, refresh and QA script with `feat: expose quant metrics and one second market refresh`.
 
@@ -225,16 +225,24 @@ Commit metrics, refresh and QA script with `feat: expose quant metrics and one s
 **Files:**
 - Modify: `docs/superpowers/plans/2026-08-31-quant-market-engine.md` (mark completed tasks and record command outputs)
 
-- [ ] **Step 1: Run the complete test suite without test filters**
+- [x] **Step 1: Run the complete test suite without test filters**
 
 Run: `$env:JAVA_TOOL_OPTIONS='-Djdk.net.unixdomain.tmpdir=C:\Temp\BlockStock-JavaSockets'; .\gradlew.bat clean test shadowJar --no-configuration-cache --rerun-tasks`
 
 Expected: `BUILD SUCCESSFUL`; inspect every `build/test-results/test/*.xml` and report zero `<failure>` and `<error>` elements.
 
-- [ ] **Step 2: Check the packaged artifact and QA deployment boundary**
+- [x] **Step 2: Check the packaged artifact and QA deployment boundary**
 
 Verify the shaded jar contains `plugin.yml`, Flyway migration `V021.sql`, and the quant classes. Deploy only to the existing local QA server at `127.0.0.1:25566`; do not touch a player-facing server, its worlds, or its database.
 
-- [ ] **Step 3: Record outcomes and commit**
+- [x] **Step 3: Record outcomes and commit**
+
+## Release-candidate evidence (2026-08-31)
+
+- `gradlew.bat clean test shadowJar --no-configuration-cache --rerun-tasks` completed successfully. The 74 JUnit XML reports contain zero `failure` and zero `error` elements.
+- The shaded artifact contains `plugin.yml`, `db/migration/V021.sql`, `BluechipQuantStrategyService`, and `QuantRiskPolicy`.
+- The focused scheduler, GUI-refresh, and bluechip-admin tests passed after the quote period changed to one second and the session-owned market/detail GUI chain changed to 20 ticks.
+- On the existing loopback QA server only (`127.0.0.1:25566`), `/stockadmin bluechip quant status NOVA` returned the read-only holdings, risk, cooldown, and decision counters.
+- The repeatable read-only `qa-server/mcp/quant-observation.mjs` sampled the real configured participant `00000000-0000-0000-0000-000000000077` for 130 seconds during an open session: 17 decisions, 8 ordinary orders, and 60 filled shares. Cash ended at `587964:0` (available:reserved), all balances/risk levels remained valid, and the compensation fund changed only by +69 normal matching fees. A subsequent 20-second rerun also passed (3 decisions, no safety violation).
 
 Record build, migration, GUI-refresh, admin-status, and open-session observation evidence in this plan. Commit with `test: verify quant market release candidate`.
