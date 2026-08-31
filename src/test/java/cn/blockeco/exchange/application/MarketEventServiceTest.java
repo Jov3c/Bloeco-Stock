@@ -99,18 +99,21 @@ class MarketEventServiceTest {
         } finally { Files.deleteIfExists(file); }
     }
 
-    @Test void companyCadenceIsGlobalAndSurvivesServiceRestartWhileMarketEventsLastOneToThreeDays() throws Exception {
+    @Test void dueEventsUseFrequentSmallFictionalTemplatesAndPersistTheirScheduleAcrossRestart() throws Exception {
         var file = Files.createTempFile("blockstock-event-cadence-", ".db");
         try (var database = migrated(file)) {
             var clock = new MutableClock(Instant.parse("2026-08-24T00:00:00Z")); var repository = seeded(database, clock);
             var first = new MarketEventService(repository, database, Runnable::run, clock::now, new Random(7));
             var events = first.triggerDueEvents().toCompletableFuture().join();
             assertThat(events).hasSize(2);
-            var market = events.stream().filter(event -> event.scope().equals("INDUSTRY")).findFirst().orElseThrow();
-            assertThat(Duration.between(market.startsAt(), market.endsAt())).isBetween(Duration.ofDays(1), Duration.ofDays(3));
+            assertThat(events).allSatisfy(event -> {
+                assertThat(Math.abs(event.priceImpactBps())).isBetween(25, 120);
+                assertThat(Duration.between(event.startsAt(), event.endsAt())).isBetween(Duration.ofMinutes(5), Duration.ofMinutes(20));
+                assertThat(event.headline()).doesNotContain("物流挑战").contains("BlockStock 模拟快讯");
+            });
             assertThat(new MarketEventService(repository, database, Runnable::run, clock::now, new Random(9)).triggerDueEvents().toCompletableFuture().join()).isEmpty();
-            clock.advance(Duration.ofHours(13));
-            assertThat(new MarketEventService(repository, database, Runnable::run, clock::now, new Random(9)).triggerDueEvents().toCompletableFuture().join()).hasSize(1);
+            clock.advance(Duration.ofMinutes(21));
+            assertThat(new MarketEventService(repository, database, Runnable::run, clock::now, new Random(9)).triggerDueEvents().toCompletableFuture().join()).isNotEmpty();
         } finally { Files.deleteIfExists(file); }
     }
 
