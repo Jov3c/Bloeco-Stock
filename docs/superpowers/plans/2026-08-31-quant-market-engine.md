@@ -37,6 +37,8 @@ market:
 
 ### Task 1: Persist quant risk and decisions
 
+**Status:** completed (`67f3cd6`)
+
 **Files:**
 - Create: `src/main/resources/db/migration/V021.sql`
 - Create: `src/main/java/cn/blockeco/exchange/domain/bluechip/QuantRiskState.java`
@@ -81,6 +83,8 @@ git commit -m "feat: persist bluechip quant risk and decisions"
 
 ### Task 2: Testable 65% target signal and loss protection
 
+**Status:** completed (`720ebb5`, `9f7a3c4`)
+
 **Files:**
 - Create: `src/main/java/cn/blockeco/exchange/paper/BluechipQuantConfig.java`
 - Modify: `src/main/resources/config.yml`
@@ -118,6 +122,8 @@ Run the Step 2 command; commit with `feat: add bounded bluechip quant policies`.
 
 ### Task 3: Serialized coordinator using ordinary orders
 
+**Status:** completed (`6e6e556`; plugin scheduler wiring is present in the working tree and awaits the shared-file integration commit)
+
 **Files:**
 - Create: `src/main/java/cn/blockeco/exchange/application/BluechipQuantStrategyService.java`
 - Modify: `src/main/java/cn/blockeco/exchange/BlockecoPlugin.java`
@@ -149,6 +155,8 @@ Run the Step 2 command and `BluechipSystemParticipantServiceTest`; commit with `
 
 ### Task 4: Frequent fictional event templates
 
+**Status:** completed (`c08be8e`)
+
 **Files:**
 - Modify: `src/main/java/cn/blockeco/exchange/application/MarketEventService.java`
 - Test: `src/test/java/cn/blockeco/exchange/application/MarketEventServiceTest.java`
@@ -176,6 +184,8 @@ Select company/industry/market templates only from game-fiction text. Schedule t
 Run the Step 2 command; commit with `feat: add frequent fictional bluechip events`.
 
 ### Task 5: One-second refresh, read-only metrics, and local observation
+
+**Status:** in progress — one-second quote and GUI refresh tests are green; diagnostics and QA observation remain.
 
 **Files:**
 - Modify: `src/main/java/cn/blockeco/exchange/paper/StockGuiController.java`
