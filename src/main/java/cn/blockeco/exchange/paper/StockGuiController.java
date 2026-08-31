@@ -221,6 +221,7 @@ public final class StockGuiController implements Listener, StockGuiOpener {
             for (int i = start; i < end; i++) { PublicMarketRow r = rows.get(i); put(inv, i - start, Material.PAPER, "detail:" + r.stockCode(), r.stockCode() + " " + r.companyName(), "现价 " + amount(r.latestPrice()) + "  涨跌 " + amount(r.change()) + "  量 " + r.volume()); }
             put(inv, 45, Material.ARROW, "market:prev", "上一页", "返回上一页"); put(inv, 49, Material.BARRIER, "back:home", "主菜单", "返回交易所主页");
             if (end < rows.size()) put(inv, 53, Material.ARROW, "market:next", "下一页", "查看下一页"); openInventory(player, inv);
+            scheduleMarketRefresh(player, session);
         }));
     }
 
@@ -265,6 +266,7 @@ public final class StockGuiController implements Listener, StockGuiOpener {
             put(inv, slot.slot(), slot.material(), slot.action(), slot.name(), slot.lore());
         }
         openInventory(player, inv);
+        scheduleDetailRefresh(player, session);
     }
 
     private void detailFrame(Inventory inventory) {
@@ -294,6 +296,20 @@ public final class StockGuiController implements Listener, StockGuiOpener {
 
     private void openPrivate(Player player, StockGuiSession.Page page, String loading, java.util.function.Consumer<PortfolioView> renderer) { if(!permission(player,"blockeco.stock."+(page==StockGuiSession.Page.CASH?"cash":"portfolio")))return;StockGuiSession s=openSession(player.getUniqueId(),page,0,null,null);loading(player,s,"正在加载"+loading+"…");queries.portfolio(player.getUniqueId()).whenComplete((view,error)->onMain(player,s,()->{if(error!=null){player.sendMessage(messages.stockQueryFailed());return;}renderer.accept(view);})); }
 
+    /** A refresh chain is owned by the current GUI session and stops itself on close or navigation. */
+    private void scheduleMarketRefresh(Player player, StockGuiSession session) {
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            if (player.isOnline() && matches(player.getUniqueId(), session.id()) && session.page() == StockGuiSession.Page.MARKET)
+                openMarket(player, session.pageIndex());
+        }, liveRefreshPeriodTicks());
+    }
+    private void scheduleDetailRefresh(Player player, StockGuiSession session) {
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            if (player.isOnline() && matches(player.getUniqueId(), session.id()) && session.page() == StockGuiSession.Page.DETAIL)
+                openDetail(player, session.stockCode(), session.chartMode());
+        }, liveRefreshPeriodTicks());
+    }
+
     private void fill(Inventory inventory) { for (int slot = 0; slot < inventory.getSize(); slot++) inventory.setItem(slot, items.filler()); }
     private void openInventory(Player player, Inventory inventory) { GuiTransitions.defer(action -> Bukkit.getScheduler().runTask(plugin, action), () -> { if (!player.isOnline()) return; beginInventoryReplacement(player.getUniqueId()); try { player.openInventory(inventory); } finally { endInventoryReplacement(player.getUniqueId()); } }); }
     private void closeInventory(Player player) { GuiTransitions.defer(action -> Bukkit.getScheduler().runTask(plugin, action), player::closeInventory); }
@@ -303,6 +319,7 @@ public final class StockGuiController implements Listener, StockGuiOpener {
     private boolean permission(Player player,String permission) { if(player.hasPermission(permission))return true;player.sendMessage(messages.noPermission());return false; }
     private void onMain(Player player, StockGuiSession session, Runnable work) { mainThread.submit(()->{if(player.isOnline()&&accepting.getAsBoolean()&&matches(player.getUniqueId(),session.id()))work.run();return null;}); }
     private String amount(Money value) { return BigDecimal.valueOf(value.minorUnits(),currencyScale).setScale(currencyScale).toPlainString(); }
+    static long liveRefreshPeriodTicks() { return 20L; }
 
     private void openInput(Player player, StockGuiSession.InputDraft draft) {
         if ((draft.kind()==StockGuiSession.InputKind.CASH_AMOUNT && !permission(player,"blockeco.stock.cash")) || (draft.kind()!=StockGuiSession.InputKind.CASH_AMOUNT && !permission(player,"blockeco.stock.trade"))) return;

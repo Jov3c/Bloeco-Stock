@@ -13,6 +13,10 @@ import cn.blockeco.exchange.domain.money.Money;
 import org.junit.jupiter.api.Test;
 
 class StockGuiControllerTest {
+    @Test void live_market_refresh_uses_a_one_second_period() {
+        assertThat(StockGuiController.liveRefreshPeriodTicks()).isEqualTo(20L);
+    }
+
     @Test void home_menu_exposes_a_public_ipo_entry_for_investors_without_a_company() {
         assertThat(StockGuiController.homeSlots())
                 .extracting(StockGuiController.HomeSlot::slot, StockGuiController.HomeSlot::action, StockGuiController.HomeSlot::name)

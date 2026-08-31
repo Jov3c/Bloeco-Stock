@@ -221,6 +221,11 @@ public final class BlockecoPlugin extends JavaPlugin {
         var marketMaker = new BluechipMarketMakerService(bluechipRepository, secondaryMarket, marketSession, clock);
         var systemParticipant = new cn.blockeco.exchange.application.BluechipSystemParticipantService(bluechipRepository, tradingRepository,
                 secondaryMarket, marketSession, clock, bluechipParticipantId);
+        var quantConfig = BluechipQuantConfig.load(getConfig());
+        var quantStrategy = new cn.blockeco.exchange.application.BluechipQuantStrategyService(bluechipRepository, tradingRepository,
+                secondaryMarket, db, sqlExecutor, marketSession, clock, bluechipParticipantId, quantConfig,
+                new cn.blockeco.exchange.application.QuantSignalPolicy(),
+                new cn.blockeco.exchange.application.QuantRiskPolicy(quantConfig.maximumOrderBps(), quantConfig.lossCooldownSeconds()));
         // The callback runs only after an order transaction commits; the maker queues a bounded,
         // non-blocking refill and suppresses its own system-order callbacks.
         secondaryMarket.setAfterMatchedOrdersListener(marketMaker::replenishAfterMatch);
@@ -255,7 +260,8 @@ public final class BlockecoPlugin extends JavaPlugin {
                     @Override public void industry(String industry, int impact) { marketEvents.triggerTestIndustryEvent(industry, impact); }
                     @Override public void market(int impact) { marketEvents.triggerTestMarketEvent(impact); }
                 }, messages,
-                bluechipConfig.definitions().stream().map(cn.blockeco.exchange.domain.bluechip.BluechipDefinition::industry).distinct().toList());
+                bluechipConfig.definitions().stream().map(cn.blockeco.exchange.domain.bluechip.BluechipDefinition::industry).distinct().toList(),
+                stockCode -> quantStatus(bluechipRepository, tradingRepository, secondaryMarket, bluechipParticipantId, stockCode));
         adminCommand.setExecutor((sender, registered, label, args) -> args.length > 0 && "bluechip".equalsIgnoreCase(args[0])
                 ? bluechipAdmin.onCommand(sender, registered, label, args) : adminConfig.onCommand(sender, registered, label, args));
         adminCommand.setTabCompleter((sender, registered, label, args) -> args.length > 0 && "bluechip".equalsIgnoreCase(args[0])
@@ -326,8 +332,10 @@ public final class BlockecoPlugin extends JavaPlugin {
                                     ? java.util.concurrent.CompletableFuture.completedFuture(0)
                                     : marketMaker.cancelSystemQuotesAtClose().thenCompose(cancelled -> systemParticipant.close()))
                                     .exceptionally(failure -> { getLogger().warning("蓝筹时段调度失败: " + failure.getMessage()); return 0; }),
-                            () -> marketMaker.refreshQuotes().thenCompose(ignored -> systemParticipant.tick())
-                                    .exceptionally(failure -> { getLogger().warning("蓝筹报价/参与者调度失败: " + failure.getMessage()); return null; }),
+                            () -> marketMaker.refreshQuotes()
+                                    .exceptionally(failure -> { getLogger().warning("蓝筹报价调度失败: " + failure.getMessage()); return null; }),
+                            () -> quantStrategy.tick()
+                                    .exceptionally(failure -> { getLogger().warning("蓝筹量化策略调度失败: " + failure.getMessage()); return 0; }),
                             () -> marketEvents.triggerDueEvents().thenCompose(ignored -> marketEvents.applyDecay()).exceptionally(failure -> { getLogger().warning("蓝筹事件调度失败: " + failure.getMessage()); return null; }),
                             () -> { var now = clock.now().atZone(marketZone); if (now.getHour() >= 20) marketCandles.closeTradingDay(now.toLocalDate()).exceptionally(failure -> { getLogger().warning("蓝筹K线调度失败: " + failure.getMessage()); return null; }); },
                             () -> dividends.settleDueRuns().exceptionally(failure -> { getLogger().warning("蓝筹分红调度失败: " + failure.getMessage()); return null; }));
@@ -369,6 +377,23 @@ public final class BlockecoPlugin extends JavaPlugin {
         runtime.stop();
     }
 
+    /** Admin-only snapshot; it deliberately exposes outcomes, never strategy weights or funding controls. */
+    private static String quantStatus(cn.blockeco.exchange.ports.BluechipRepository bluechips,
+                                      cn.blockeco.exchange.ports.SecondaryTradingRepository orders,
+                                      SecondaryMarketService market, java.util.UUID participant, String stockCode) {
+        var companies = bluechips.all().stream()
+                .filter(company -> stockCode == null || company.listing().stockCode().equalsIgnoreCase(stockCode)).toList();
+        if (companies.isEmpty()) return "未找到蓝筹代码 " + stockCode + "。";
+        long decisions = 0; long noTrade = 0;
+        for (var company : companies) {
+            var audit = bluechips.quantDecisions(company.listing().stockCode(), 100);
+            decisions += audit.size(); noTrade += audit.stream().filter(decision -> "NO_TRADE".equals(decision.action()) || "RISK_LIMIT".equals(decision.action())).count();
+        }
+        if (stockCode == null) return "量化状态：可用证券现金=" + market.availableCash(participant).minorUnits() + "分；审计决策=" + decisions + "；未交易=" + noTrade + "。可用 /stockadmin bluechip quant status <代码> 查看风险与持仓。";
+        var company = companies.getFirst(); long shares = orders.findHolding(company.companyId(), participant).map(holding -> holding.availableShares()).orElse(0L);
+        var risk = bluechips.loadQuantRisk(company.listing().stockCode()).orElse(new cn.blockeco.exchange.domain.bluechip.QuantRiskState(company.listing().stockCode(), 0, 0, Instant.EPOCH, Instant.EPOCH));
+        return "量化状态 " + company.listing().stockCode() + "：持仓=" + shares + "；风险等级=" + risk.riskLevel() + "；连续亏损=" + risk.consecutiveLosses() + "；冷却至=" + risk.cooldownUntil() + "；审计决策=" + decisions + "；未交易=" + noTrade + "。";
+    }
     private void validateConfiguration() {
         int scale = getConfig().getInt("currency.scale", -1); if (scale < 0 || scale > 8) throw new IllegalArgumentException("currency.scale must be between 0 and 8");
         validateMarketConfiguration(configuredMarketFeeBps(), getConfig().getString("market.time-zone", "Asia/Shanghai"));
