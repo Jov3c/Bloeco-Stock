@@ -442,3 +442,5 @@ public final class BlockecoPlugin extends JavaPlugin {
     }
     private void failEnable(String message) { getLogger().severe(message); getServer().getPluginManager().disablePlugin(this); }
 }
+import cn.blockeco.exchange.paper.BluechipQuantConfig;
+        BluechipQuantConfig.load(getConfig());
