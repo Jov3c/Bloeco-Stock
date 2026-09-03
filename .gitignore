@@ -24,3 +24,5 @@ run/
 /qa-server/mcp/*.log
 /qa-server/mcp/*.out
 /qa-server/mcp/*.err
+/\.superpowers/
+/docs/superpowers/
