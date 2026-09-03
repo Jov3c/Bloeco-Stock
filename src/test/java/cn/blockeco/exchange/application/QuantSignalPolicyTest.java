@@ -39,4 +39,12 @@ class QuantSignalPolicyTest {
 
         assertThat(active).isEqualTo(13);
     }
+
+    @Test
+    void simulatedDirectionAlternatesWhenTheSameSymbolReturnsToTheOneSecondRotation() {
+        var first = policy.projectForMarketActivity(new QuantSignalPolicy.Signal("NONE", 0), "NOVA", 0, 6_500);
+        var nextRotation = policy.projectForMarketActivity(new QuantSignalPolicy.Signal("NONE", 0), "NOVA", 10, 6_500);
+
+        assertThat(nextRotation.direction()).isNotEqualTo(first.direction());
+    }
 }

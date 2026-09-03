@@ -19,6 +19,10 @@ final class StockGuiItemFactory {
     }
 
     ItemStack action(Material material, String action, Component name, List<Component> lore) {
+        return action(material, action, null, name, lore);
+    }
+
+    ItemStack action(Material material, String action, String visualRole, Component name, List<Component> lore) {
         ItemStack item = new ItemStack(material);
         ItemMeta meta = item.getItemMeta();
         meta.displayName(name); meta.lore(lore);
@@ -28,8 +32,9 @@ final class StockGuiItemFactory {
     }
 
     ItemStack filler() {
-        ItemStack item = new ItemStack(Material.GRAY_STAINED_GLASS_PANE);
-        ItemMeta meta = item.getItemMeta(); meta.displayName(Component.text(" ")); item.setItemMeta(meta);
+        ItemStack item = new ItemStack(Material.BLACK_STAINED_GLASS_PANE);
+        ItemMeta meta = item.getItemMeta(); meta.displayName(Component.text(" "));
+        item.setItemMeta(meta);
         return item;
     }
 

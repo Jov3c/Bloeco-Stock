@@ -57,11 +57,11 @@ final class PluginRuntime {
     }
     private void finishShutdown(ExecutorService currentExecutor,AutoCloseable currentDatabase){if (currentExecutor == null || shutdown(currentExecutor)) closeDatabase(currentDatabase); else observeTerminationThenClose(currentExecutor,currentDatabase);}
     void closeDatabase(AutoCloseable value) {
-        if (value != null && databaseClosed.compareAndSet(false, true)) try { value.close(); } catch (Exception e) { throw new IllegalStateException("could not close BlockStock database", e); }
+        if (value != null && databaseClosed.compareAndSet(false, true)) try { value.close(); } catch (Exception e) { throw new IllegalStateException("could not close Bloeco-Stock database", e); }
     }
     private boolean shutdown(ExecutorService value) {
         value.shutdown();
         try { if (value.awaitTermination(5, TimeUnit.SECONDS)) return true; value.shutdownNow(); return value.awaitTermination(5, TimeUnit.SECONDS); } catch (InterruptedException e) { value.shutdownNow(); Thread.currentThread().interrupt(); return false; }
     }
-    private void observeTerminationThenClose(ExecutorService value, AutoCloseable db) { Thread observer = new Thread(() -> { try { if (value.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS)) closeDatabase(db); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); } }, "BlockStock-SQL-Termination"); observer.setDaemon(true); observer.start(); }
+    private void observeTerminationThenClose(ExecutorService value, AutoCloseable db) { Thread observer = new Thread(() -> { try { if (value.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS)) closeDatabase(db); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); } }, "Bloeco-Stock-SQL-Termination"); observer.setDaemon(true); observer.start(); }
 }

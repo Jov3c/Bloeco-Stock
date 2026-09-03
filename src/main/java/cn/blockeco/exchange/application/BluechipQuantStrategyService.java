@@ -5,6 +5,7 @@ import cn.blockeco.exchange.domain.bluechip.QuantRiskState;
 import cn.blockeco.exchange.domain.market.MarketSession;
 import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.ports.AppClock;
+import cn.blockeco.exchange.ports.BluechipParticipantRepository;
 import cn.blockeco.exchange.ports.BluechipRepository;
 import cn.blockeco.exchange.ports.SecondaryTradingRepository;
 import cn.blockeco.exchange.ports.TransactionRunner;
@@ -23,15 +24,23 @@ public final class BluechipQuantStrategyService {
     private final BluechipRepository bluechips; private final SecondaryTradingRepository orders; private final SecondaryMarketService market;
     private final TransactionRunner transactions; private final Executor sql; private final Supplier<MarketSession> session; private final AppClock clock;
     private final UUID participant; private final int threshold; private final QuantSignalPolicy signals; private final QuantRiskPolicy riskPolicy;
+    private final BluechipParticipantRepository participantLiquidity;
     private CompletionStage<Void> lifecycle = CompletableFuture.completedFuture(null); private long lastStep = Long.MIN_VALUE;
+    private long lastLiquidityCheck = Long.MIN_VALUE;
+    private static final long LIQUIDITY_CHECK_INTERVAL_SECONDS = 30L;
+    private static final Money PARTICIPANT_CASH_FLOOR = Money.ofMinor(2_500_000L);
+    private static final Money PARTICIPANT_CASH_TARGET = Money.ofMinor(10_000_000L);
+    private static final long PARTICIPANT_SHARES_FLOOR = 50L;
+    private static final long PARTICIPANT_SHARES_TARGET = 200L;
 
     public BluechipQuantStrategyService(BluechipRepository bluechips, SecondaryTradingRepository orders, SecondaryMarketService market,
                                         TransactionRunner transactions, Executor sql, Supplier<MarketSession> session, AppClock clock,
-                                        UUID participant, cn.blockeco.exchange.paper.BluechipQuantConfig configuration,
+                                        UUID participant, BluechipParticipantRepository participantLiquidity, cn.blockeco.exchange.paper.BluechipQuantConfig configuration,
                                         QuantSignalPolicy signals, QuantRiskPolicy riskPolicy) {
         this.bluechips = Objects.requireNonNull(bluechips); this.orders = Objects.requireNonNull(orders); this.market = Objects.requireNonNull(market);
         this.transactions = Objects.requireNonNull(transactions); this.sql = Objects.requireNonNull(sql); this.session = Objects.requireNonNull(session); this.clock = Objects.requireNonNull(clock);
         this.participant = Objects.requireNonNull(participant); this.threshold = Objects.requireNonNull(configuration).targetConfidenceBps();
+        this.participantLiquidity = Objects.requireNonNull(participantLiquidity);
         this.signals = Objects.requireNonNull(signals); this.riskPolicy = Objects.requireNonNull(riskPolicy);
     }
 
@@ -40,10 +49,22 @@ public final class BluechipQuantStrategyService {
         Instant now = clock.now(); long step = activityStep(now);
         if (!session.get().acceptsMatching() || step == lastStep) return CompletableFuture.completedFuture(0);
         lastStep = step;
-        return enqueue(() -> CompletableFuture.supplyAsync(() -> snapshot(now, step), sql).thenCompose(this::decide));
+        return enqueue(() -> CompletableFuture.supplyAsync(() -> ensureLiquidity(now), sql)
+                .thenCompose(ignored -> CompletableFuture.supplyAsync(() -> snapshot(now, step), sql)).thenCompose(this::decide));
     }
 
-    static long activityStep(Instant now) { return Math.floorDiv(Objects.requireNonNull(now).getEpochSecond(), 8L); }
+    static long activityStep(Instant now) { return Objects.requireNonNull(now).getEpochSecond(); }
+
+    private synchronized boolean ensureLiquidity(Instant now) {
+        if (lastLiquidityCheck != Long.MIN_VALUE && now.getEpochSecond() - lastLiquidityCheck < LIQUIDITY_CHECK_INTERVAL_SECONDS) return false;
+        List<BluechipRepository.BluechipCompany> companies = bluechips.all();
+        if (companies.isEmpty()) return false;
+        UUID maker = companies.getFirst().systemAccountId();
+        boolean rebalanced = transactions.inTransaction(connection -> participantLiquidity.rebalanceBelowFloor(connection, maker, participant,
+                PARTICIPANT_CASH_FLOOR, PARTICIPANT_CASH_TARGET, PARTICIPANT_SHARES_FLOOR, PARTICIPANT_SHARES_TARGET, companies));
+        lastLiquidityCheck = now.getEpochSecond();
+        return rebalanced;
+    }
 
     private Snapshot snapshot(Instant now, long step) {
         List<BluechipRepository.BluechipCompany> all = bluechips.all().stream()
@@ -69,7 +90,7 @@ public final class BluechipQuantStrategyService {
         boolean buying = "BUY".equals(signal.direction());
         long holding = orders.findHolding(company.companyId(), participant).map(value -> value.availableShares()).orElse(0L);
         Money limit = buying ? company.upperPrice() : company.lowerPrice();
-        long shares = riskPolicy.orderShares(desired, market.availableCash(participant).minorUnits(), holding, limit, snapshot.risk(), buying);
+        long shares = riskPolicy.orderShares(desired, market.availableCash(participant).minorUnits(), holding, limit, market.buyerFeeBps(), snapshot.risk(), buying);
         if (shares == 0) return audit(snapshot, signal, "RISK_LIMIT", 0, 0).thenApply(ignored -> 0);
         CompletionStage<OrderPlacementResult> placed = buying
                 ? market.placeBuy(participant, company.listing().stockCode(), shares, limit)

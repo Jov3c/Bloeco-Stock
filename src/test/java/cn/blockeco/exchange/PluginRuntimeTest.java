@@ -84,6 +84,6 @@ class PluginRuntimeTest {
 
   assertThatThrownBy(() -> runtime.closeDatabase(() -> { throw new Exception("locked"); }))
       .isInstanceOf(IllegalStateException.class)
-      .hasMessage("could not close BlockStock database");
+      .hasMessage("could not close Bloeco-Stock database");
  }
 }

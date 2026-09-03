@@ -5,6 +5,8 @@ market:
   system-account-uuid: '00000000-0000-0000-0000-000000000099'
   # 有限系统参与者：与做市基金和国库均不同的非玩家证券账户。
   participant-account-uuid: '00000000-0000-0000-0000-000000000077'
+  # CentralEconomy 的受限国库账户。蓝筹开市前，Bloeco-Stock 仅通过 Vault 从此账户扣除既有余额并存入托管账户；余额不足则不开市。
+  bluechip-reserve-treasury-uuid: '00000000-0000-0000-0000-000000000098'
   # 买方手续费，创建委托时快照到订单；范围 0..10000（万分比）。
   fee-bps: 10
   quant:
@@ -149,7 +151,7 @@ company:
   registration-fee: '1000.00'
   minimum-capital: '10000.00'
   initial-shares: 1000
-  # A BlockStock-controlled, non-player Vault account. Registration capital is held here before company records become available.
+  # A Bloeco-Stock-controlled, non-player Vault account. Registration capital is held here before company records become available.
   treasury-escrow-uuid: '00000000-0000-0000-0000-000000000001'
   allowed-dividend-percent: [30, 50, 70]
 database:
@@ -157,7 +159,7 @@ database:
   pool-size: 2
 messages:
   processing: '公司创建正在处理中。'
-  initializing: 'BlockStock 正在初始化，请稍后再试。'
+  initializing: 'Bloeco-Stock 正在初始化，请稍后再试。'
   no-permission: '你没有权限。'
   usage-stock: '用法：/stock [gui|help|market|book <代码>|ipo [数量]|info <公司名|代码>|announcements <公司名|代码> [数量]|subscribe <公司名|代码> <正整数股>|cash|deposit <金额>|withdraw <金额>|buy <代码> <正整数股> <限价>|sell <代码> <正整数股> <限价>|cancel <订单UUID>|portfolio|orders [1-50]|trades [1-50]]'
   usage-stock-cash: '用法：/stock cash'
@@ -197,7 +199,7 @@ messages:
   stock-market-row: '%company% [%code%] 最新=%latest% 涨跌=%change% 成交量=%volume% 成交额=%turnover% 市值=%capitalization% 已发行=%shares% 状态=%state%'
   stock-info-row: '%company% 代码=%code% 状态=%state% 参考价（暂无成交）=%price% 已发行=%shares%'
   stock-announcement-row: '%company% 公告[%time%] %body%'
-  stock-help-root: 'BlockStock 股票命令：'
+  stock-help-root: 'Bloeco-Stock 股票命令：'
   stock-help-gui: '交易所界面：/stock 或 /stock gui（原版客户端直接打开，无需模组）。'
   stock-help-public: '公开行情：/stock market；盘口：/stock book <代码>（固定买卖各五档）；IPO：ipo、info、announcements。'
   stock-help-subscribe: '认购：/stock subscribe <公司名|代码> <正整数股>'
@@ -243,7 +245,7 @@ messages:
   asset-bind-failed: '资产绑定失败。请确认资产归属和适配器。'
   ipo-announced: '首次公开发行已公告，12 小时后开放认购。'
   ipo-announce-failed: '首次公开发行公告失败。请确认资产绑定和目标金额。'
-  help-root: 'BlockStock 公司命令：'
+  help-root: 'Bloeco-Stock 公司命令：'
   help-create: '/company create <名称> <实缴资本> <DIVIDENDS>'
   help-create-rules: |-
     创建费：%fee%

@@ -34,6 +34,35 @@ public final class SqlBluechipParticipantRepository implements BluechipParticipa
         return true;
     }
 
+    @Override public boolean rebalanceBelowFloor(Connection connection, UUID makerAccountId, UUID participantAccountId,
+                                                  Money cashFloor, Money cashTarget, long sharesFloor, long sharesTarget,
+                                                  List<BluechipRepository.BluechipCompany> bluechips) throws SQLException {
+        requireTransaction(connection); Objects.requireNonNull(makerAccountId); Objects.requireNonNull(participantAccountId);
+        Objects.requireNonNull(cashFloor); Objects.requireNonNull(cashTarget); Objects.requireNonNull(bluechips);
+        if (makerAccountId.equals(participantAccountId)) throw new IllegalArgumentException("participant must differ from bluechip maker");
+        if (cashFloor.minorUnits() < 0 || cashTarget.minorUnits() <= 0 || cashFloor.minorUnits() >= cashTarget.minorUnits()
+                || sharesFloor < 0 || sharesTarget <= 0 || sharesFloor >= sharesTarget || bluechips.isEmpty()) {
+            throw new IllegalArgumentException("invalid participant rebalance limits");
+        }
+        boolean transferred = false;
+        long currentCash = availableCash(connection, participantAccountId);
+        if (currentCash < cashFloor.minorUnits()) {
+            long topUp = Math.subtractExact(cashTarget.minorUnits(), currentCash);
+            debitCash(connection, makerAccountId, topUp); creditCash(connection, participantAccountId, topUp); transferred = true;
+        }
+        for (BluechipRepository.BluechipCompany bluechip : bluechips) {
+            if (!makerAccountId.equals(bluechip.systemAccountId())) throw new IllegalArgumentException("bluechip maker does not match participant allocation maker");
+            long currentShares = availableShares(connection, bluechip.companyId().value().toString(), participantAccountId);
+            if (currentShares < sharesFloor) {
+                long topUp = Math.subtractExact(sharesTarget, currentShares);
+                debitShares(connection, bluechip.companyId().value().toString(), makerAccountId, topUp);
+                creditShares(connection, bluechip.companyId().value().toString(), participantAccountId, topUp);
+                transferred = true;
+            }
+        }
+        return transferred;
+    }
+
     private static void debitCash(Connection connection, UUID account, long amount) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("UPDATE securities_cash_accounts SET available_minor = available_minor - ? WHERE player_uuid = ? AND available_minor >= ?")) {
             statement.setLong(1, amount); statement.setString(2, account.toString()); statement.setLong(3, amount);
@@ -46,6 +75,11 @@ public final class SqlBluechipParticipantRepository implements BluechipParticipa
             if (statement.executeUpdate() != 1) throw new ArithmeticException("participant cash allocation overflows");
         }
     }
+    private static long availableCash(Connection connection, UUID account) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT available_minor FROM securities_cash_accounts WHERE player_uuid = ?")) {
+            statement.setString(1, account.toString()); try (ResultSet rows = statement.executeQuery()) { return rows.next() ? rows.getLong(1) : 0L; }
+        }
+    }
     private static void debitShares(Connection connection, String company, UUID account, long shares) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("UPDATE share_holdings SET available_shares = available_shares - ? WHERE company_id = ? AND holder_uuid = ? AND available_shares >= ?")) {
             statement.setLong(1, shares); statement.setString(2, company); statement.setString(3, account.toString()); statement.setLong(4, shares);
@@ -56,6 +90,12 @@ public final class SqlBluechipParticipantRepository implements BluechipParticipa
         try (PreparedStatement statement = connection.prepareStatement("INSERT INTO share_holdings (company_id, holder_uuid, available_shares, reserved_shares) VALUES (?, ?, ?, 0) ON CONFLICT(company_id, holder_uuid) DO UPDATE SET available_shares = available_shares + excluded.available_shares WHERE share_holdings.available_shares <= ?")) {
             statement.setString(1, company); statement.setString(2, account.toString()); statement.setLong(3, shares); statement.setLong(4, Math.subtractExact(Long.MAX_VALUE, shares));
             if (statement.executeUpdate() != 1) throw new ArithmeticException("participant share allocation overflows");
+        }
+    }
+    private static long availableShares(Connection connection, String company, UUID account) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT available_shares FROM share_holdings WHERE company_id = ? AND holder_uuid = ?")) {
+            statement.setString(1, company); statement.setString(2, account.toString());
+            try (ResultSet rows = statement.executeQuery()) { return rows.next() ? rows.getLong(1) : 0L; }
         }
     }
     private static void requireTransaction(Connection connection) throws SQLException { if (connection == null || connection.getAutoCommit()) throw new IllegalStateException("caller-owned transaction connection required"); }

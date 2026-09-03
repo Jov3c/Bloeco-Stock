@@ -4,9 +4,9 @@
 
 ## 上线前
 
-1. 使用 Java 21 执行 `./gradlew.bat clean test shadowJar`，并确认 `build/libs/` 只有一个 `blockstock-*-all.jar`。
+1. 使用 Java 21 执行 `./gradlew.bat clean test shadowJar`，并确认 `build/libs/` 只有一个 `bloeco-stock-*-all.jar`。
 2. 确认 Paper 1.21.4、Vault 与唯一经济提供方已在服务端加载；客户端不安装模组或插件。
-3. 在关闭 Paper 后备份 `plugins/BlockStock/blockeco.db`，同时保留在线 SQLite 的 `-wal` 与 `-shm` 文件（若存在）。
+3. 在关闭 Paper 后备份 `plugins/Bloeco-Stock/blockeco.db`，同时保留在线 SQLite 的 `-wal` 与 `-shm` 文件（若存在）。
 4. 检查 `market.fee-bps` 在 0–10000，`market.time-zone` 是有效 Java `ZoneId`；重启以应用配置。
 
 ## 启动检查

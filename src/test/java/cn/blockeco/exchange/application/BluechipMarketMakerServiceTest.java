@@ -407,6 +407,22 @@ class BluechipMarketMakerServiceTest {
         } finally { Files.deleteIfExists(file); }
     }
 
+    @Test
+    void repeatedPostTradeReplenishmentInTheSameIntervalDoesNotRewriteTheWholeQuoteBook() throws Exception {
+        var file = Files.createTempFile("blockstock-maker-replenishment-rate-limit-", ".db");
+        try (var database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate(); var fixture = fixture(database);
+            fixture.maker.refreshQuotes().toCompletableFuture().join();
+
+            fixture.maker.replenishAfterMatch().toCompletableFuture().join();
+            long afterFirstReplenishment = systemOrderHistoryCount(database, fixture.bluechip);
+            fixture.maker.replenishAfterMatch().toCompletableFuture().join();
+
+            assertThat(afterFirstReplenishment).isEqualTo(20);
+            assertThat(systemOrderHistoryCount(database, fixture.bluechip)).isEqualTo(afterFirstReplenishment);
+        } finally { Files.deleteIfExists(file); }
+    }
+
     private static Fixture fixture(Database database) {
         var repository = new SqlBluechipRepository(database.dataSource());
         var bootstrap = new BluechipBootstrapServiceTestSupport(database, repository, NOW);

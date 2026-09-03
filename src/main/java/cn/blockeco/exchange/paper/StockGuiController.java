@@ -14,6 +14,7 @@ import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.domain.trading.LimitOrder;
 import cn.blockeco.exchange.ports.MainThreadExecutor;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.List;
 import java.time.format.DateTimeFormatter;
 import java.util.Map;
@@ -137,7 +138,7 @@ public final class StockGuiController implements Listener, StockGuiOpener {
     public void openHome(Player player) {
         if (!accepting.getAsBoolean()) { player.sendMessage(messages.initializing()); return; }
         StockGuiSession session = openSession(player.getUniqueId(), StockGuiSession.Page.HOME, 0, null, null);
-        Inventory inventory = Bukkit.createInventory(new Holder(session), 54, Component.text("BlockStock 交易所"));
+        Inventory inventory = Bukkit.createInventory(new Holder(session), 54, Component.text("Bloeco-Stock 交易所"));
         fill(inventory);
         for (HomeSlot slot : homeSlots()) put(inventory, slot.slot(), slot.material(), slot.action(), slot.name(), slot.lore());
         openInventory(player, inventory);
@@ -212,15 +213,23 @@ public final class StockGuiController implements Listener, StockGuiOpener {
     private void openMarket(Player player, int page) {
         if (!ready(player)) return;
         StockGuiSession session = openSession(player.getUniqueId(), StockGuiSession.Page.MARKET, Math.max(0, page), null, null);
-        loading(player, session, "正在加载市场…");
+        Inventory inventory = inventory(session, "Bloeco-Stock 市场 " + (session.pageIndex() + 1)); fill(inventory);
+        put(inventory, 22, Material.CLOCK, "noop", "正在加载市场…", "行情会在此界面内刷新");
+        openInventory(player, inventory);
+        refreshMarket(player, session);
+    }
+
+    /** Refreshes the already-open market inventory; never closes or replaces the player's window. */
+    private void refreshMarket(Player player, StockGuiSession session) {
         queries.market().whenComplete((rows, error) -> onMain(player, session, () -> {
-            if (error != null) { player.sendMessage(messages.stockQueryFailed()); openHome(player); return; }
+            if (error != null) { player.sendMessage(messages.stockQueryFailed()); return; }
+            Inventory inv = activeInventory(player, session); if (inv == null) return;
             int start = Math.min(session.pageIndex() * 45, rows.size()); int end = Math.min(start + 45, rows.size());
-            Inventory inv = inventory(session, "BlockStock 市场 " + (session.pageIndex() + 1)); fill(inv);
+            fill(inv);
             if (rows.isEmpty()) put(inv, 22, Material.BARRIER, "back:home", "暂无上市股票", "返回主菜单");
-            for (int i = start; i < end; i++) { PublicMarketRow r = rows.get(i); put(inv, i - start, Material.PAPER, "detail:" + r.stockCode(), r.stockCode() + " " + r.companyName(), "现价 " + amount(r.latestPrice()) + "  涨跌 " + amount(r.change()) + "  量 " + r.volume()); }
+            for (int i = start; i < end; i++) { PublicMarketRow r = rows.get(i); put(inv, i - start, Material.PAPER, "detail:" + r.stockCode(), marketVisualRole(r.change()), r.stockCode() + " " + r.companyName(), "现价 " + amount(r.latestPrice()) + "  涨跌 " + changePercent(r.latestPrice(), r.change()) + "  量 " + r.volume()); }
             put(inv, 45, Material.ARROW, "market:prev", "上一页", "返回上一页"); put(inv, 49, Material.BARRIER, "back:home", "主菜单", "返回交易所主页");
-            if (end < rows.size()) put(inv, 53, Material.ARROW, "market:next", "下一页", "查看下一页"); openInventory(player, inv);
+            if (end < rows.size()) put(inv, 53, Material.ARROW, "market:next", "下一页", "查看下一页");
             scheduleMarketRefresh(player, session);
         }));
     }
@@ -231,13 +240,15 @@ public final class StockGuiController implements Listener, StockGuiOpener {
         if (!ready(player)) return;
         StockGuiSession session = openSession(player.getUniqueId(), StockGuiSession.Page.DETAIL, 0, code, null).withChartMode(chartMode);
         sessions.put(player.getUniqueId(), session);
+        Inventory inventory = inventory(session, "Bloeco-Stock " + code); detailFrame(inventory);
+        put(inventory, 4, Material.CLOCK, "noop", "正在加载 " + code + "…", "行情会在此界面内刷新");
+        openInventory(player, inventory);
         refreshDetail(player, session);
     }
 
     private void refreshDetail(Player player, StockGuiSession session) {
-        loading(player, session, "正在加载 " + session.stockCode() + "…");
         queries.book(session.stockCode(), 5).whenComplete((book, error) -> onMain(player, session, () -> {
-            if (error != null) { player.sendMessage(messages.stockQueryFailed()); openMarket(player, 0); return; }
+            if (error != null) { player.sendMessage(messages.stockQueryFailed()); return; }
             queries.market().thenCombine(queries.portfolio(player.getUniqueId()), (rows, portfolio) -> detailStats(rows, portfolio, session.stockCode()))
                     .whenComplete((stats, statsError) -> onMain(player, session, () -> loadDetailInfo(player, session, session.stockCode(), book,
                             statsError == null ? stats : DetailStats.empty())));
@@ -256,16 +267,15 @@ public final class StockGuiController implements Listener, StockGuiOpener {
     }
 
     private void renderDetail(Player player, StockGuiSession session, String code, SecondaryMarketQueryService.OrderBook book, PublicStockInfo info, MarketChart chart, DetailStats stats) {
-        Inventory inv = inventory(session, "BlockStock " + code); detailFrame(inv);
+        Inventory inv = activeInventory(player, session); if (inv == null) return; detailFrame(inv);
         String title = detailTitle(info == null ? code : info.companyName(), code);
         String detail = info != null && info.marketState().isPresent()
                 ? "行业 " + info.industry().orElse("未分类") + " · 流动性" + (info.marketState().get().liquidityDegraded() ? "受限" : "正常")
                 : "五档盘口（买卖均为匿名聚合）";
-        put(inv, 4, Material.NETHER_STAR, "noop", title, "BlockStock 原生交易终端 · " + detail);
+        put(inv, 4, Material.NETHER_STAR, "noop", "header", title, "Bloeco-Stock 原生交易终端 · " + detail);
         for (DetailSlot slot : detailSlots(book, stats.latestPrice(), stats.change(), stats.holdingShares(), stats.turnover(), chart, session.chartMode(), currencyScale)) {
-            put(inv, slot.slot(), slot.material(), slot.action(), slot.name(), slot.lore());
+            put(inv, slot.slot(), slot.material(), slot.action(), slot.visualRole(), slot.name(), slot.lore());
         }
-        openInventory(player, inv);
         scheduleDetailRefresh(player, session);
     }
 
@@ -282,17 +292,17 @@ public final class StockGuiController implements Listener, StockGuiOpener {
         StockGuiSession session = openSession(player.getUniqueId(), StockGuiSession.Page.NEWS, 0, null, null); loading(player, session, "正在加载市场快讯…");
         source.recentNews(5).whenComplete((news, error) -> onMain(player, session, () -> {
             if (error != null) { player.sendMessage(messages.stockQueryFailed()); openHome(player); return; }
-            Inventory inv = inventory(session, "BlockStock 市场快讯"); fill(inv); int slot = 10;
+            Inventory inv = inventory(session, "Bloeco-Stock 市场快讯"); fill(inv); int slot = 10;
             for (MarketNewsItem item : news) { put(inv, slot++, Material.PAPER, "noop", item.headline(), item.body()); }
             if (news.isEmpty()) put(inv, 22, Material.BARRIER, "noop", "暂无市场快讯", "事件、分红和流动性公告会显示在这里");
             put(inv, 49, Material.ARROW, "back:home", "返回", "主菜单"); openInventory(player, inv);
         }));
     }
 
-    private void openCash(Player player) { openPrivate(player, StockGuiSession.Page.CASH, "证券账户", view -> { Inventory inv = inventory(sessions.get(player.getUniqueId()), "BlockStock 证券账户"); fill(inv); put(inv, 13, Material.GOLD_INGOT, "noop", "可用资金 " + amount(view.availableCash()), "冻结资金 " + amount(view.reservedCash())); put(inv, 29, Material.LIME_WOOL, "cash:deposit", "转入证券账户", "从个人钱包转入"); put(inv, 33, Material.RED_WOOL, "cash:withdraw", "转出个人钱包", "从证券账户转出"); put(inv, 49, Material.ARROW, "back:home", "返回", "主菜单"); openInventory(player, inv); }); }
-    private void openPortfolio(Player player) { openPrivate(player, StockGuiSession.Page.PORTFOLIO, "我的持仓", view -> { Inventory inv=inventory(sessions.get(player.getUniqueId()),"BlockStock 我的持仓"); fill(inv); int i=0; for(var h:view.holdings()) if(i<45) put(inv,i++,Material.CHEST,"detail:"+h.stockCode(),h.stockCode()+" "+h.companyName(),"可用 "+h.availableShares()+" 冻结 "+h.reservedShares()+" 最新 "+amount(h.latestPrice())); if(i==0)put(inv,22,Material.BARRIER,"noop","当前没有持仓",""); put(inv,49,Material.ARROW,"back:home","返回","主菜单");openInventory(player, inv); }); }
-    private void openOrders(Player player) { if(!permission(player,"blockeco.stock.orders"))return; StockGuiSession s=openSession(player.getUniqueId(),StockGuiSession.Page.ORDERS,0,null,null); loading(player,s,"正在加载委托…");queries.orders(player.getUniqueId(),50).whenComplete((rows,error)->onMain(player,s,()->{if(error!=null){player.sendMessage(messages.stockQueryFailed());return;}Inventory inv=inventory(s,"BlockStock 我的委托");fill(inv);int i=0;for(var o:rows)if(i<45)put(inv,i++,Material.WRITABLE_BOOK,"cancel-order:"+o.id(),o.stockCode()+" "+(o.side()==LimitOrder.Side.BUY?"买":"卖"),"限价 "+amount(o.limitPrice())+" 剩余 "+o.remainingShares()+" 状态 "+o.state());if(i==0)put(inv,22,Material.BARRIER,"noop","当前没有委托","");put(inv,49,Material.ARROW,"back:home","返回","主菜单");openInventory(player, inv);})); }
-    private void openTrades(Player player) { if(!permission(player,"blockeco.stock.trades"))return; StockGuiSession s=openSession(player.getUniqueId(),StockGuiSession.Page.TRADES,0,null,null); loading(player,s,"正在加载成交…");queries.trades(player.getUniqueId(),50).whenComplete((rows,error)->onMain(player,s,()->{if(error!=null){player.sendMessage(messages.stockQueryFailed());return;}Inventory inv=inventory(s,"BlockStock 成交记录");fill(inv);int i=0;for(var t:rows)if(i<45)put(inv,i++,Material.EMERALD,"noop",t.stockCode()+" "+(t.side()==LimitOrder.Side.BUY?"买入":"卖出"),t.shares()+" 股 @ "+amount(t.price())+" 手续费 "+amount(t.fee()));if(i==0)put(inv,22,Material.BARRIER,"noop","当前没有成交","");put(inv,49,Material.ARROW,"back:home","返回","主菜单");openInventory(player, inv);})); }
+    private void openCash(Player player) { openPrivate(player, StockGuiSession.Page.CASH, "证券账户", view -> { Inventory inv = inventory(sessions.get(player.getUniqueId()), "Bloeco-Stock 证券账户"); fill(inv); put(inv, 13, Material.GOLD_INGOT, "noop", "可用资金 " + amount(view.availableCash()), "冻结资金 " + amount(view.reservedCash())); put(inv, 29, Material.LIME_WOOL, "cash:deposit", "转入证券账户", "从个人钱包转入"); put(inv, 33, Material.RED_WOOL, "cash:withdraw", "转出个人钱包", "从证券账户转出"); put(inv, 49, Material.ARROW, "back:home", "返回", "主菜单"); openInventory(player, inv); }); }
+    private void openPortfolio(Player player) { openPrivate(player, StockGuiSession.Page.PORTFOLIO, "我的持仓", view -> { Inventory inv=inventory(sessions.get(player.getUniqueId()),"Bloeco-Stock 我的持仓"); fill(inv); int i=0; for(var h:view.holdings()) if(i<45) put(inv,i++,Material.CHEST,"detail:"+h.stockCode(),h.stockCode()+" "+h.companyName(),"可用 "+h.availableShares()+" 冻结 "+h.reservedShares()+" 最新 "+amount(h.latestPrice())); if(i==0)put(inv,22,Material.BARRIER,"noop","当前没有持仓",""); put(inv,49,Material.ARROW,"back:home","返回","主菜单");openInventory(player, inv); }); }
+    private void openOrders(Player player) { if(!permission(player,"blockeco.stock.orders"))return; StockGuiSession s=openSession(player.getUniqueId(),StockGuiSession.Page.ORDERS,0,null,null); loading(player,s,"正在加载委托…");queries.orders(player.getUniqueId(),50).whenComplete((rows,error)->onMain(player,s,()->{if(error!=null){player.sendMessage(messages.stockQueryFailed());return;}Inventory inv=inventory(s,"Bloeco-Stock 我的委托");fill(inv);int i=0;for(var o:rows)if(i<45)put(inv,i++,Material.WRITABLE_BOOK,"cancel-order:"+o.id(),o.stockCode()+" "+(o.side()==LimitOrder.Side.BUY?"买":"卖"),"限价 "+amount(o.limitPrice())+" 剩余 "+o.remainingShares()+" 状态 "+o.state());if(i==0)put(inv,22,Material.BARRIER,"noop","当前没有委托","");put(inv,49,Material.ARROW,"back:home","返回","主菜单");openInventory(player, inv);})); }
+    private void openTrades(Player player) { if(!permission(player,"blockeco.stock.trades"))return; StockGuiSession s=openSession(player.getUniqueId(),StockGuiSession.Page.TRADES,0,null,null); loading(player,s,"正在加载成交…");queries.trades(player.getUniqueId(),50).whenComplete((rows,error)->onMain(player,s,()->{if(error!=null){player.sendMessage(messages.stockQueryFailed());return;}Inventory inv=inventory(s,"Bloeco-Stock 成交记录");fill(inv);int i=0;for(var t:rows)if(i<45)put(inv,i++,Material.EMERALD,"noop",t.stockCode()+" "+(t.side()==LimitOrder.Side.BUY?"买入":"卖出"),t.shares()+" 股 @ "+amount(t.price())+" 手续费 "+amount(t.fee()));if(i==0)put(inv,22,Material.BARRIER,"noop","当前没有成交","");put(inv,49,Material.ARROW,"back:home","返回","主菜单");openInventory(player, inv);})); }
 
     private void openPrivate(Player player, StockGuiSession.Page page, String loading, java.util.function.Consumer<PortfolioView> renderer) { if(!permission(player,"blockeco.stock."+(page==StockGuiSession.Page.CASH?"cash":"portfolio")))return;StockGuiSession s=openSession(player.getUniqueId(),page,0,null,null);loading(player,s,"正在加载"+loading+"…");queries.portfolio(player.getUniqueId()).whenComplete((view,error)->onMain(player,s,()->{if(error!=null){player.sendMessage(messages.stockQueryFailed());return;}renderer.accept(view);})); }
 
@@ -300,26 +310,31 @@ public final class StockGuiController implements Listener, StockGuiOpener {
     private void scheduleMarketRefresh(Player player, StockGuiSession session) {
         Bukkit.getScheduler().runTaskLater(plugin, () -> {
             if (player.isOnline() && matches(player.getUniqueId(), session.id()) && session.page() == StockGuiSession.Page.MARKET)
-                openMarket(player, session.pageIndex());
+                refreshMarket(player, session);
         }, liveRefreshPeriodTicks());
     }
     private void scheduleDetailRefresh(Player player, StockGuiSession session) {
         Bukkit.getScheduler().runTaskLater(plugin, () -> {
             if (player.isOnline() && matches(player.getUniqueId(), session.id()) && session.page() == StockGuiSession.Page.DETAIL)
-                openDetail(player, session.stockCode(), session.chartMode());
+                refreshDetail(player, session);
         }, liveRefreshPeriodTicks());
     }
 
-    private void fill(Inventory inventory) { for (int slot = 0; slot < inventory.getSize(); slot++) inventory.setItem(slot, items.filler()); }
+    private void fill(Inventory inventory) { BlockStockTerminalTheme.fill(inventory, items); }
+    private Inventory activeInventory(Player player, StockGuiSession session) {
+        Inventory inventory = player.getOpenInventory().getTopInventory();
+        return inventory.getHolder() instanceof Holder holder && holder.session().id().equals(session.id()) ? inventory : null;
+    }
     private void openInventory(Player player, Inventory inventory) { GuiTransitions.defer(action -> Bukkit.getScheduler().runTask(plugin, action), () -> { if (!player.isOnline()) return; beginInventoryReplacement(player.getUniqueId()); try { player.openInventory(inventory); } finally { endInventoryReplacement(player.getUniqueId()); } }); }
     private void closeInventory(Player player) { GuiTransitions.defer(action -> Bukkit.getScheduler().runTask(plugin, action), player::closeInventory); }
     private Inventory inventory(StockGuiSession session, String title) { return Bukkit.createInventory(new Holder(session), 54, Component.text(title)); }
-    private void loading(Player player, StockGuiSession session, String text) { Inventory inv=inventory(session,"BlockStock"); fill(inv); put(inv,22,Material.CLOCK,"noop",text,"请稍候，不要关闭此页面"); openInventory(player, inv); }
+    private void loading(Player player, StockGuiSession session, String text) { Inventory inv=inventory(session,"Bloeco-Stock"); fill(inv); put(inv,22,Material.CLOCK,"noop",text,"请稍候，不要关闭此页面"); openInventory(player, inv); }
     private boolean ready(Player player) { if(accepting.getAsBoolean())return true;player.sendMessage(messages.initializing());return false; }
     private boolean permission(Player player,String permission) { if(player.hasPermission(permission))return true;player.sendMessage(messages.noPermission());return false; }
     private void onMain(Player player, StockGuiSession session, Runnable work) { mainThread.submit(()->{if(player.isOnline()&&accepting.getAsBoolean()&&matches(player.getUniqueId(),session.id()))work.run();return null;}); }
     private String amount(Money value) { return BigDecimal.valueOf(value.minorUnits(),currencyScale).setScale(currencyScale).toPlainString(); }
     static long liveRefreshPeriodTicks() { return 20L; }
+    static String marketVisualRole(Money change) { return change.minorUnits() >= 0 ? "market_up" : "market_down"; }
 
     private void openInput(Player player, StockGuiSession.InputDraft draft) {
         if ((draft.kind()==StockGuiSession.InputKind.CASH_AMOUNT && !permission(player,"blockeco.stock.cash")) || (draft.kind()!=StockGuiSession.InputKind.CASH_AMOUNT && !permission(player,"blockeco.stock.trade"))) return;
@@ -357,19 +372,31 @@ public final class StockGuiController implements Listener, StockGuiOpener {
     private void put(Inventory inventory, int slot, Material material, String action, String name, String lore) {
         inventory.setItem(slot, items.action(material, action, Component.text(name), List.of(Component.text(lore))));
     }
+    private void put(Inventory inventory, int slot, Material material, String action, String visualRole, String name, String lore) {
+        inventory.setItem(slot, items.action(material, action, visualRole, Component.text(name), List.of(Component.text(lore))));
+    }
     private void put(Inventory inventory, int slot, Material material, String action, String name, List<String> lore) {
         inventory.setItem(slot, items.action(material, action, Component.text(name), lore.stream().<Component>map(Component::text).toList()));
     }
     static String detailTitle(String companyName, String code) { return companyName + " · " + code; }
     static List<String> detailCardLabels(Money latest, Money change, long holding, Money turnover) {
-        return List.of("最新 " + display(latest, 2), "涨跌 " + display(change, 2), "我的持仓 " + holding + " 股", "今日成交额 " + display(turnover, 2));
+        return List.of("最新 " + display(latest, 2), "涨跌 " + changePercent(latest, change), "我的持仓 " + holding + " 股", "今日成交额 " + display(turnover, 2));
+    }
+    /** Change is relative to the derived opening price, never to the current price. */
+    static String changePercent(Money latest, Money change) {
+        Objects.requireNonNull(latest, "latest"); Objects.requireNonNull(change, "change");
+        long opening = Math.subtractExact(latest.minorUnits(), change.minorUnits());
+        if (opening <= 0) return "—";
+        BigDecimal percent = BigDecimal.valueOf(change.minorUnits()).multiply(BigDecimal.valueOf(100))
+                .divide(BigDecimal.valueOf(opening), 2, RoundingMode.HALF_UP);
+        return (percent.signum() > 0 ? "+" : "") + percent.toPlainString() + "%";
     }
     static List<String> detailActions() { return List.of("chart:intraday", "chart:daily", "detail:buy", "detail:sell", "help", "back:market"); }
     static List<DetailSlot> detailControls(StockGuiSession.ChartMode mode) {
         Objects.requireNonNull(mode, "mode");
         return List.of(
-                new DetailSlot(15, Material.CLOCK, "chart:intraday", "分时线", mode == StockGuiSession.ChartMode.INTRADAY ? "当前视图 · 点击刷新" : "点击切换至分时线"),
-                new DetailSlot(16, Material.ENCHANTED_BOOK, "chart:daily", "日K线", mode == StockGuiSession.ChartMode.DAILY ? "当前视图 · 点击刷新" : "点击切换至日K线"));
+                new DetailSlot(5, Material.CLOCK, "chart:intraday", "quote_card", "分时线", mode == StockGuiSession.ChartMode.INTRADAY ? "当前视图 · 点击刷新" : "点击切换至分时线"),
+                new DetailSlot(6, Material.ENCHANTED_BOOK, "chart:daily", "quote_card", "日K线", mode == StockGuiSession.ChartMode.DAILY ? "当前视图 · 点击刷新" : "点击切换至日K线"));
     }
     /** Canonical, one-item-per-slot detail specification shared by the renderer and regression tests. */
     static List<DetailSlot> detailSlots(SecondaryMarketQueryService.OrderBook book, Money latest, Money change, long holding,
@@ -382,35 +409,44 @@ public final class StockGuiController implements Listener, StockGuiOpener {
         Objects.requireNonNull(turnover, "turnover"); Objects.requireNonNull(mode, "mode");
         var slots = new java.util.ArrayList<DetailSlot>();
         List<String> cards = detailCardLabels(latest, change, holding, turnover);
-        slots.add(new DetailSlot(10, Material.NAME_TAG, "noop", "行情摘要", "五档盘口与图表数据"));
-        slots.add(new DetailSlot(11, Material.GOLD_INGOT, "noop", cards.get(0), "今日最新成交价"));
-        slots.add(new DetailSlot(12, Material.ARROW, "noop", cards.get(1), change.minorUnits() >= 0 ? "↑ 相对开盘价" : "↓ 相对开盘价"));
-        slots.add(new DetailSlot(13, Material.CHEST, "noop", cards.get(2), "可用与冻结持仓合计"));
-        slots.add(new DetailSlot(14, Material.EMERALD, "noop", cards.get(3), "今日成交额"));
+        slots.add(new DetailSlot(1, Material.NAME_TAG, "noop", "header", "行情终端", "实时行情 · 不会关闭界面刷新"));
+        slots.add(new DetailSlot(2, Material.GOLD_INGOT, "noop", "quote_card", cards.get(0), "最新成交价"));
+        slots.add(new DetailSlot(3, Material.ARROW, "noop", "quote_card", cards.get(1), change.minorUnits() >= 0 ? "↑ 相对开盘价" : "↓ 相对开盘价"));
+        slots.add(new DetailSlot(4, Material.CHEST, "noop", "quote_card", cards.get(2), "可用与冻结持仓合计"));
         slots.addAll(detailControls(mode));
+        // The preview's left rail stays visually stable while only market data tiles refresh.
+        slots.add(new DetailSlot(9, Material.NAME_TAG, "noop", "info_card", "股票信息", "代码、公司与当前交易状态"));
+        slots.add(new DetailSlot(18, Material.GOLD_INGOT, "noop", "info_card", cards.get(0), "当前价"));
+        slots.add(new DetailSlot(27, Material.ARROW, "noop", "info_card", cards.get(1), "相对开盘价"));
+        slots.add(new DetailSlot(36, Material.CHEST, "noop", "info_card", cards.get(2), "我的股票"));
 
         List<String> labels = orderBookLabels(book, scale);
+        int[] bidSlots = {7, 16, 25, 34, 43}; int[] askSlots = {8, 17, 26, 35, 44};
         for (int i = 0; i < 5; i++) {
             long shares = i < book.asks().size() ? book.asks().get(i).shares() : 0;
-            slots.add(new DetailSlot(17 + i, Material.RED_STAINED_GLASS_PANE, "noop", labels.get(i), shares + " 股"));
-        }
-        slots.add(new DetailSlot(22, Material.GOLD_INGOT, "noop", "成交价 " + display(latest, scale), "五档横向扩展至 17–27 格，以完整显示卖五至买五"));
-        for (int i = 0; i < 5; i++) {
-            long shares = i < book.bids().size() ? book.bids().get(i).shares() : 0;
-            slots.add(new DetailSlot(23 + i, Material.LIME_STAINED_GLASS_PANE, "noop", labels.get(5 + i), shares + " 股"));
+            slots.add(new DetailSlot(askSlots[i], Material.RED_STAINED_GLASS, "noop", "ask_level", labels.get(i), shares + " 股"));
+            long bidShares = i < book.bids().size() ? book.bids().get(i).shares() : 0;
+            slots.add(new DetailSlot(bidSlots[i], Material.LIME_STAINED_GLASS, "noop", "bid_level", labels.get(5 + i), bidShares + " 股"));
         }
 
-        List<String> lore = chart == null ? List.of("行情暂不可用") : chartLore(chart, scale, mode);
-        List<Material> raster = chart == null ? java.util.Collections.nCopies(7, Material.GRAY_STAINED_GLASS_PANE) : chartRaster(chart, mode);
-        for (int i = 0; i < 7; i++) slots.add(new DetailSlot(28 + i, raster.get(i), "noop", "图表", String.join(" · ", lore)));
+        List<ChartColumn> columns = chart == null ? emptyChartColumns() : chartColumns(chart, mode);
+        List<Material> bars = chart == null ? java.util.Collections.nCopies(24, Material.BLACK_STAINED_GLASS_PANE) : chartBars(chart, mode);
+        int[] chartSlots = {10,11,12,13,14,15,19,20,21,22,23,24,28,29,30,31,32,33,37,38,39,40,41,42};
+        for (int i = 0; i < chartSlots.length; i++) {
+            Material tile = bars.get(i); ChartColumn column = columns.get(i % 6);
+            boolean visible = tile != Material.BLACK_STAINED_GLASS_PANE;
+            String role = tile == Material.RED_STAINED_GLASS_PANE ? "chart_up" : tile == Material.LIME_STAINED_GLASS_PANE ? "chart_down" : "slot_dark";
+            String name = visible ? (mode == StockGuiSession.ChartMode.DAILY ? "日K " : "分时 ") + column.label() : " ";
+            String tooltip = visible ? column.label() + " " + display(column.close(), scale) + (column.up() ? " ↑" : " ↓") : "";
+            slots.add(new DetailSlot(chartSlots[i], tile, "noop", role, name, tooltip));
+        }
         long volume = chart == null ? 0 : chart.sessionSummary().volumeShares();
-        slots.add(new DetailSlot(37, Material.PAPER, "noop", "今日成交量", volume + " 股"));
-        slots.add(new DetailSlot(38, Material.GOLD_INGOT, "noop", "今日成交额 " + display(turnover, scale), "成交额与成交量均来自真实成交"));
-        slots.add(new DetailSlot(39, Material.BOOK, "noop", "补偿基金", "异常交易请联系管理员申请补偿"));
-        slots.add(new DetailSlot(40, Material.LIME_WOOL, "detail:buy", "买入", "输入股数和限价后确认"));
-        slots.add(new DetailSlot(41, Material.RED_WOOL, "detail:sell", "卖出", "输入股数和限价后确认"));
-        slots.add(new DetailSlot(42, Material.BOOK, "help", "交易帮助", "查看交易规则、补偿说明和五档扩展布局"));
-        slots.add(new DetailSlot(43, Material.ARROW, "back:market", "返回市场", "返回列表"));
+        slots.add(new DetailSlot(52, Material.PAPER, "noop", "volume_tile", "成交量 " + volume + " 股", cards.get(3)));
+        slots.add(new DetailSlot(46, Material.LIME_WOOL, "detail:buy", "buy_action", "买入", "输入股数和限价后确认"));
+        slots.add(new DetailSlot(47, Material.RED_WOOL, "detail:sell", "sell_action", "卖出", "输入股数和限价后确认"));
+        slots.add(new DetailSlot(48, Material.BOOK, "help", "help_action", "交易帮助", "仅显示分时、日K、成交量和五档盘口"));
+        slots.add(new DetailSlot(49, Material.ARROW, "back:market", "nav_action", "返回市场", "返回全部股票"));
+        slots.add(new DetailSlot(53, Material.BARRIER, "back:home", "主菜单", "返回交易所主页"));
         long distinctSlots = slots.stream().map(DetailSlot::slot).distinct().count();
         if (distinctSlots != slots.size()) throw new IllegalStateException("detail slots must not overlap");
         return List.copyOf(slots);
@@ -432,6 +468,36 @@ public final class StockGuiController implements Listener, StockGuiOpener {
         while (raster.size() < 7) raster.add(Material.BLACK_STAINED_GLASS_PANE);
         return List.copyOf(raster.subList(0, 7));
     }
+    /** Six price columns, drawn bottom-up across the four central chart rows. */
+    static List<Material> chartBars(MarketChart chart, StockGuiSession.ChartMode mode) {
+        Objects.requireNonNull(chart, "chart"); Objects.requireNonNull(mode, "mode");
+        List<ChartColumn> columns = chartColumns(chart, mode);
+        var values = columns.stream().map(column -> column.close().minorUnits()).toList();
+        var colours = columns.stream().map(column -> column.close().minorUnits() == 0 ? Material.BLACK_STAINED_GLASS_PANE : column.up() ? Material.RED_STAINED_GLASS_PANE : Material.LIME_STAINED_GLASS_PANE).toList();
+        long low = values.stream().mapToLong(Long::longValue).filter(value -> value != 0).min().orElse(0);
+        long high = values.stream().mapToLong(Long::longValue).max().orElse(0);
+        int[] heights = new int[6];
+        for (int column = 0; column < 6; column++) heights[column] = values.get(column) == 0 ? 0 : 1 + (high == low ? 0 : (int) Math.round((values.get(column) - low) * 3.0 / (high - low)));
+        var result = new java.util.ArrayList<Material>(24);
+        for (int row = 0; row < 4; row++) for (int column = 0; column < 6; column++) result.add(row >= 4 - heights[column] ? colours.get(column) : Material.BLACK_STAINED_GLASS_PANE);
+        return List.copyOf(result);
+    }
+    private static List<ChartColumn> chartColumns(MarketChart chart, StockGuiSession.ChartMode mode) {
+        var columns = new java.util.ArrayList<ChartColumn>();
+        if (mode == StockGuiSession.ChartMode.DAILY) {
+            for (var candle : chart.dailyCandles().stream().skip(Math.max(0, chart.dailyCandles().size() - 6L)).toList())
+                columns.add(new ChartColumn(candle.day().format(DateTimeFormatter.ofPattern("MM-dd")), candle.close(), candle.close().minorUnits() >= candle.open().minorUnits()));
+        } else {
+            int start = Math.max(0, chart.intradayPoints().size() - 6); long previous = start == 0 || chart.intradayPoints().isEmpty() ? 0L : chart.intradayPoints().get(start - 1).close().minorUnits();
+            for (int index = start; index < chart.intradayPoints().size(); index++) {
+                var point = chart.intradayPoints().get(index); boolean up = previous == 0 || point.close().minorUnits() >= previous;
+                columns.add(new ChartColumn(point.label(), point.close(), up)); previous = point.close().minorUnits();
+            }
+        }
+        while (columns.size() < 6) columns.addFirst(new ChartColumn("", Money.zero(), true));
+        return List.copyOf(columns);
+    }
+    private static List<ChartColumn> emptyChartColumns() { return java.util.Collections.nCopies(6, new ChartColumn("", Money.zero(), true)); }
     private static DetailStats detailStats(List<PublicMarketRow> rows, PortfolioView portfolio, String code) {
         PublicMarketRow market = rows.stream().filter(row -> row.stockCode().equals(code)).findFirst().orElse(null);
         long holding = portfolio.holdings().stream().filter(row -> row.stockCode().equals(code)).mapToLong(row -> row.availableShares() + row.reservedShares()).sum();
@@ -472,13 +538,18 @@ public final class StockGuiController implements Listener, StockGuiOpener {
     private record DetailStats(Money latestPrice, Money change, Money turnover, long holdingShares) {
         private static DetailStats empty() { return new DetailStats(Money.zero(), Money.zero(), Money.zero(), 0); }
     }
+    private record ChartColumn(String label, Money close, boolean up) { }
 
     record HomeSlot(int slot, Material material, String action, String name, String lore) { }
 
-    record DetailSlot(int slot, Material material, String action, String name, String lore) {
+    record DetailSlot(int slot, Material material, String action, String visualRole, String name, String lore) {
+        DetailSlot(int slot, Material material, String action, String name, String lore) {
+            this(slot, material, action, BlockStockTerminalTheme.itemModelFor(material, action).getKey(), name, lore);
+        }
         DetailSlot {
             Objects.requireNonNull(material, "material");
             Objects.requireNonNull(action, "action");
+            Objects.requireNonNull(visualRole, "visualRole");
             Objects.requireNonNull(name, "name");
             Objects.requireNonNull(lore, "lore");
         }

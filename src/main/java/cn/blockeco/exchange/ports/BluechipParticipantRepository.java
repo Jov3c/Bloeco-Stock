@@ -10,4 +10,12 @@ import java.util.UUID;
 public interface BluechipParticipantRepository {
     boolean allocateOnce(Connection connection, UUID makerAccountId, UUID participantAccountId, Money cash,
                          long sharesPerCompany, List<BluechipRepository.BluechipCompany> bluechips) throws SQLException;
+
+    /**
+     * Reallocates already-owned system liquidity to its distinct quant participant when it falls
+     * below its operating floor.  It never credits external/player money and never creates shares.
+     */
+    boolean rebalanceBelowFloor(Connection connection, UUID makerAccountId, UUID participantAccountId,
+                                Money cashFloor, Money cashTarget, long sharesFloor, long sharesTarget,
+                                List<BluechipRepository.BluechipCompany> bluechips) throws SQLException;
 }

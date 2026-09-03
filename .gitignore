@@ -8,3 +8,19 @@ run/
 *.db
 *.db-shm
 *.db-wal
+
+# Disposable Paper QA runtimes and one-off compiled verification outputs.
+/build-task*/
+/qa-stage-release/
+/finance-index.patch
+/qa-server/*
+!/qa-server/mcp/
+!/qa-server/mcp/*.mjs
+!/qa-server/mcp/*.ps1
+!/qa-server/mcp/*.cmd
+!/qa-server/mcp/package.json
+!/qa-server/mcp/package-lock.json
+/qa-server/mcp/node_modules/
+/qa-server/mcp/*.log
+/qa-server/mcp/*.out
+/qa-server/mcp/*.err

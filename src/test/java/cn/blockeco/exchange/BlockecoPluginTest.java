@@ -238,15 +238,15 @@ class BlockecoPluginTest {
     @Test
     void final_vault_provider_startup_diagnostic_is_chinese() {
         assertThat(BlockecoPlugin.startupFailureMessage(new IllegalStateException("Vault 经济提供方不可用")))
-                .isEqualTo("BlockStock 启动失败：Vault 经济提供方不可用");
+                .isEqualTo("Bloeco-Stock 启动失败：Vault 经济提供方不可用");
     }
 
     @Test
     void configuration_and_missing_command_startup_diagnostics_have_chinese_primary_text() {
         assertThat(BlockecoPlugin.configurationFailureMessage(new IllegalArgumentException("currency.scale must be between 0 and 8")))
-                .isEqualTo("BlockStock 配置无效（附加信息：currency.scale must be between 0 and 8）");
+                .isEqualTo("Bloeco-Stock 配置无效（附加信息：currency.scale must be between 0 and 8）");
         assertThat(BlockecoPlugin.missingCompanyCommandMessage())
-                .isEqualTo("BlockStock 命令注册失败：未在 plugin.yml 中声明 company 命令");
+                .isEqualTo("Bloeco-Stock 命令注册失败：未在 plugin.yml 中声明 company 命令");
     }
 
     @Test
@@ -265,6 +265,17 @@ class BlockecoPluginTest {
         Class<?> entrypoint = assertDoesNotThrow(() -> Class.forName(declaredEntrypointClass()));
 
         assertThat(entrypoint).isAssignableTo(JavaPlugin.class);
+    }
+
+    @Test
+    void plugin_metadata_declares_the_paper_1_21_11_api_baseline() throws Exception {
+        InputStream resource = getClass().getClassLoader().getResourceAsStream("plugin.yml");
+        assertThat(resource).isNotNull();
+
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(resource, StandardCharsets.UTF_8))) {
+            assertThat(reader.lines().filter(line -> line.startsWith("api-version: ")).findFirst())
+                    .contains("api-version: '1.21.11'");
+        }
     }
 
     private String declaredEntrypointClass() throws Exception {

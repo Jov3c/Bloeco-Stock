@@ -26,7 +26,7 @@ final class BluechipBootstrapServiceTestSupport {
             Map<String, Object> entry = new java.util.LinkedHashMap<>();
             entry.put("code", "BC" + index); entry.put("display-name", "System " + index); entry.put("industry", "Industry");
             entry.put("reference-price", "10.00"); entry.put("lower-bound", "8.00"); entry.put("upper-bound", "12.00");
-            entry.put("total-shares", 1_000L); entry.put("initial-fund-cash", "1000.00"); entry.put("initial-fund-shares", 100L);
+            entry.put("total-shares", 1_000_000L); entry.put("initial-fund-cash", "100000.00"); entry.put("initial-fund-shares", 100_000L);
             entry.put("spread-bps", 50); entry.put("event-sensitivity-bps", 100); entry.put("dividend-payout-bps", 2_000);
             entries.add(entry);
         }

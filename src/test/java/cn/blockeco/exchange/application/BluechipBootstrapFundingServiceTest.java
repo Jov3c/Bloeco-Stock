@@ -15,7 +15,7 @@ import org.junit.jupiter.api.Test;
 
 class BluechipBootstrapFundingServiceTest {
     @Test
-    void preparedFundingDepositsOnlyIntoEscrowWithoutTouchingSystemUuid() throws Exception {
+    void preparedFundingMovesExistingReserveIntoEscrowBeforeLiquidityBecomesAvailable() throws Exception {
         var file = Files.createTempFile("blockstock-bluechip-direct-escrow-", ".db");
         try (var database = new Database("jdbc:sqlite:" + file)) {
             database.migrate();
@@ -32,8 +32,51 @@ class BluechipBootstrapFundingServiceTest {
 
             assertThat(escrowDeposits[0]).isEqualTo(1);
             assertThat(systemDeposits[0]).isZero();
-            assertThat(systemWithdrawals[0]).isZero();
+            assertThat(systemWithdrawals[0]).isEqualTo(1);
             assertThat(funded.state()).isEqualTo(cn.blockeco.exchange.ports.BluechipBootstrapFundingRepository.State.ESCROW_DEPOSITED);
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
+    void configuredReserveTreasuryIsDebitedInsteadOfTheBluechipMakerAccount() throws Exception {
+        var file = Files.createTempFile("blockstock-bluechip-configured-reserve-", ".db");
+        try (var database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate();
+            var maker = UUID.fromString("00000000-0000-0000-0000-000000000099");
+            var reserve = UUID.fromString("00000000-0000-0000-0000-000000000098");
+            var debited = new java.util.concurrent.atomic.AtomicReference<UUID>(); var escrowDeposits = new int[1];
+            var service = new BluechipBootstrapFundingService(maker, reserve, new SqlBluechipBootstrapFundingRepository(database.dataSource()), database,
+                    new BluechipBootstrapFundingService.EscrowEconomy() {
+                        @Override public cn.blockeco.exchange.ports.EconomyGateway.Result withdraw(UUID player, Money amount) { debited.set(player); return cn.blockeco.exchange.ports.EconomyGateway.Result.success("treasury debited"); }
+                        @Override public cn.blockeco.exchange.ports.EconomyGateway.Result deposit(UUID player, Money amount) { return cn.blockeco.exchange.ports.EconomyGateway.Result.success("unexpected"); }
+                        @Override public cn.blockeco.exchange.ports.EconomyGateway.Result depositEscrow(Money amount) { escrowDeposits[0]++; return cn.blockeco.exchange.ports.EconomyGateway.Result.success("escrow credited"); }
+                    }, immediateMain(), () -> Instant.EPOCH);
+
+            service.ensureEscrowFunded(Money.ofMinor(100));
+
+            assertThat(debited.get()).isEqualTo(reserve);
+            assertThat(debited.get()).isNotEqualTo(maker);
+            assertThat(escrowDeposits[0]).isEqualTo(1);
+        } finally { Files.deleteIfExists(file); }
+    }
+
+    @Test
+    void insufficientReserveDoesNotOpenAFundingOperationOrCreditEscrow() throws Exception {
+        var file = Files.createTempFile("blockstock-bluechip-reserve-insufficient-", ".db");
+        try (var database = new Database("jdbc:sqlite:" + file)) {
+            database.migrate(); var reserve = UUID.fromString("00000000-0000-0000-0000-000000000099");
+            var records = new SqlBluechipBootstrapFundingRepository(database.dataSource()); var escrowDeposits = new int[1];
+            var service = new BluechipBootstrapFundingService(reserve, records, database, new BluechipBootstrapFundingService.EscrowEconomy() {
+                @Override public cn.blockeco.exchange.ports.EconomyGateway.Result withdraw(UUID player, Money amount) { return cn.blockeco.exchange.ports.EconomyGateway.Result.insufficientFunds("treasury balance is too low"); }
+                @Override public cn.blockeco.exchange.ports.EconomyGateway.Result deposit(UUID player, Money amount) { return cn.blockeco.exchange.ports.EconomyGateway.Result.success("unexpected"); }
+                @Override public cn.blockeco.exchange.ports.EconomyGateway.Result depositEscrow(Money amount) { escrowDeposits[0]++; return cn.blockeco.exchange.ports.EconomyGateway.Result.success("unexpected"); }
+            }, immediateMain(), () -> Instant.EPOCH);
+
+            assertThatThrownBy(() -> service.ensureEscrowFunded(Money.ofMinor(100)))
+                    .hasMessageContaining("reserve treasury has insufficient funds");
+            assertThat(escrowDeposits[0]).isZero();
+            assertThat(records.find(UUID.nameUUIDFromBytes(("blockstock-bluechip-bootstrap-funding:" + reserve + ":100").getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+                    .orElseThrow().state()).isEqualTo(cn.blockeco.exchange.ports.BluechipBootstrapFundingRepository.State.PREPARED);
         } finally { Files.deleteIfExists(file); }
     }
 

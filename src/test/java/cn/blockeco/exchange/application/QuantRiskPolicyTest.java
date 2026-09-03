@@ -19,6 +19,21 @@ class QuantRiskPolicyTest {
     }
 
     @Test
+    void retainsOneShareOfFiniteMarketActivityWhenThePercentageCapRoundsToZero() {
+        QuantRiskState normal = new QuantRiskState("NOVA", 0, 0, NOW, NOW);
+
+        assertThat(policy.orderShares(10, 101, 0, Money.ofMinor(100), 10, normal, true)).isEqualTo(1);
+        assertThat(policy.orderShares(10, 0, 1, Money.ofMinor(100), 10, normal, false)).isEqualTo(1);
+    }
+
+    @Test
+    void refusesAMinimumBuyWhenOnlyTheSharePriceButNotTheRoundedFeeIsAvailable() {
+        QuantRiskState normal = new QuantRiskState("NOVA", 0, 0, NOW, NOW);
+
+        assertThat(policy.orderShares(10, 100, 0, Money.ofMinor(100), 10, normal, true)).isZero();
+    }
+
+    @Test
     void pausesAfterThreeConsecutiveLossesAndLetsAProfitReduceRisk() {
         QuantRiskState start = new QuantRiskState("NOVA", 0, 2, NOW, NOW);
 

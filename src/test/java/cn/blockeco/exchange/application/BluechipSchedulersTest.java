@@ -21,7 +21,7 @@ class BluechipSchedulersTest {
         schedulers.stop();
 
         assertThat(periods).containsExactly(
-                java.time.Duration.ofMinutes(1), java.time.Duration.ofSeconds(1), java.time.Duration.ofSeconds(8),
+                java.time.Duration.ofMinutes(1), java.time.Duration.ofSeconds(5), java.time.Duration.ofSeconds(1),
                 java.time.Duration.ofMinutes(5), java.time.Duration.ofMinutes(1), java.time.Duration.ofDays(1));
         assertThat(cancellations).hasSize(6);
         assertThat(cancelled).hasValue(6);

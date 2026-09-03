@@ -139,7 +139,7 @@ class MessagesTest {
         Messages messages = new Messages(null);
 
         assertThat(plain(messages.processing())).isEqualTo("公司注册正在处理中。");
-        assertThat(plain(messages.initializing())).isEqualTo("BlockStock 正在初始化，请稍后再试。");
+        assertThat(plain(messages.initializing())).isEqualTo("Bloeco-Stock 正在初始化，请稍后再试。");
         assertThat(plain(messages.noPermission())).isEqualTo("你没有权限。");
         assertThat(plain(messages.playersOnly())).isEqualTo("此命令只能由玩家执行。");
         CompanyCreationRules rules = new CompanyCreationRules(Money.fromMajor(new BigDecimal("1000.00"), 2), Money.fromMajor(new BigDecimal("10000.00"), 2), 2, 1000, List.of(30, 50, 70));

@@ -20,9 +20,12 @@ import java.util.concurrent.Executor;
  */
 public final class BluechipBootstrapFundingService {
     private final UUID system; private final BluechipBootstrapFundingRepository repository; private final TransactionRunner transactions;
-    private final EscrowEconomy economy; private final MainThreadExecutor main; private final AppClock clock;
+    private final UUID reserveTreasury; private final EscrowEconomy economy; private final MainThreadExecutor main; private final AppClock clock;
     public BluechipBootstrapFundingService(UUID system, BluechipBootstrapFundingRepository repository, TransactionRunner transactions, EscrowEconomy economy, MainThreadExecutor main, AppClock clock) {
-        this.system=Objects.requireNonNull(system);this.repository=Objects.requireNonNull(repository);this.transactions=Objects.requireNonNull(transactions);this.economy=Objects.requireNonNull(economy);this.main=Objects.requireNonNull(main);this.clock=Objects.requireNonNull(clock);
+        this(system, system, repository, transactions, economy, main, clock);
+    }
+    public BluechipBootstrapFundingService(UUID system, UUID reserveTreasury, BluechipBootstrapFundingRepository repository, TransactionRunner transactions, EscrowEconomy economy, MainThreadExecutor main, AppClock clock) {
+        this.system=Objects.requireNonNull(system);this.reserveTreasury=Objects.requireNonNull(reserveTreasury);this.repository=Objects.requireNonNull(repository);this.transactions=Objects.requireNonNull(transactions);this.economy=Objects.requireNonNull(economy);this.main=Objects.requireNonNull(main);this.clock=Objects.requireNonNull(clock);
     }
     public BluechipBootstrapFundingRepository.Funding ensureEscrowFunded(Money amount) {
         UUID id=UUID.nameUUIDFromBytes(("blockstock-bluechip-bootstrap-funding:"+system+":"+amount.minorUnits()).getBytes(StandardCharsets.UTF_8));
@@ -32,10 +35,11 @@ public final class BluechipBootstrapFundingService {
             funding=repository.find(id).orElseThrow();
             switch (funding.state()) {
                 case COMPLETED, ESCROW_DEPOSITED -> { return funding; }
-                case PREPARED -> issue(funding, BluechipBootstrapFundingRepository.State.ESCROW_DEPOSIT_REQUESTED, BluechipBootstrapFundingRepository.State.ESCROW_DEPOSITED, "escrow deposit", () -> economy.depositEscrow(amount));
-                // Source stages were written by the withdrawn system-account funding protocol.
-                // They may describe provider calls against an unknown UUID, so never continue or replay them.
-                case SOURCE_CREDIT_REQUESTED, SOURCE_CREDITED, SOURCE_DEBIT_REQUESTED, SOURCE_DEBITED, ESCROW_DEPOSIT_REQUESTED -> throw new IllegalStateException("bluechip bootstrap funding requires manual recovery: request may have reached provider: "+funding.detail());
+                case PREPARED -> issue(funding, BluechipBootstrapFundingRepository.State.SOURCE_DEBIT_REQUESTED, BluechipBootstrapFundingRepository.State.SOURCE_DEBITED, "reserve treasury debit", true, () -> economy.withdraw(reserveTreasury, amount));
+                case SOURCE_DEBITED -> issue(funding, BluechipBootstrapFundingRepository.State.ESCROW_DEPOSIT_REQUESTED, BluechipBootstrapFundingRepository.State.ESCROW_DEPOSITED, "escrow deposit", false, () -> economy.depositEscrow(amount));
+                // Legacy source-credit stages and every durable request stage may describe an
+                // external call with an unknown result, so never continue or replay them.
+                case SOURCE_CREDIT_REQUESTED, SOURCE_CREDITED, SOURCE_DEBIT_REQUESTED, ESCROW_DEPOSIT_REQUESTED -> throw new IllegalStateException("bluechip bootstrap funding requires manual recovery: request may have reached provider: "+funding.detail());
                 case AMBIGUOUS -> throw new IllegalStateException("bluechip bootstrap funding requires manual recovery: "+funding.detail());
             }
         }
@@ -47,14 +51,18 @@ public final class BluechipBootstrapFundingService {
     /** Kept out of EconomyGateway: the escrow account is supplied by the small adapter below. */
     public interface EscrowEconomy extends EconomyGateway { EconomyGateway.Result depositEscrow(Money amount); }
     private BluechipBootstrapFundingRepository.Funding prepare(UUID id, Money amount) { Instant now=clock.now(); var f=new BluechipBootstrapFundingRepository.Funding(id,system,amount,BluechipBootstrapFundingRepository.State.PREPARED,"prepared",now,now); transactions.inTransaction(c->{repository.prepare(c,f);return null;});return f; }
-    private void issue(BluechipBootstrapFundingRepository.Funding f, BluechipBootstrapFundingRepository.State requested, BluechipBootstrapFundingRepository.State confirmed, String label, java.util.function.Supplier<EconomyGateway.Result> call) {
+    private void issue(BluechipBootstrapFundingRepository.Funding f, BluechipBootstrapFundingRepository.State requested, BluechipBootstrapFundingRepository.State confirmed, String label, boolean retryOnKnownInsufficientFunds, java.util.function.Supplier<EconomyGateway.Result> call) {
         request(f, requested, label + " requested");
-        confirm(repository.find(f.id()).orElseThrow(), requested, confirmed, label, call);
+        confirm(repository.find(f.id()).orElseThrow(), requested, confirmed, label, retryOnKnownInsufficientFunds, call);
     }
     private void request(BluechipBootstrapFundingRepository.Funding f, BluechipBootstrapFundingRepository.State next, String detail) { transactions.inTransaction(c->{repository.transition(c,f.id(),f.state(),next,detail,clock.now());return null;}); }
-    private void confirm(BluechipBootstrapFundingRepository.Funding f, BluechipBootstrapFundingRepository.State expected, BluechipBootstrapFundingRepository.State next, String label, java.util.function.Supplier<EconomyGateway.Result> call) {
+    private void confirm(BluechipBootstrapFundingRepository.Funding f, BluechipBootstrapFundingRepository.State expected, BluechipBootstrapFundingRepository.State next, String label, boolean retryOnKnownInsufficientFunds, java.util.function.Supplier<EconomyGateway.Result> call) {
         EconomyGateway.Result result;
         try { result=main.submit(call).toCompletableFuture().join(); } catch (RuntimeException failure) { ambiguous(f, expected, label+" invocation failed: "+failure); throw new IllegalStateException("bluechip bootstrap funding requires manual recovery",failure); }
+        if (retryOnKnownInsufficientFunds && result != null && result.outcome() == EconomyGateway.Outcome.INSUFFICIENT_FUNDS && !result.providerWasCalled()) {
+            transactions.inTransaction(connection -> { repository.transition(connection, f.id(), expected, BluechipBootstrapFundingRepository.State.PREPARED, "reserve treasury has insufficient funds: " + result.message(), clock.now()); return null; });
+            throw new IllegalStateException("reserve treasury has insufficient funds");
+        }
         if (result == null || result.outcome()!=EconomyGateway.Outcome.SUCCESS) { ambiguous(f,expected,label+" outcome: "+(result==null?"null":result.message())); throw new IllegalStateException("bluechip bootstrap funding requires manual recovery: "+label); }
         try { transactions.inTransaction(c->{repository.transition(c,f.id(),expected,next,"confirmed "+label,clock.now());return null;}); }
         catch(RuntimeException failure) { ambiguous(f,expected,"confirmed "+label+" could not be persisted: "+failure); throw new IllegalStateException("bluechip bootstrap funding requires manual recovery",failure); }

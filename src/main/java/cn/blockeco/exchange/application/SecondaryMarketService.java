@@ -173,6 +173,12 @@ public final class SecondaryMarketService {
         }), sql);
     }
 
+    /** Read-only owner-scoped depth check used by the finite system market maker before a costly re-quote. */
+    CompletionStage<Integer> openOrderCount(UUID player, String stockCode) {
+        Objects.requireNonNull(player, "player"); Objects.requireNonNull(stockCode, "stockCode");
+        return CompletableFuture.supplyAsync(() -> transactions.inTransaction(connection -> orders.activeOrderIds(connection, player, stockCode).size()), sql);
+    }
+
     private CompletionStage<OrderPlacementResult> place(UUID player, String stockCode, long shares, Money limit, LimitOrder.Side side) {
         Objects.requireNonNull(player, "player"); Objects.requireNonNull(stockCode, "stockCode"); Objects.requireNonNull(limit, "limit");
         return CompletableFuture.supplyAsync(() -> transactions.inTransaction(connection -> {

@@ -1,21 +1,21 @@
-name: BlockStock
+name: Bloeco-Stock
 version: '${version}'
 main: cn.blockeco.exchange.BlockecoPlugin
-api-version: '1.21'
+api-version: '1.21.11'
 softdepend: [Vault, VaultUnlocked, GriefPrevention, Lands, LandsFree, Residence, QuickShop-Hikari, QuickShop, Shopkeepers]
 commands:
   company:
-    description: 管理 BlockStock 公司
+    description: 管理 Bloeco-Stock 公司
     usage: /company <create|info|asset bind|ipo <announce|subscribe|list|info>|recovery>
   stockadmin:
-    description: 管理 BlockStock 运行时配置
+    description: 管理 Bloeco-Stock 运行时配置
     usage: /stockadmin config [min-capital <金额>]|recovery cash|reconcile|bluechip event industry <行业> <影响万分比>
   stock:
-    description: 打开 BlockStock 原版交易所，或查询公开股票与 IPO
+    description: 打开 Bloeco-Stock 原版交易所，或查询公开股票与 IPO
     usage: /stock [gui|help|market|ipo|info|announcements|subscribe|cash|deposit|withdraw|buy|sell|cancel|portfolio|orders|trades|book]
 permissions:
   blockeco.player:
-    description: 'BlockStock 玩家权限'
+    description: 'Bloeco-Stock 玩家权限'
     children:
       blockeco.company.create: true
       blockeco.company.info: true
@@ -30,7 +30,7 @@ permissions:
       blockeco.stock.orders: true
       blockeco.stock.trades: true
   blockeco.admin:
-    description: 'BlockStock 管理员权限'
+    description: 'Bloeco-Stock 管理员权限'
     children:
       blockeco.admin.recovery: true
       blockeco.admin.bluechip: true

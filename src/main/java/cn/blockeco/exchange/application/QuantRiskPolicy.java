@@ -16,13 +16,36 @@ public final class QuantRiskPolicy {
     }
 
     public long orderShares(long desired, long availableCashMinor, long availableShares, Money price, QuantRiskState risk, boolean buying) {
+        return orderShares(desired, availableCashMinor, availableShares, price, 0, risk, buying);
+    }
+
+    public long orderShares(long desired, long availableCashMinor, long availableShares, Money price, int buyerFeeBps, QuantRiskState risk, boolean buying) {
         Objects.requireNonNull(price); Objects.requireNonNull(risk);
         if (desired <= 0 || price.minorUnits() <= 0 || risk.riskLevel() >= 3 || risk.consecutiveLosses() >= 3) return 0;
         int capBps = switch (risk.riskLevel()) { case 0 -> maximumOrderBps; case 1 -> Math.max(1, maximumOrderBps / 2); case 2 -> Math.max(1, maximumOrderBps / 4); default -> 0; };
-        long affordable = buying
-                ? Math.floorDiv(Math.floorDiv(Math.multiplyExact(Math.max(0, availableCashMinor), capBps), 10_000L), price.minorUnits())
-                : Math.floorDiv(Math.multiplyExact(Math.max(0, availableShares), capBps), 10_000L);
-        return Math.max(0, Math.min(desired, affordable));
+        if (!buying) {
+            long affordable = Math.floorDiv(Math.multiplyExact(Math.max(0, availableShares), capBps), 10_000L);
+            return Math.min(desired, availableShares > 0 ? Math.max(1L, affordable) : 0L);
+        }
+        long cash = Math.max(0, availableCashMinor);
+        long oneShareCost = buyCost(1, price, buyerFeeBps);
+        if (cash < oneShareCost) return 0;
+        long percentageBudget = Math.floorDiv(Math.multiplyExact(cash, capBps), 10_000L);
+        long permittedBudget = Math.min(cash, Math.max(percentageBudget, oneShareCost));
+        long low = 1;
+        long high = Math.min(desired, Math.floorDiv(cash, price.minorUnits()));
+        long accepted = 0;
+        while (low <= high) {
+            long candidate = low + Math.floorDiv(high - low, 2);
+            if (buyCost(candidate, price, buyerFeeBps) <= permittedBudget) { accepted = candidate; low = candidate + 1; }
+            else high = candidate - 1;
+        }
+        return accepted;
+    }
+
+    private static long buyCost(long shares, Money price, int buyerFeeBps) {
+        long notional = Math.multiplyExact(shares, price.minorUnits());
+        return Math.addExact(notional, cn.blockeco.exchange.domain.trading.FeePolicy.cumulativeFee(Money.ofMinor(notional), buyerFeeBps).minorUnits());
     }
 
     public QuantRiskState afterResult(QuantRiskState current, long realizedPnlMinor, Instant now) {

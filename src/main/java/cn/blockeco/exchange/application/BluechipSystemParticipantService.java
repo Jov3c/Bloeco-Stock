@@ -47,12 +47,12 @@ public final class BluechipSystemParticipantService {
         List<BluechipRepository.BluechipCompany> all = bluechips.all().stream()
                 .sorted(Comparator.comparing(company -> company.listing().stockCode())).toList();
         if (all.isEmpty()) return CompletableFuture.completedFuture(0);
-        long minute = Math.floorDiv(now.getEpochSecond(), 60L);
-        List<BluechipRepository.BluechipCompany> due = all.stream().filter(company -> due(company, minute)).toList();
+        long step = activityStep(now);
+        List<BluechipRepository.BluechipCompany> due = all.stream().filter(company -> due(company, step)).toList();
         if (due.isEmpty()) return CompletableFuture.completedFuture(0);
-        BluechipRepository.BluechipCompany chosen = due.get(Math.floorMod(minute, due.size()));
-        long wanted = 1L + Math.floorMod(minute + chosen.listing().stockCode().hashCode(), 10L);
-        if ((minute & 1L) == 0) return buy(chosen, wanted);
+        BluechipRepository.BluechipCompany chosen = due.get(Math.floorMod(step, due.size()));
+        long wanted = 1L + Math.floorMod(step + chosen.listing().stockCode().hashCode(), 10L);
+        if ((step & 1L) == 0) return buy(chosen, wanted);
         return sell(chosen, wanted);
     }
 
@@ -75,10 +75,11 @@ public final class BluechipSystemParticipantService {
         }
         return 0;
     }
-    private static boolean due(BluechipRepository.BluechipCompany bluechip, long minute) {
+    static long activityStep(Instant now) { return Math.floorDiv(Objects.requireNonNull(now).getEpochSecond(), 8L); }
+    private static boolean due(BluechipRepository.BluechipCompany bluechip, long step) {
         int cadence = 1 + Math.floorMod(bluechip.listing().stockCode().hashCode(), 5);
         int offset = Math.floorMod(bluechip.listing().stockCode().hashCode() / 5, cadence);
-        return Math.floorMod(minute, cadence) == offset;
+        return Math.floorMod(step, cadence) == offset;
     }
     private <T> CompletionStage<T> enqueue(java.util.function.Supplier<CompletionStage<T>> operation) {
         CompletionStage<T> scheduled = lifecycle.handle((ignored, failure) -> null).thenCompose(ignored -> operation.get());

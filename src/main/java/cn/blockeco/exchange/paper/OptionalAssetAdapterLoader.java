@@ -13,7 +13,7 @@ import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.PluginManager;
 
 /**
- * Detects supported asset providers without linking their classes into BlockStock.
+ * Detects supported asset providers and registers safe, reflection-isolated bridges where available.
  *
  * <p>The third-party APIs are deliberately not reflected into: an API mismatch must never make
  * an ownership check succeed accidentally. A provider-specific BlockStock compatibility bridge
@@ -23,6 +23,7 @@ import org.bukkit.plugin.PluginManager;
  */
 public final class OptionalAssetAdapterLoader {
     private static final List<Provider> PROVIDERS = List.of(
+            new Provider("GriefPrevention", "griefprevention", List.of("GriefPrevention")),
             new Provider("Lands", "lands", List.of("Lands", "LandsFree")),
             new Provider("Residence", "residence", List.of("Residence")),
             new Provider("QuickShop", "quickshop", List.of("QuickShop-Hikari", "QuickShop")),
@@ -41,31 +42,45 @@ public final class OptionalAssetAdapterLoader {
 
     /** Safe to call at startup and after an optional compatibility plugin has enabled. */
     public LoadReport load() {
-        Set<String> registeredIds = adapterIds(adapters.snapshot());
         List<String> available = new ArrayList<>();
         List<String> missingBridge = new ArrayList<>();
         for (Provider provider : PROVIDERS) {
-            if (!isAvailable(provider)) {
+            Plugin plugin = availablePlugin(provider);
+            if (plugin == null) {
                 continue;
             }
             available.add(provider.displayName());
+            registerBuiltInBridge(provider, plugin);
+        }
+        Set<String> registeredIds = adapterIds(adapters.snapshot());
+        for (Provider provider : PROVIDERS) {
+            if (!available.contains(provider.displayName())) continue;
             if (!registeredIds.contains(provider.adapterId())) {
                 missingBridge.add(provider.displayName());
-                diagnostics.accept("BlockStock 检测到可选插件 " + provider.displayName()
+                diagnostics.accept("Bloeco-Stock 检测到可选插件 " + provider.displayName()
                         + "，但未找到已验证的资产适配桥；该插件不会阻止服务器启动，也不会出现在可绑定资产中。");
             }
         }
         return new LoadReport(List.copyOf(available), List.copyOf(missingBridge));
     }
 
-    private boolean isAvailable(Provider provider) {
+    private Plugin availablePlugin(Provider provider) {
         for (String pluginName : provider.pluginNames()) {
             Plugin plugin = plugins.getPlugin(pluginName);
             if (plugin != null && plugin.isEnabled()) {
-                return true;
+                return plugin;
             }
         }
-        return false;
+        return null;
+    }
+    private void registerBuiltInBridge(Provider provider, Plugin plugin) {
+        if (adapterIds(adapters.snapshot()).contains(provider.adapterId())) return;
+        try {
+            if (provider.adapterId().equals("griefprevention")) adapters.register(new GriefPreventionAssetAdapter(plugin));
+            if (provider.adapterId().equals("quickshop")) adapters.register(new QuickShopAssetAdapter(plugin));
+        } catch (RuntimeException failure) {
+            diagnostics.accept("Bloeco-Stock 无法加载 " + provider.displayName() + " 资产适配桥：" + failure.getMessage());
+        }
     }
 
     private static Set<String> adapterIds(Collection<CompanyAssetAdapter> adapters) {

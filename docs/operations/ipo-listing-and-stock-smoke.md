@@ -8,14 +8,14 @@
 .\gradlew.bat clean test shadowJar
 ```
 
-该命令覆盖迁移、公开读取、缓存、命令 gate 和现有认购 saga 的自动化测试，并产出 `build/libs/blockstock-*-all.jar`。
+该命令覆盖迁移、公开读取、缓存、命令 gate 和现有认购 saga 的自动化测试，并产出 `build/libs/bloeco-stock-*-all.jar`。
 
 服务器启动成功且没有上市公司时，控制台可执行：`/stock market`。预期中文结果为“当前暂无已上市股票。”这是公开空市场检查，不等同于真实 IPO 验收。
 
 ## 2026-08-22 本地服实测
 
 - Paper `1.21.4-232`、Java 21、Vault `1.7.3-b131`、EssentialsX `2.21.0`，原版客户端兼容的纯服务端插件。
-- 部署前已确认 0 人在线，并备份 `run/plugins/BlockStock` 到 `run/backups/blockstock-pre-public-market-20260822-185451`。
+- 部署前已确认 0 人在线，并备份 `run/plugins/Bloeco-Stock` 到带时间戳的备份目录。
 - 无缓存构建：28 个测试套件、211 个测试，0 failure、0 error、0 skipped；唯一产物为 `blockstock-0.1.0-SNAPSHOT-all.jar`。
 - 启动日志达到 `BlockStock ready`，资本化恢复、IPO 托管恢复、歧义记录和过期注册扫描均为 0。
 - 只读数据库核验：`schema_history=V001..V006`、`stock_listings=0`、`stock_code_sequence.last_value=0`。

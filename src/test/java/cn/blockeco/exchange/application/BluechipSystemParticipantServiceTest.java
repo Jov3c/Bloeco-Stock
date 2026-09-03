@@ -21,6 +21,12 @@ class BluechipSystemParticipantServiceTest {
     private static final Instant OPEN = Instant.parse("2026-08-24T09:00:00Z");
 
     @Test
+    void activity_selection_advances_every_eight_seconds() {
+        assertThat(BluechipSystemParticipantService.activityStep(OPEN)).isNotEqualTo(
+                BluechipSystemParticipantService.activityStep(OPEN.plusSeconds(8)));
+    }
+
+    @Test
     void openTickPlacesOneBoundedOrderFromDistinctParticipantThroughTheRealSettlementPath() throws Exception {
         try (Fixture fixture = Fixture.open(true)) {
             assertThat(fixture.participant.tick().toCompletableFuture().join()).isEqualTo(1);

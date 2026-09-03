@@ -28,7 +28,9 @@ public record StockGuiSession(UUID id, UUID owner, Page page, int pageIndex, Str
     }
 
     public StockGuiSession withChartMode(ChartMode nextChartMode) {
-        return new StockGuiSession(UUID.randomUUID(), owner, page, pageIndex, stockCode, draft, nextChartMode);
+        // A chart toggle redraws the same open inventory. Keep its identity so the renderer and
+        // the buy/sell controls continue to accept clicks from the existing vanilla window.
+        return new StockGuiSession(id, owner, page, pageIndex, stockCode, draft, nextChartMode);
     }
 
     public boolean belongsTo(UUID playerId) {

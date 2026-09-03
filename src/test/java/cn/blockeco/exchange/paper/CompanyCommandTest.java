@@ -218,9 +218,9 @@ class CompanyCommandTest {
         }
 
         assertThat(allPlainMessages(sender)).containsExactly(
-                "BlockStock 正在初始化，请稍后再试。", "BlockStock 正在初始化，请稍后再试。",
-                "BlockStock 正在初始化，请稍后再试。", "BlockStock 正在初始化，请稍后再试。",
-                "BlockStock 正在初始化，请稍后再试。", "BlockStock 正在初始化，请稍后再试。");
+                "Bloeco-Stock 正在初始化，请稍后再试。", "Bloeco-Stock 正在初始化，请稍后再试。",
+                "Bloeco-Stock 正在初始化，请稍后再试。", "Bloeco-Stock 正在初始化，请稍后再试。",
+                "Bloeco-Stock 正在初始化，请稍后再试。", "Bloeco-Stock 正在初始化，请稍后再试。");
         verifyNoInteractions(registration, queries, assets, offerings);
     }
 
@@ -233,7 +233,7 @@ class CompanyCommandTest {
 
         command.onCommand(sender, mock(Command.class), "company", new String[0]);
 
-        assertThat(allPlainMessages(sender)).contains("BlockStock 公司命令：");
+        assertThat(allPlainMessages(sender)).contains("Bloeco-Stock 公司命令：");
         verifyNoInteractions(registration, queries, assets, offerings);
     }
 
@@ -245,7 +245,7 @@ class CompanyCommandTest {
 
         command.onCommand(sender, mock(Command.class), "company", new String[] {"info", "North"});
 
-        assertThat(allPlainMessages(sender)).containsExactly("BlockStock 正在初始化，请稍后再试。");
+        assertThat(allPlainMessages(sender)).containsExactly("Bloeco-Stock 正在初始化，请稍后再试。");
         verifyNoInteractions(queries);
     }
 
@@ -257,7 +257,7 @@ class CompanyCommandTest {
 
         command.onCommand(sender, mock(Command.class), "company", new String[] {"recovery", "list"});
 
-        assertThat(allPlainMessages(sender)).containsExactly("BlockStock 正在初始化，请稍后再试。");
+        assertThat(allPlainMessages(sender)).containsExactly("Bloeco-Stock 正在初始化，请稍后再试。");
         verifyNoInteractions(queries);
     }
 

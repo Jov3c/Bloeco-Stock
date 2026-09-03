@@ -1,14 +1,16 @@
-# BlockStock
+# Bloeco-Stock
 
-BlockStock 是 Minecraft 经济与公司交易所的**仅服务端** Paper 插件。玩家无需安装客户端模组或资源包。当前版本提供公司/IPO、Vault 隔离的证券账户、限价委托撮合、个人持仓和成交、公开行情/五档盘口，以及停服后只读恢复诊断。K 线、土地/商店/生产适配器、分红、增发投票、回购与退市仍在后续阶段提供。
+Bloeco-Stock 是 Bloeco 生态的 Minecraft 公司与证券交易所**仅服务端** Paper 插件。玩家无需安装客户端模组或资源包。它通过 Vault 使用服务器唯一的 Bloeco 经济账本，不发行第二套可结算货币。当前版本提供公司/IPO、隔离的证券账户、限价委托撮合、个人持仓和成交、公开行情/五档盘口，以及停服后只读恢复诊断。
 
 ## 环境要求
 
-- Paper `1.21.4+`；已测试的基线为 Paper `1.21.4` build `232`。
+- Paper `1.21.11`；已测试的基线将以 Paper `1.21.11` 的实际启动验证为准。
 - 已测试基线使用 Java `21+`。新版 Paper 可能提高 Java 要求；请根据所选服务器版本遵循 [Paper 文档](https://docs.papermc.io/paper/getting-started)。
-- [Vault](https://github.com/MilkBowl/Vault/releases) 和**恰好一个**已启用、与 Vault 兼容的经济提供方。烟测环境使用 [EssentialsX](https://github.com/EssentialsX/Essentials/releases) Economy。
+- [Vault](https://github.com/MilkBowl/Vault/releases) 和**恰好一个**已启用、与 Vault 兼容的经济提供方。正式 Bloeco 服务器应使用 Bloeco（CentralEconomy）作为唯一提供方；EssentialsX 仅可用于独立旧环境烟测，不能与 Bloeco 同时提供 Economy 服务。
 
 插件仅使用公开的 Bukkit/Paper 与 Vault API，不使用 NMS/CraftBukkit 内部接口。
+
+Bloeco 与 Bloeco-Stock 的启动顺序、旧目录迁移和准备金约束见 [Bloeco-Stock 部署说明](docs/operations/bloeco-stock-deployment.md)。
 
 ## 构建与安装
 
@@ -18,16 +20,16 @@ BlockStock 是 Minecraft 经济与公司交易所的**仅服务端** Paper 插�
 .\gradlew.bat clean test shadowJar
 ```
 
-将 `build/libs/` 中唯一的 `*-all.jar` 安装到服务器的 `plugins/` 文件夹；并从官方发布页取得 Vault 与经济提供方的 JAR，一同放入服务器。启动服务器一次后，BlockStock 会创建：
+将 `build/libs/` 中唯一的 `bloeco-stock-*-all.jar` 安装到服务器的 `plugins/` 文件夹；并从官方发布页取得 Vault 与唯一经济提供方的 JAR，一同放入服务器。启动服务器一次后，Bloeco-Stock 会创建：
 
 ```text
-plugins/BlockStock/config.yml
-plugins/BlockStock/blockeco.db
+plugins/Bloeco-Stock/config.yml
+plugins/Bloeco-Stock/blockeco.db
 ```
 
 不要在客户端放置 Paper API、Vault API 或客户端模组。Vault 本身和所选经济提供方必须作为服务端插件安装。
 
-进行本地集成测试时，`runServer` 固定使用 Paper 1.21.4：
+进行本地集成测试时，`runServer` 固定使用 Paper 1.21.11：
 
 ```powershell
 .\gradlew.bat runServer
@@ -35,21 +37,16 @@ plugins/BlockStock/blockeco.db
 
 `run/` 被 Git 有意忽略。运行前，请在 `run/eula.txt` 接受 Mojang EULA，并手动将 Vault 和经济提供方放进 `run/plugins/`。Gradle 的 run-paper 任务会自动使用 Shadow JAR。
 
-### 从 BlockecoExchange 一次性迁移
+### 数据目录无损迁移
 
-BlockStock 启动时会检查 `plugins/BlockecoExchange/`。仅当新目录
-`plugins/BlockStock/` 尚不存在时，插件才会将**整个目录**迁移为
-`plugins/BlockStock/`，从而保留原有的 `config.yml`、`blockeco.db` 以及 SQLite
-关联文件。迁移通过文件系统的目录移动完成；实现并未承诺原子移动。不要手工复制、移动、合并或删除旧目录；先正常执行 `stop` 并等待
-Paper 完成保存，再让 BlockStock 的下一次启动完成迁移。
+Bloeco-Stock 启动时会依次检查 `plugins/BlockStock/` 和更早的
+`plugins/BlockecoExchange/`。仅当新目录 `plugins/Bloeco-Stock/` 尚不存在时，插件才会将**整个目录**迁移为新目录，从而保留原有的 `config.yml`、`blockeco.db` 以及 SQLite 关联文件。迁移通过文件系统的目录移动完成；实现并未承诺原子移动。不要手工复制、移动、合并或删除旧目录；先正常执行 `stop` 并等待 Paper 完成保存，再让 Bloeco-Stock 的下一次启动完成迁移。
 
-如果 `plugins/BlockStock/` 已存在，插件会保守地跳过迁移，绝不覆盖新目录中的
-数据。此时应保留两个目录并先人工核对备份，而不是删除任一目录。一次成功迁移后，
-`plugins/BlockecoExchange/` 应不再存在。
+如果 `plugins/Bloeco-Stock/` 已存在，插件会保守地跳过迁移，绝不覆盖新目录中的数据。此时应保留两个目录并先人工核对备份，而不是删除任一目录。一次成功迁移后，被迁移的旧目录应不再存在。
 
 ## 配置
 
-下列为 `plugins/BlockStock/config.yml` 的全部默认配置。货币值以十进制字符串保存，并通过 `currency.scale` 精确转换为带符号 `long` 最小货币单位。
+下列为 `plugins/Bloeco-Stock/config.yml` 的全部默认配置。货币值以十进制字符串保存，并通过 `currency.scale` 精确转换为带符号 `long` 最小货币单位。
 
 | 配置键 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -59,9 +56,9 @@ Paper 完成保存，再让 BlockStock 的下一次启动完成迁移。
 | `company.registration-fee` | `'1000.00'` | 成功注册时从流通中移除的正数费用。 |
 | `company.minimum-capital` | `'10000.00'` | 转入新公司内部金库的正数资本。 |
 | `company.initial-shares` | `1000` | 保留的 Phase 1/IPO 设置。初始公司固定使用 1,000 股。 |
-| `company.treasury-escrow-uuid` | 非零 UUID | BlockStock 专用、非玩家的 Vault 托管账户。启动时会验证；账户不存在时会请求 Vault 经济提供方创建它。若提供方拒绝，失败时公司和 IPO 命令不会接受请求。绝不可填写真实玩家 UUID。 |
+| `company.treasury-escrow-uuid` | 非零 UUID | Bloeco-Stock 专用、非玩家的 Vault 托管账户。启动时会验证；账户不存在时会请求 Vault 经济提供方创建它。若提供方拒绝，失败时公司和 IPO 命令不会接受请求。绝不可填写真实玩家 UUID。 |
 | `company.allowed-dividend-percent` | `[30, 50, 70]` | 三个不可变注册选项的保留配置镜像。 |
-| `database.file` | `blockeco.db` | 相对于 `plugins/BlockStock/` 的 SQLite 文件名。 |
+| `database.file` | `blockeco.db` | 相对于 `plugins/Bloeco-Stock/` 的 SQLite 文件名。 |
 | `database.pool-size` | `2` | 保留的连接池大小设置；本 Phase 1 构建使用固定的小型 Hikari 配置。 |
 | `messages.*` | 见生成的文件 | 所有面向玩家的命令消息，包括处理中、恢复和查询文本。请在适用处保留 `%name%`、`%state%`、`%id%`、`%player%`、`%amount%`、`%time%` 与 `%error%` 占位符。 |
 
@@ -118,7 +115,7 @@ BlockStock 在 Vault 中只使用 `company.treasury-escrow-uuid` 指向的非玩
 
 ## 备份、恢复与故障处理
 
-Phase 1 的权威数据是 `plugins/BlockStock/blockeco.db` 中的 SQLite 数据库。
+Bloeco-Stock 的权威数据是 `plugins/Bloeco-Stock/blockeco.db` 中的 SQLite 数据库。
 
 1. 正常停止 Paper（`stop`），并等待关服完成。
 2. 将 `blockeco.db` 复制到带时间戳的备份位置。

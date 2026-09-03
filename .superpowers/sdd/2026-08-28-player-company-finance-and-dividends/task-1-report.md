@@ -79,3 +79,13 @@ $env:JAVA_TOOL_OPTIONS='-Djdk.net.unixdomain.tmpdir=C:\Temp'; .\gradlew.bat test
 ```
 
 The full suite executed; the generated results contain 58 JUnit XML reports and no `<failure>` or `<error>` elements. Compilation emitted the pre-existing unchecked-operations note and the JVM emitted its bootstrap-classpath sharing warning, but no test failures.
+
+### Follow-up fixture compatibility commit
+
+`13d8491220f1c58afecc44d89c50315d94bde3b2` updates the shared application `Fixtures.company` cash-account insert to name the five legacy columns explicitly, allowing V015 to supply `accumulated_loss_minor` from its default. Focused verification passed:
+
+```powershell
+$env:JAVA_TOOL_OPTIONS='-Djdk.net.unixdomain.tmpdir=C:\Temp'; .\gradlew.bat test --tests cn.blockeco.exchange.application.AssetBindingServiceTest --tests cn.blockeco.exchange.application.PrimaryOfferingServiceTest
+```
+
+Result: `BUILD SUCCESSFUL in 7s`.

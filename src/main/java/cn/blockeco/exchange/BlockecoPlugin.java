@@ -111,10 +111,10 @@ public final class BlockecoPlugin extends JavaPlugin {
         try {
             MigrationResult migration = new PluginDataDirectoryMigrator(java.nio.file.Files::move)
                 .migrate(getDataFolder().toPath().getParent());
-            if (migration == MigrationResult.MIGRATED) getLogger().info("BlockStock data directory migrated from BlockecoExchange.");
-            if (migration == MigrationResult.SKIPPED_TARGET_EXISTS) getLogger().warning("BlockStock data directory migration skipped because the target already exists.");
+            if (migration == MigrationResult.MIGRATED) getLogger().info("Bloeco-Stock data directory migrated from a previous plugin directory.");
+            if (migration == MigrationResult.SKIPPED_TARGET_EXISTS) getLogger().warning("Bloeco-Stock data directory migration skipped because the target already exists.");
         } catch (java.io.IOException failure) {
-            failEnable("BlockStock 数据目录迁移失败: " + failure.getMessage());
+            failEnable("Bloeco-Stock 数据目录迁移失败: " + failure.getMessage());
             return;
         }
         saveDefaultConfig();
@@ -125,7 +125,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         try { validateConfiguration(); if (!getDataFolder().exists() && !getDataFolder().mkdirs()) throw new IllegalStateException("cannot create plugin data folder"); }
         catch (RuntimeException failure) { failEnable(configurationFailureMessage(failure)); return; }
         if (!installInitializingCommand()) return;
-        sqlExecutor = Executors.newSingleThreadExecutor(r -> { Thread thread = new Thread(r, "BlockStock-SQL"); thread.setDaemon(true); return thread; });
+        sqlExecutor = Executors.newSingleThreadExecutor(r -> { Thread thread = new Thread(r, "Bloeco-Stock-SQL"); thread.setDaemon(true); return thread; });
         runtime.attachExecutor(sqlExecutor);
         Path file = getDataFolder().toPath().resolve(getConfig().getString("database.file", "blockeco.db"));
         bootstrap = new BootstrapCoordinator<>(new PaperMainThread(this), this::finishEnable, failure -> failEnable(startupFailureMessage(failure)), runtime::closeDatabase);
@@ -145,12 +145,14 @@ public final class BlockecoPlugin extends JavaPlugin {
         int scale = getConfig().getInt("currency.scale");
         var bluechipAccountId = configuredBluechipSystemAccount();
         var bluechipParticipantId = configuredBluechipParticipantAccount();
+        var bluechipReserveTreasuryId = configuredBluechipReserveTreasury();
         if (getServer().getOfflinePlayer(bluechipAccountId).hasPlayedBefore()) throw new IllegalStateException("蓝筹系统账户不能是已知真实玩家");
         if (getServer().getOfflinePlayer(bluechipParticipantId).hasPlayedBefore()) throw new IllegalStateException("蓝筹系统参与者账户不能是已知真实玩家");
+        if (getServer().getOfflinePlayer(bluechipReserveTreasuryId).hasPlayedBefore()) throw new IllegalStateException("蓝筹准备金国库账户不能是已知真实玩家");
         var bluechipConfig = BluechipConfig.load(getConfig(), scale);
         var economy = new VaultEconomyGateway(getServer(), scale);
         var cashRepository = new SqlSecuritiesCashRepository(db.dataSource());
-        var bluechipFunding = new cn.blockeco.exchange.application.BluechipBootstrapFundingService(bluechipAccountId,
+        var bluechipFunding = new cn.blockeco.exchange.application.BluechipBootstrapFundingService(bluechipAccountId, bluechipReserveTreasuryId,
                 new SqlBluechipBootstrapFundingRepository(db.dataSource()), db,
                 new cn.blockeco.exchange.application.BluechipBootstrapFundingService.EscrowEconomy() {
                     @Override public cn.blockeco.exchange.ports.EconomyGateway.Result withdraw(java.util.UUID player, Money amount) { return economy.withdraw(player, amount); }
@@ -200,7 +202,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         if (companyCommand == null) throw new IllegalStateException(missingCompanyCommandMessage());
         companyCommand.setExecutor(command);
         var adminCommand = getCommand("stockadmin");
-        if (adminCommand == null) throw new IllegalStateException("BlockStock 命令注册失败：未在 plugin.yml 中声明 stockadmin 命令");
+        if (adminCommand == null) throw new IllegalStateException("Bloeco-Stock 命令注册失败：未在 plugin.yml 中声明 stockadmin 命令");
         var capitalizations = new CompanyCapitalizationService(finance, new SqlAuditLog(), db, escrow, mainThread, sqlExecutor, clock);
         int feeBps = configuredMarketFeeBps();
         ZoneId marketZone = ZoneId.of(getConfig().getString("market.time-zone", "Asia/Shanghai"));
@@ -223,7 +225,8 @@ public final class BlockecoPlugin extends JavaPlugin {
                 secondaryMarket, marketSession, clock, bluechipParticipantId);
         var quantConfig = BluechipQuantConfig.load(getConfig());
         var quantStrategy = new cn.blockeco.exchange.application.BluechipQuantStrategyService(bluechipRepository, tradingRepository,
-                secondaryMarket, db, sqlExecutor, marketSession, clock, bluechipParticipantId, quantConfig,
+                secondaryMarket, db, sqlExecutor, marketSession, clock, bluechipParticipantId,
+                new cn.blockeco.exchange.infrastructure.sql.SqlBluechipParticipantRepository(), quantConfig,
                 new cn.blockeco.exchange.application.QuantSignalPolicy(),
                 new cn.blockeco.exchange.application.QuantRiskPolicy(quantConfig.maximumOrderBps(), quantConfig.lossCooldownSeconds()));
         // The callback runs only after an order transaction commits; the maker queues a bounded,
@@ -275,7 +278,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         var companyFinanceGui = new CompanyFinanceGui(this, companyGui, companyQueries, operationsRepository, clock, marketZone, sqlExecutor);
         companyGui.attachFinanceGui(companyFinanceGui);
         getServer().getPluginManager().registerEvents(companyFinanceGui, this);
-        var capitalActionGui = new CapitalActionGuiController(this, capitalActions, companyQueries, mainThread, runtime::accepting, scale, companyGui);
+        var capitalActionGui = new CapitalActionGuiController(this, capitalActions, companyQueries, mainThread, sqlExecutor, runtime::accepting, scale, companyGui);
         companyGui.attachCapitalActionGui(capitalActionGui);
         getServer().getPluginManager().registerEvents(capitalActionGui, this);
         var stockGui = new StockGuiController(this, secondaryQueries, cashService, secondaryMarket, mainThread,
@@ -297,7 +300,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         stockCommand = new StockCommand(publicQueries, primaryOfferings, cashService, secondaryMarket, secondaryQueries,
                 mainThread, runtime::accepting, secondaryTradingGate::mutationsOpen, messages, scale, stockGui);
         var stock = getCommand("stock");
-        if (stock == null) throw new IllegalStateException("BlockStock 命令注册失败：未在 plugin.yml 中声明 stock 命令");
+        if (stock == null) throw new IllegalStateException("Bloeco-Stock 命令注册失败：未在 plugin.yml 中声明 stock 命令");
         stock.setExecutor(stockCommand); stock.setTabCompleter(new StockTabCompleter(symbols));
         new StartupRecoveryGate(failure -> getServer().getScheduler().runTask(this, () -> failEnable(startupFailureMessage(new IllegalStateException(failure))))).startFull(
                 escrowFailure,
@@ -311,7 +314,7 @@ public final class BlockecoPlugin extends JavaPlugin {
                         .thenRun(() -> secondaryTradingGate.setMutationsOpen(!snapshot.mutationsBlocked())),
                 snapshot -> getServer().getScheduler().runTask(this, () -> {
                     registration.recoverStaleRegistrations(Instant.now().minus(Duration.ofMinutes(5))).whenComplete((count, staleFailure) ->
-                            getServer().getScheduler().runTask(this, () -> getLogger().info("BlockStock ready; secondary trading="
+                            getServer().getScheduler().runTask(this, () -> getLogger().info("Bloeco-Stock ready; secondary trading="
                                     + (snapshot.mutationsBlocked() ? "maintenance" : "open") + "; stale registration records scanned="
                                     + (staleFailure == null ? count : "failed"))));
                     ipoLifecycle = new IpoLifecycleScheduler(task -> { var bukkitTask=getServer().getScheduler().runTaskTimerAsynchronously(this,task,20L,1200L); return bukkitTask::cancel; }, clock::now, primaryOfferings, failure -> getLogger().warning("IPO 状态调度失败，将在下个周期重试: " + failure.getMessage()), ignoredClose -> refreshSymbolsIfAccepting(runtime, symbols, publicQueries, error -> getLogger().warning("股票代码缓存刷新失败，将在下个周期重试: " + error.getMessage())));
@@ -360,7 +363,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         companyCommand.setExecutor((sender, command, label, args) -> { sender.sendMessage(messages.initializing()); return runtime.accepting(); });
         companyCommand.setTabCompleter(new CompanyTabCompleter(creationRules));
         var stock = getCommand("stock");
-        if (stock == null) { failEnable("BlockStock 命令注册失败：未在 plugin.yml 中声明 stock 命令"); return false; }
+        if (stock == null) { failEnable("Bloeco-Stock 命令注册失败：未在 plugin.yml 中声明 stock 命令"); return false; }
         stockCommand = new StockCommand(null, null, new PaperMainThread(this), runtime::accepting, messages);
         stock.setExecutor(stockCommand);
         stock.setTabCompleter(new StockTabCompleter(new PublicStockSymbolCache()));
@@ -401,10 +404,11 @@ public final class BlockecoPlugin extends JavaPlugin {
         BluechipConfig.load(getConfig(), scale);
         java.util.UUID maker = configuredBluechipSystemAccount();
         java.util.UUID participant = configuredBluechipParticipantAccount();
+        java.util.UUID reserveTreasury = configuredBluechipReserveTreasury();
         java.util.UUID treasury;
         try { treasury = java.util.UUID.fromString(getConfig().getString("company.treasury-escrow-uuid")); }
         catch (IllegalArgumentException failure) { throw new IllegalArgumentException("company.treasury-escrow-uuid must be a non-zero UUID", failure); }
-        if (maker.equals(participant) || maker.equals(treasury) || participant.equals(treasury)) throw new IllegalArgumentException("market participant, maker, and treasury UUIDs must be distinct");
+        if (maker.equals(participant) || maker.equals(treasury) || maker.equals(reserveTreasury) || participant.equals(treasury) || participant.equals(reserveTreasury) || treasury.equals(reserveTreasury)) throw new IllegalArgumentException("market participant, maker, reserve treasury, and escrow UUIDs must be distinct");
         positive("company.registration-fee", scale); positive("company.minimum-capital", scale);
         if (configuredMoney("company.capital-actions.maximum-founder-cashout", scale).minorUnits() < 0) throw new IllegalArgumentException("company.capital-actions.maximum-founder-cashout must be non-negative");
         configuredOperationsIngestionMinutes();
@@ -419,7 +423,7 @@ public final class BlockecoPlugin extends JavaPlugin {
         return minutes;
     }
     private Money configuredMoney(String path, int scale) { return Money.fromMajor(new BigDecimal(getConfig().getString(path)), scale); }
-    static String startupFailureMessage(Throwable failure) { String detail = failure.getMessage(); return "BlockStock 启动失败：" + (detail == null || detail.isBlank() ? "启动过程中发生未知异常（" + failure.getClass().getSimpleName() + "）" : detail); }
+    static String startupFailureMessage(Throwable failure) { String detail = failure.getMessage(); return "Bloeco-Stock 启动失败：" + (detail == null || detail.isBlank() ? "启动过程中发生未知异常（" + failure.getClass().getSimpleName() + "）" : detail); }
     static ZoneId validateMarketConfiguration(int feeBps, String zoneId) {
         if (feeBps < 0 || feeBps > 10_000) throw new IllegalArgumentException("market.fee-bps must be between 0 and 10000");
         try { return ZoneId.of(zoneId); }
@@ -452,8 +456,18 @@ public final class BlockecoPlugin extends JavaPlugin {
             throw new IllegalArgumentException("market.participant-account-uuid must be a non-zero UUID", failure);
         }
     }
-    static String configurationFailureMessage(Throwable failure) { String detail = failure.getMessage(); return "BlockStock 配置无效" + (detail == null || detail.isBlank() ? "" : "（附加信息：" + detail + "）"); }
-    static String missingCompanyCommandMessage() { return "BlockStock 命令注册失败：未在 plugin.yml 中声明 company 命令"; }
+    private java.util.UUID configuredBluechipReserveTreasury() {
+        String raw = getConfig().getString("market.bluechip-reserve-treasury-uuid");
+        try {
+            java.util.UUID value = java.util.UUID.fromString(raw);
+            if (new java.util.UUID(0, 0).equals(value)) throw new IllegalArgumentException("market.bluechip-reserve-treasury-uuid must not be zero");
+            return value;
+        } catch (IllegalArgumentException failure) {
+            throw new IllegalArgumentException("market.bluechip-reserve-treasury-uuid must be a non-zero UUID", failure);
+        }
+    }
+    static String configurationFailureMessage(Throwable failure) { String detail = failure.getMessage(); return "Bloeco-Stock 配置无效" + (detail == null || detail.isBlank() ? "" : "（附加信息：" + detail + "）"); }
+    static String missingCompanyCommandMessage() { return "Bloeco-Stock 命令注册失败：未在 plugin.yml 中声明 company 命令"; }
     static CompletionStage<Void> attachStockAfterInitialRefresh(PublicStockSymbolCache cache, cn.blockeco.exchange.application.PublicStockQueryService queries, cn.blockeco.exchange.ports.MainThreadExecutor main, PluginRuntime runtime, java.util.List<? extends cn.blockeco.exchange.paper.CommandAcceptanceGate> gates, AutoCloseable database, Consumer<Throwable> failed) {
         return cache.refresh(queries).handle((ignored, error) -> main.<Void>submit(() -> { if (!runtime.accepting()) return null; if (error != null) { failed.accept(error); throw new java.util.concurrent.CompletionException(error); } runtime.attachReady(gates, database); return null; })).thenCompose(stage -> stage);
     }

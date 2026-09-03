@@ -5,9 +5,13 @@ import cn.blockeco.exchange.domain.money.Money;
 import cn.blockeco.exchange.domain.trading.FeePolicy;
 import cn.blockeco.exchange.ports.AppClock;
 import cn.blockeco.exchange.ports.BluechipRepository;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.Optional;
@@ -20,6 +24,8 @@ public final class BluechipMarketMakerService {
     private static final int LEVELS = 5;
     /** Fixed, finite depth at each displayed price level. */
     private static final long SHARES_PER_LEVEL = 10;
+    /** Full-book re-quoting is deliberately much slower than the one-second market display refresh. */
+    private static final Duration POST_TRADE_REPLENISH_INTERVAL = Duration.ofSeconds(15);
     private final BluechipRepository bluechips;
     private final SecondaryMarketService market;
     private final Supplier<MarketSession> session;
@@ -32,6 +38,8 @@ public final class BluechipMarketMakerService {
     private boolean systemQuotePassActive;
     /** Coalesces settlement callbacks that arrive while the opening/system quote batch is active. */
     private boolean deferredReplenishmentRequested;
+    private final Map<String, Money> quotedModelPrices = new HashMap<>();
+    private Instant lastPostTradeReplenishmentAt;
 
     public BluechipMarketMakerService(BluechipRepository bluechips, SecondaryMarketService market, Supplier<MarketSession> session, AppClock clock) {
         // The opening queued sweep settles real pre-open player orders.  It must therefore emit the
@@ -51,7 +59,7 @@ public final class BluechipMarketMakerService {
         if (operatorPaused || !session.get().acceptsMatching()) return CompletableFuture.completedFuture(new QuoteRefreshResult(Set.of(), 0));
         // A close is a session transition, not a permanent operator pause. The first open refresh re-arms quotes.
         closeRequested = false;
-        return enqueue(() -> closeRequested ? CompletableFuture.completedFuture(new QuoteRefreshResult(Set.of(), 0)) : refreshOpenQuotes(false));
+        return enqueue(() -> closeRequested ? CompletableFuture.completedFuture(new QuoteRefreshResult(Set.of(), 0)) : refreshOpenQuotes(false, false));
     }
 
     /**
@@ -66,25 +74,45 @@ public final class BluechipMarketMakerService {
         if (operatorPaused || !session.get().acceptsMatching()) return CompletableFuture.completedFuture(null);
         // A real opening trade proves the session is open; re-arm the normal first-open behaviour.
         closeRequested = false;
-        return enqueue(() -> closeRequested ? CompletableFuture.completedFuture(new QuoteRefreshResult(Set.of(), 0)) : refreshOpenQuotes(true))
+        Instant now = clock.now();
+        if (lastPostTradeReplenishmentAt != null && now.isBefore(lastPostTradeReplenishmentAt.plus(POST_TRADE_REPLENISH_INTERVAL))) {
+            return CompletableFuture.completedFuture(null);
+        }
+        lastPostTradeReplenishmentAt = now;
+        return enqueue(() -> closeRequested ? CompletableFuture.completedFuture(new QuoteRefreshResult(Set.of(), 0)) : refreshOpenQuotes(true, true))
                 .thenApply(ignored -> null);
     }
 
-    private CompletionStage<QuoteRefreshResult> refreshOpenQuotes(boolean avoidRestingPlayerCross) {
+    private CompletionStage<QuoteRefreshResult> refreshOpenQuotes(boolean avoidRestingPlayerCross, boolean forceRequote) {
         if (!session.get().acceptsMatching()) return CompletableFuture.completedFuture(new QuoteRefreshResult(Set.of(), 0));
         synchronized (this) { systemQuotePassActive = true; }
         List<String> degraded = new ArrayList<>();
         CompletionStage<Integer> chain = CompletableFuture.completedFuture(0);
         for (BluechipRepository.BluechipCompany bluechip : bluechips.all()) {
-            chain = chain.thenCompose(total -> refresh(bluechip, avoidRestingPlayerCross).thenApply(result -> { if (result.degraded()) degraded.add(bluechip.listing().stockCode()); return total + result.orders(); }));
+            chain = chain.thenCompose(total -> needsRequote(bluechip, forceRequote).thenCompose(needs -> {
+                if (!needs) return CompletableFuture.completedFuture(total);
+                return refresh(bluechip, avoidRestingPlayerCross).thenApply(result -> {
+                    quotedModelPrices.put(bluechip.listing().stockCode(), bluechip.modelPrice());
+                    if (result.degraded()) degraded.add(bluechip.listing().stockCode());
+                    return total + result.orders();
+                });
+            }));
         }
         return chain.thenCompose(orders -> {
             QuoteRefreshResult result = new QuoteRefreshResult(Set.copyOf(new LinkedHashSet<>(degraded)), orders);
             // The opening catch-up can run before these system orders exist. Match once only after the full quote batch.
-            return session.get().acceptsMatching()
+            return orders > 0 && session.get().acceptsMatching()
                     ? queuedMatcher.get().thenApply(ignored -> result)
                     : CompletableFuture.completedFuture(result);
         }).whenComplete((ignored, failure) -> finishSystemQuotePass());
+    }
+
+    private CompletionStage<Boolean> needsRequote(BluechipRepository.BluechipCompany bluechip, boolean forceRequote) {
+        if (forceRequote || !bluechip.modelPrice().equals(quotedModelPrices.get(bluechip.listing().stockCode()))) {
+            return CompletableFuture.completedFuture(true);
+        }
+        return market.openOrderCount(bluechip.systemAccountId(), bluechip.listing().stockCode())
+                .thenApply(openOrders -> openOrders < LEVELS * 2);
     }
 
     private void finishSystemQuotePass() {
@@ -123,7 +151,7 @@ public final class BluechipMarketMakerService {
         for (BluechipRepository.BluechipCompany bluechip : bluechips.all()) {
             chain = chain.thenCompose(total -> market.cancelOpenOrders(bluechip.systemAccountId(), bluechip.listing().stockCode()).thenApply(cancelled -> total + cancelled));
         }
-        return chain;
+        return chain.thenApply(cancelled -> { quotedModelPrices.clear(); lastPostTradeReplenishmentAt = null; return cancelled; });
     }
 
     private <T> CompletionStage<T> enqueue(java.util.function.Supplier<CompletionStage<T>> operation) {

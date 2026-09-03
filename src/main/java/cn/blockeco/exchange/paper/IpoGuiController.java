@@ -18,7 +18,6 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BooleanSupplier;
 import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
@@ -28,7 +27,6 @@ import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryType;
-import org.bukkit.event.inventory.PrepareAnvilEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
@@ -81,7 +79,7 @@ public final class IpoGuiController implements Listener, IpoGuiOpener {
             if (error != null) { player.sendMessage(messages.ipoPublicQueryFailed()); fallbackStock(player); return; }
             int start = Math.min(session.pageIndex() * PAGE_SIZE, views.size());
             int end = Math.min(start + PAGE_SIZE, views.size());
-            Inventory inventory = inventory(session, "BlockStock 公开 IPO " + (session.pageIndex() + 1)); fill(inventory);
+            Inventory inventory = inventory(session, "Bloeco-Stock 公开 IPO " + (session.pageIndex() + 1)); fill(inventory);
             if (views.isEmpty()) put(inventory, 22, Material.BARRIER, "noop", "暂无公开 IPO", "请稍后再来查看");
             for (int i = start; i < end; i++) {
                 PublicOfferingView offer = views.get(i);
@@ -104,11 +102,14 @@ public final class IpoGuiController implements Listener, IpoGuiOpener {
         loading(player, session, "正在加载公司 IPO…");
         companies.findByFounder(player.getUniqueId()).whenComplete((company, error) -> onMain(player, session, () -> {
             if (error != null || company.isEmpty()) { player.sendMessage(error == null ? messages.companyNotFound() : messages.lookupFailed()); fallbackCompany(player); return; }
-            Inventory inventory = inventory(session, "BlockStock IPO 管理"); fill(inventory);
+            Inventory inventory = inventory(session, "Bloeco-Stock IPO 管理"); fill(inventory);
             var value = company.get();
-            put(inventory, 13, Material.NAME_TAG, "noop", value.displayName(), "状态：" + value.status());
-            put(inventory, 29, Material.LIME_WOOL, "announce:" + value.id().value(), "发布 IPO", "输入募资目标与发行价；目标不可超过实缴资本的 5 倍");
-            put(inventory, 33, Material.PAPER, "public", "公开 IPO", "查看所有公司的发行和认购进度");
+            put(inventory, 11, Material.NAME_TAG, "noop", "① 公司已创建", value.displayName() + "（" + value.status() + "）");
+            put(inventory, 20, Material.CHEST, "noop", "② 绑定经营资产", "必须先在公司中心完成资产绑定");
+            put(inventory, 22, Material.BOOK, "noop", "③ 设置发行参数", "目标不超过实缴资本 5 倍；发行价决定股数");
+            put(inventory, 24, Material.CLOCK, "noop", "④ 公示并开放认购", "公示 12 小时，随后认购 2 天");
+            put(inventory, 31, Material.LIME_WOOL, "announce:" + value.id().value(), "开始第 ③ 步：设置 IPO", "先输入募资目标，再输入每股发行价");
+            put(inventory, 33, Material.PAPER, "public", "查看公开 IPO", "查看所有公司的发行和认购进度");
             put(inventory, 49, Material.ARROW, "back:company", "返回公司中心", "返回公司管理");
             openInventory(player, inventory);
         }));
@@ -119,6 +120,8 @@ public final class IpoGuiController implements Listener, IpoGuiOpener {
         event.setCancelled(true);
         if (!(event.getWhoClicked() instanceof Player player) || !matches(player, holder.session())) return;
         if (event.getRawSlot() < 0 || event.getRawSlot() >= event.getView().getTopInventory().getSize()) return;
+        // Paper may rebuild an anvil result without preserving our PDC action tag.  The result
+        // slot itself is the confirmation affordance, so do not make the input flow depend on it.
         String action = items.action(event.getCurrentItem()); if (action == null) return;
         switch (action) {
             case "back:stock" -> fallbackStock(player);
@@ -129,7 +132,6 @@ public final class IpoGuiController implements Listener, IpoGuiOpener {
             case "public:next" -> openPublic(player, holder.session().pageIndex() + 1);
             case "confirm" -> confirm(player, holder.session());
             case "cancel" -> openPublic(player);
-            case "input" -> { if (holder.session().page() == Page.INPUT && event.getRawSlot() == 2) consumeInput(player, holder.session(), event.getCurrentItem()); }
             default -> route(player, action);
         }
     }
@@ -139,12 +141,6 @@ public final class IpoGuiController implements Listener, IpoGuiOpener {
         if (event.getPlayer() instanceof Player player && event.getInventory().getHolder() instanceof Holder holder
                 && !replacing.contains(player.getUniqueId())) sessions.remove(player.getUniqueId(), holder.session());
     }
-    @EventHandler public void prepare(PrepareAnvilEvent event) {
-        if (!(event.getInventory().getHolder() instanceof Holder holder) || holder.session().page() != Page.INPUT) return;
-        ItemStack first = event.getInventory().getFirstItem(); if (first != null) event.setResult(first.clone());
-        event.getView().setRepairCost(0);
-    }
-
     private void route(Player player, String action) {
         if (action.startsWith("offer:")) {
             try { openOffer(player, UUID.fromString(action.substring("offer:".length()))); }
@@ -165,7 +161,7 @@ public final class IpoGuiController implements Listener, IpoGuiOpener {
             if (error != null || view.isEmpty()) { player.sendMessage(error == null ? messages.publicIpoNotFound() : messages.ipoPublicQueryFailed()); openPublic(player); return; }
             PublicOfferingView offer = view.get();
             Session displayed = replace(player, session, Page.DETAIL, 0, new Offer(offer.offeringId()));
-            Inventory inventory = inventory(displayed, "BlockStock IPO 详情"); fill(inventory);
+            Inventory inventory = inventory(displayed, "Bloeco-Stock IPO 详情"); fill(inventory);
             put(inventory, 13, Material.NAME_TAG, "noop", offer.companyDisplayName(), "状态：" + state(offer));
             put(inventory, 22, Material.GOLD_INGOT, "noop", "发行价 " + amount(offer.issuePrice()), "可认购 " + offer.availableShares() + " / 总计 " + offer.maximumShares() + " 股");
             put(inventory, 31, Material.CLOCK, "noop", "认购时间", "开放 " + time(offer.opensAt()) + " | 截止 " + time(offer.closesAt()));
@@ -178,15 +174,21 @@ public final class IpoGuiController implements Listener, IpoGuiOpener {
 
     private void openInput(Player player, Input input) {
         Session session = open(player, Page.INPUT, 0, null, input);
-        String hint = switch (input.kind()) { case TARGET -> "输入募资目标"; case PRICE -> "输入每股发行价"; case SHARES -> "输入认购股数"; };
-        Inventory inventory = Bukkit.createInventory(new Holder(session), InventoryType.ANVIL, Component.text(hint));
-        inventory.setItem(0, items.action(Material.PAPER, "input", Component.text("输入"), List.of(Component.text(hint))));
-        openInventory(player, inventory);
+        String hint = switch (input.kind()) { case TARGET -> "步骤 ③/④：输入募资目标"; case PRICE -> "步骤 ③/④：输入每股发行价"; case SHARES -> "输入认购股数"; };
+        String rule = switch (input.kind()) {
+            case TARGET -> "上限为实缴资本的 5 倍";
+            case PRICE -> "已选募资目标 " + amount(input.previousMoney()) + "；右侧会显示预计发行股数";
+            case SHARES -> "认购资金会从你的个人钱包扣除";
+        };
+        TextInputGui.open(plugin, player, hint + "（" + rule + "）", text -> consumeInput(player, session, text));
     }
 
-    private void consumeInput(Player player, Session session, ItemStack result) {
+    private void consumeInput(Player player, Session session, String text) {
+        if (text.isEmpty()) {
+            player.sendMessage(Component.text("请先输入数值，再点击右侧成品格确认。"));
+            return;
+        }
         if (!(session.draft() instanceof Input input)) return;
-        String text = PlainTextComponentSerializer.plainText().serialize(result.getItemMeta().displayName()).trim();
         try {
             if (input.kind() == InputKind.SHARES) {
                 long shares = Long.parseLong(text); if (shares <= 0) throw new NumberFormatException();
@@ -203,6 +205,7 @@ public final class IpoGuiController implements Listener, IpoGuiOpener {
     private void showConfirmation(Player player, Draft draft) {
         Session session = open(player, Page.CONFIRM, 0, null, draft); Inventory inventory = inventory(session, "确认 IPO 操作"); fill(inventory);
         String description = draft instanceof Announce announce ? "目标 " + amount(announce.target()) + "，发行价 " + amount(announce.price())
+                + "，预计发行 " + IpoOfferPreview.estimatedShares(announce.target(), announce.price()) + " 股"
                 : "认购 " + ((Subscribe) draft).shares() + " 股（将从个人钱包扣款）";
         put(inventory, 22, Material.BOOK, "noop", "请确认", description);
         put(inventory, 29, Material.LIME_WOOL, "confirm", "确认执行", "提交后由服务端账本处理");
@@ -233,12 +236,13 @@ public final class IpoGuiController implements Listener, IpoGuiOpener {
     private boolean matches(Player player, Session session) { return session.owner().equals(player.getUniqueId()) && session.equals(sessions.get(player.getUniqueId())); }
     private void onMain(Player player, Session session, Runnable action) { main.submit(() -> { if (player.isOnline() && accepting.getAsBoolean() && matches(player, session)) action.run(); return null; }); }
     private boolean ready(Player player) { if (accepting.getAsBoolean()) return true; player.sendMessage(messages.initializing()); return false; }
-    private void fallbackStock(Player player) { if (stockHome != null) stockHome.openHome(player); else player.closeInventory(); }
+    private void fallbackStock(Player player) { if (stockHome != null) stockHome.openHome(player); else closeInventory(player); }
     private void fallbackCompany(Player player) { if (companyCenter != null) companyCenter.open(player); else fallbackStock(player); }
     private Inventory inventory(Session session, String title) { return Bukkit.createInventory(new Holder(session), 54, Component.text(title)); }
-    private void openInventory(Player player, Inventory inventory) { replacing.add(player.getUniqueId()); try { player.openInventory(inventory); } finally { replacing.remove(player.getUniqueId()); } }
-    private void loading(Player player, Session session, String name) { Inventory inv = inventory(session, "BlockStock IPO"); fill(inv); put(inv, 22, Material.CLOCK, "noop", name, "请稍候"); openInventory(player, inv); }
-    private void fill(Inventory inventory) { for (int i = 0; i < inventory.getSize(); i++) inventory.setItem(i, items.filler()); }
+    private void openInventory(Player player, Inventory inventory) { GuiTransitions.defer(action -> Bukkit.getScheduler().runTask(plugin, action), () -> { if (!player.isOnline()) return; replacing.add(player.getUniqueId()); try { player.openInventory(inventory); } finally { replacing.remove(player.getUniqueId()); } }); }
+    private void closeInventory(Player player) { GuiTransitions.defer(action -> Bukkit.getScheduler().runTask(plugin, action), player::closeInventory); }
+    private void loading(Player player, Session session, String name) { Inventory inv = inventory(session, "Bloeco-Stock IPO"); fill(inv); put(inv, 22, Material.CLOCK, "noop", name, "请稍候"); openInventory(player, inv); }
+    private void fill(Inventory inventory) { BlockStockTerminalTheme.fill(inventory, items); }
     private void put(Inventory inventory, int slot, Material material, String action, String title, String lore) { inventory.setItem(slot, items.action(material, action, Component.text(title), List.of(Component.text(lore)))); }
     private String amount(Money value) { return value.toMajor(scale).setScale(scale).toPlainString(); }
     private String time(Instant instant) { return instant.toString().replace("T", " ").replace("Z", " UTC"); }

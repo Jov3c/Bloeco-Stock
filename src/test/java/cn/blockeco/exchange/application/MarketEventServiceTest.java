@@ -109,7 +109,7 @@ class MarketEventServiceTest {
             assertThat(events).allSatisfy(event -> {
                 assertThat(Math.abs(event.priceImpactBps())).isBetween(25, 120);
                 assertThat(Duration.between(event.startsAt(), event.endsAt())).isBetween(Duration.ofMinutes(5), Duration.ofMinutes(20));
-                assertThat(event.headline()).doesNotContain("物流挑战").contains("BlockStock 模拟快讯");
+                assertThat(event.headline()).doesNotContain("物流挑战").contains("Bloeco-Stock 模拟快讯");
             });
             assertThat(new MarketEventService(repository, database, Runnable::run, clock::now, new Random(9)).triggerDueEvents().toCompletableFuture().join()).isEmpty();
             clock.advance(Duration.ofMinutes(21));

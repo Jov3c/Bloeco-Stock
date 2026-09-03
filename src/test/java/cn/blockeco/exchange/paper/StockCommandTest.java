@@ -55,7 +55,7 @@ class StockCommandTest {
 
         command.onCommand(sender, mock(Command.class), "stock", new String[] {"market"});
 
-        verify(sender).sendMessage(org.mockito.ArgumentMatchers.<Component>argThat(component -> plain(component).equals("BlockStock 正在初始化，请稍后再试。")));
+        verify(sender).sendMessage(org.mockito.ArgumentMatchers.<Component>argThat(component -> plain(component).equals("Bloeco-Stock 正在初始化，请稍后再试。")));
         verifyNoInteractions(queries, offerings);
     }
 

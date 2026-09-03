@@ -20,7 +20,24 @@ function offlineUuid(name) {
   const hex = bytes.toString('hex')
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
-function readDb(read) { const db = new DatabaseSync('../plugins/BlockStock/blockeco.db', { readOnly: true }); try { return read(db) } finally { db.close() } }
+// Paper may briefly hold SQLite's write lock immediately after a GUI mutation.  This
+// test only observes committed state, so retrying the read is the correct assertion
+// behaviour; it must not treat a transient lock as a gameplay failure.
+function readDb(read) {
+  let last
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    let db
+    try {
+      db = new DatabaseSync('../plugins/BlockStock/blockeco.db', { readOnly: true })
+      return read(db)
+    } catch (error) {
+      last = error
+      if (!/database is locked|SQLITE_BUSY/i.test(String(error.message))) throw error
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50)
+    } finally { db?.close() }
+  }
+  throw last
+}
 function one(db, sql, ...values) { const row = db.prepare(sql).get(...values); return row && Object.values(row)[0] }
 async function waitDb(label, check) { const deadline = Date.now() + timeoutMs; let observed; while (Date.now() < deadline) { observed = readDb(check); if (observed) return; await delay(200) }; throw new Error(`${label} timed out (${observed})`) }
 

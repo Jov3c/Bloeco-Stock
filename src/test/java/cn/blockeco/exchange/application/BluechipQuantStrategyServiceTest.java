@@ -23,7 +23,13 @@ class BluechipQuantStrategyServiceTest {
     private static final Instant OPEN = Instant.parse("2026-08-31T09:00:00Z");
 
     @Test
-    void oneEightSecondBucketUsesOneFiniteOrdinaryOrderAndLeavesCompensationFundUntouched() throws Exception {
+    void activityStepAdvancesEverySecond() {
+        assertThat(BluechipQuantStrategyService.activityStep(OPEN))
+                .isNotEqualTo(BluechipQuantStrategyService.activityStep(OPEN.plusSeconds(1)));
+    }
+
+    @Test
+    void oneStrategyBucketUsesOneFiniteOrdinaryOrderAndLeavesCompensationFundUntouched() throws Exception {
         try (Fixture fixture = Fixture.open()) {
             long initialFund = fixture.orders.compensationFund().minorUnits();
 
@@ -35,6 +41,19 @@ class BluechipQuantStrategyServiceTest {
             assertThat(fixture.quantDecisionCount()).isEqualTo(1);
             assertThat(fixture.orders.compensationFund().minorUnits()).isGreaterThanOrEqualTo(initialFund);
             assertThat(fixture.market.availableCash(PARTICIPANT).minorUnits()).isGreaterThanOrEqualTo(0);
+        }
+    }
+
+    @Test
+    void depletedSystemParticipantRegainsOperatingLiquidityBeforeItsNextQuantDecision() throws Exception {
+        try (Fixture fixture = Fixture.open()) {
+            fixture.depleteParticipant();
+
+            int placed = fixture.strategy.tick().toCompletableFuture().join();
+
+            assertThat(placed).isBetween(0, 1);
+            assertThat(fixture.market.availableCash(PARTICIPANT).minorUnits()).isGreaterThan(0);
+            assertThat(fixture.participantShares()).isGreaterThan(0L);
         }
     }
 
@@ -67,11 +86,27 @@ class BluechipQuantStrategyServiceTest {
                 market.placeBuy(BOOK_BUYER, bluechip.listing().stockCode(), 900, Money.ofMinor(1_000)).toCompletableFuture().join();
             }
             var strategy = new BluechipQuantStrategyService(bluechips, orders, market, database, Runnable::run, session::get, () -> OPEN,
-                    PARTICIPANT, new BluechipQuantConfig(6_500, 200, 120), new QuantSignalPolicy(), new QuantRiskPolicy(200, 120));
+                    PARTICIPANT, new SqlBluechipParticipantRepository(), new BluechipQuantConfig(6_500, 200, 120), new QuantSignalPolicy(), new QuantRiskPolicy(200, 120));
             return new Fixture(file, database, bluechips, orders, market, strategy);
         }
 
         @Override public void close() throws Exception { database.close(); Files.deleteIfExists(file); }
         int quantDecisionCount() { return bluechips.all().stream().mapToInt(bluechip -> bluechips.quantDecisions(bluechip.listing().stockCode(), 10).size()).sum(); }
+        void depleteParticipant() {
+            database.inTransaction(connection -> {
+                try (var cash = connection.prepareStatement("UPDATE securities_cash_accounts SET available_minor = 0, reserved_minor = 0 WHERE player_uuid = ?");
+                     var shares = connection.prepareStatement("UPDATE share_holdings SET available_shares = 0, reserved_shares = 0 WHERE holder_uuid = ?")) {
+                    cash.setString(1, PARTICIPANT.toString()); cash.executeUpdate();
+                    shares.setString(1, PARTICIPANT.toString()); shares.executeUpdate();
+                }
+                return null;
+            });
+        }
+        long participantShares() {
+            try (var connection = database.dataSource().getConnection(); var statement = connection.prepareStatement("SELECT COALESCE(SUM(available_shares), 0) FROM share_holdings WHERE holder_uuid = ?")) {
+                statement.setString(1, PARTICIPANT.toString());
+                try (var rows = statement.executeQuery()) { rows.next(); return rows.getLong(1); }
+            } catch (Exception exception) { throw new AssertionError(exception); }
+        }
     }
 }

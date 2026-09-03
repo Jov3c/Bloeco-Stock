@@ -1,1 +1,1 @@
-rootProject.name = "blockstock"
+rootProject.name = "bloeco-stock"

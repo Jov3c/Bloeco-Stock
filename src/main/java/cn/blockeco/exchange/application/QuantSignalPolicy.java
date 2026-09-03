@@ -29,7 +29,10 @@ public final class QuantSignalPolicy {
         if (observed.confidenceBps() >= thresholdBps) return observed;
         if (Math.floorMod(step, 20L) >= 13L) return observed;
         int confidence = Math.min(10_000, thresholdBps + Math.floorMod(stockCode.hashCode() + step, 1_501));
-        return new Signal(Math.floorMod(stockCode.hashCode() + step, 2L) == 0 ? "BUY" : "SELL", confidence);
+        // The same code returns once per full symbol rotation. Alternate those returns so a finite
+        // participant naturally rebalances instead of repeatedly buying until its cash reaches zero.
+        long rotation = Math.floorDiv(step, 10L);
+        return new Signal(Math.floorMod(stockCode.hashCode() + rotation, 2L) == 0 ? "BUY" : "SELL", confidence);
     }
 
     public record Signal(String direction, int confidenceBps) {

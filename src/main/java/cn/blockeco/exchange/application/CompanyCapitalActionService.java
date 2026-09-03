@@ -102,6 +102,8 @@ public final class CompanyCapitalActionService {
 
     /** Returns durable recovery records only; it never invokes Vault again. */
     public List<CompanyPayoutOperation> recoverablePayouts() { return exits.recoverablePayouts(100); }
+    /** Read-only public buyback notices; GUI never supplies its own price or budget. */
+    public List<CompanyGovernanceAction> activeBuybacks(CompanyId companyId) { return exits.activeBuybacks(companyId); }
 
     private UUID announce(UUID founder, CompanyId companyId, GovernanceActionType type, long amountMinor,
             long pricePerShareMinor, String correlationKey, String announcement) {
